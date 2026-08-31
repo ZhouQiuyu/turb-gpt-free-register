@@ -47,9 +47,29 @@ PLAN_CHECK_MIN_INTERVAL = 0.4
 PLAN_CHECK_JITTER = 0.3
 
 
+def normalize_proxy_url(proxy: str) -> str:
+    """自动标准化代理格式，支持 ip:port:user:pass -> protocol://user:pass@ip:port"""
+    if not proxy:
+        return ""
+    proxy = str(proxy).strip()
+    proto = "socks5"
+    if "://" in proxy:
+        proto, rest = proxy.split("://", 1)
+    else:
+        rest = proxy
+
+    if "@" not in rest:
+        parts = rest.split(":")
+        if len(parts) == 4:
+            host, port, user, pwd = parts
+            return f"{proto}://{user}:{pwd}@{host}:{port}"
+    return proxy if "://" in proxy else f"{proto}://{proxy}"
+
+
 def pick_proxy() -> str:
     """从代理池中随机抽取一个代理 URL；池为空时返回空串（即不使用代理）。"""
-    return random.choice(PROXY_POOL) if PROXY_POOL else ""
+    raw = random.choice(PROXY_POOL) if PROXY_POOL else ""
+    return normalize_proxy_url(raw)
 
 
 # 兼容入口：默认每次进程启动随机选一个，作为本次注册全程的固定代理
