@@ -161,8 +161,16 @@ def write_env_values(updates: dict[str, str]) -> list[str]:
 
     text = "\n".join(out_lines).rstrip() + "\n"
     tmp = _ENV_PATH.with_suffix(".env.tmp")
-    tmp.write_text(text, encoding="utf-8")
-    tmp.replace(_ENV_PATH)
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        tmp.replace(_ENV_PATH)
+    except OSError:
+        # Direct write fallback if _ENV_PATH is a mounted file / busy device in Docker
+        _ENV_PATH.write_text(text, encoding="utf-8")
+        try:
+            tmp.unlink(missing_ok=True)
+        except Exception:
+            pass
 
     # 让当前进程立刻看到新值
     load_env(override=True)
