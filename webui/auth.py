@@ -83,6 +83,8 @@ def code_is_valid(code: str) -> bool:
 
 
 def request_is_authorized() -> bool:
+    if os.getenv("DISABLE_WEBUI_AUTH", "false").strip().lower() in ("1", "true", "yes", "on"):
+        return True
     if session.get(_SESSION_KEY) is True:
         return True
     return code_is_valid(_extract_auth_code())
@@ -115,6 +117,8 @@ def register_auth_routes(app: Any) -> None:
 
     @app.route("/login", methods=["GET", "POST"], endpoint="auth_login")
     def _auth_login():
+        if os.getenv("DISABLE_WEBUI_AUTH", "false").strip().lower() in ("1", "true", "yes", "on"):
+            return redirect("/")
         error = ""
         next_url = request.values.get("next") or "/"
         if not str(next_url).startswith("/") or str(next_url).startswith("//"):
