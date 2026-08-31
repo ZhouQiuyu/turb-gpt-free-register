@@ -85,7 +85,8 @@ class BrowserSession:
         if proxy is None:
             self.proxy = pick_proxy()
         else:
-            self.proxy = proxy
+            from config.proxy import normalize_proxy_url
+            self.proxy = normalize_proxy_url(proxy)
 
         self.fingerprint_seed = str(fingerprint_seed or "").strip()
 

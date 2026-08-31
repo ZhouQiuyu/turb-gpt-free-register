@@ -48,13 +48,17 @@ PLAN_CHECK_JITTER = 0.3
 
 
 def normalize_proxy_url(proxy: str) -> str:
-    """自动标准化代理格式，支持 ip:port:user:pass -> protocol://user:pass@ip:port"""
+    """自动标准化代理格式，支持 ip:port:user:pass -> protocol://user:pass@ip:port，并优先使用 socks5h 远程解析 DNS"""
     if not proxy:
         return ""
     proxy = str(proxy).strip()
-    proto = "socks5"
+    proto = "socks5h"
     if "://" in proxy:
-        proto, rest = proxy.split("://", 1)
+        p, rest = proxy.split("://", 1)
+        if p.lower() == "socks5":
+            proto = "socks5h"
+        else:
+            proto = p.lower()
     else:
         rest = proxy
 
@@ -63,6 +67,9 @@ def normalize_proxy_url(proxy: str) -> str:
         if len(parts) == 4:
             host, port, user, pwd = parts
             return f"{proto}://{user}:{pwd}@{host}:{port}"
+    
+    if proxy.startswith("socks5://"):
+        return f"socks5h://{proxy[9:]}"
     return proxy if "://" in proxy else f"{proto}://{proxy}"
 
 
