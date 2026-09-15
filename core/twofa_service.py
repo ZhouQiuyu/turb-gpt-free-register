@@ -9,14 +9,26 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from config import email as _email_cfg
+from config import twofa as _twofa_cfg
 from core import db
 from core.account_export import setup_2fa
 from core.session import BrowserSession
 
 logger = logging.getLogger(__name__)
 
-_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="twofa")
-_QUEUE_SLOTS = threading.BoundedSemaphore(50)
+
+def _int_setting(name: str, default: int, lower: int, upper: int) -> int:
+    try:
+        value = int(getattr(_twofa_cfg, name, default) or default)
+    except (TypeError, ValueError):
+        value = default
+    return max(lower, min(upper, value))
+
+
+_WORKERS = _int_setting("TWOFA_WORKERS", 4, 1, 16)
+_QUEUE_LIMIT = _int_setting("TWOFA_QUEUE_LIMIT", 200, _WORKERS, 5000)
+_EXECUTOR = ThreadPoolExecutor(max_workers=_WORKERS, thread_name_prefix="twofa")
+_QUEUE_SLOTS = threading.BoundedSemaphore(_QUEUE_LIMIT)
 _RUNNING: set[int] = set()
 _LOCK = threading.Lock()
 _LOG_DIR = Path(__file__).resolve().parent.parent / "注册日志"
@@ -57,8 +69,12 @@ def _append_log(email: str, line: str, *, clear: bool = False) -> None:
         f.write(f"{stamp} [INFO] {line}\n")
 
 
-def _run_twofa(*, account_id: int, email: str, access_token: str, proxy: str | None, trigger: str) -> dict:
+def _run_twofa(
+    *, account_id: int, email: str, access_token: str, proxy: str | None,
+    trigger: str,
+) -> dict:
     fh: logging.FileHandler | None = None
+    session: BrowserSession | None = None
     root_logger = logging.getLogger()
     thread_name = threading.current_thread().name
     try:
@@ -76,7 +92,8 @@ def _run_twofa(*, account_id: int, email: str, access_token: str, proxy: str | N
         root_logger.addHandler(fh)
         logger.info("[2FA] 开始后台设置：email=%s trigger=%s", email, trigger)
         real_proxy = _normalize_proxy(proxy)
-        session = BrowserSession(proxy=real_proxy, fingerprint_seed=f"account:{email.lower()}")
+        identity = email.strip().lower()
+        session = BrowserSession(proxy=real_proxy, fingerprint_seed=f"account:{identity}")
         _append_log(email, f"[2FA] 会话创建完成：proxy={session.proxy or 'direct'} device_id={session.device_id}")
         _append_log(email, f"[2FA] 指纹摘要：{session.fingerprint_summary_text()}")
         secret = setup_2fa(session, email, access_token=access_token)
@@ -100,6 +117,11 @@ def _run_twofa(*, account_id: int, email: str, access_token: str, proxy: str | N
         logger.exception("[2FA] 后台异常: %s", email)
         return result
     finally:
+        if session is not None:
+            try:
+                session.session.close()
+            except Exception:
+                pass
         if fh is not None:
             try:
                 root_logger.removeHandler(fh)
@@ -109,6 +131,16 @@ def _run_twofa(*, account_id: int, email: str, access_token: str, proxy: str | N
         with _LOCK:
             _RUNNING.discard(int(account_id))
         _QUEUE_SLOTS.release()
+
+
+def queue_settings() -> dict:
+    with _LOCK:
+        running = len(_RUNNING)
+    return {
+        "workers": _WORKERS,
+        "queue_limit": _QUEUE_LIMIT,
+        "running": running,
+    }
 
 
 def enqueue_account_totp_setup(

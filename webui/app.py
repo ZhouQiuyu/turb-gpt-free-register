@@ -28,12 +28,15 @@ from webui import config_editor
 
 logger = logging.getLogger(__name__)
 
+_POOL_SOURCE_VALUES = frozenset(("all", "outlook", "generic_api", "imap", "cloudflare_domain"))
+
+
 def _pool_source_arg(default: str = "outlook") -> str:
-    src = (request.args.get("source") or "").strip()
+    src = str(request.args.get("source") or "").strip().lower()
     if not src and request.method == "POST":
         data = request.get_json(silent=True) or {}
-        src = (data.get("source") or data.get("type") or "").strip()
-    return src if src in ("all", "outlook", "generic_api", "cloudflare_domain") else default
+        src = str(data.get("source") or data.get("type") or "").strip().lower()
+    return src if src in _POOL_SOURCE_VALUES else default
 
 
 def _with_pool_source(rows: list[dict], source: str) -> list[dict]:
@@ -110,7 +113,7 @@ def _compact_account_for_list(row: dict) -> dict:
 
     # 这些是列表固定列直接展示字段。
     for key in (
-        "user_name", "email_source", "note", "archived", "created_at",
+        "user_name", "email_source", "original_email", "note", "archived", "created_at",
         "plan_type", "current_plan_type", "plus_trial_eligible",
         "plan_check_status", "codex_status", "codex_agent_status",
         "totp_setup_status",
@@ -139,6 +142,8 @@ def _compact_account_for_list(row: dict) -> dict:
         "codex_error", "codex_agent_message", "codex_agent_runtime_id",
         "codex_agent_sub2api_url", "codex_agent_sub2api_mode", "codex_agent_sub2api_total",
         "totp_setup_error", "totp_setup_message", "totp_setup_started_at", "totp_setup_completed_at",
+        "email_change_status", "email_change_error", "email_change_new_email",
+        "email_change_started_at", "email_change_completed_at",
     )
     for key in optional_keys:
         value = row.get(key)
@@ -320,6 +325,9 @@ def create_app(auth_code: str | None = None) -> Flask:
     recovered_totp_setups = db.recover_interrupted_totp_setups()
     if recovered_totp_setups:
         logger.warning("已恢复 %s 个因 WebUI 重启中断的 2FA 状态", recovered_totp_setups)
+    recovered_email_changes = db.recover_interrupted_email_changes()
+    if recovered_email_changes:
+        logger.warning("已恢复 %s 个因 WebUI 重启中断的邮箱换绑状态", recovered_email_changes)
 
     # ----------------------------------------------------------
     # 页面
@@ -354,6 +362,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                 continue
             one = (
                 db.generic_api_email_pool_summary() if src == "generic_api"
+                else db.imap_email_pool_summary() if src == "imap"
                 else db.domain_email_pool_summary() if src == "cloudflare_domain"
                 else db.outlook_pool_summary()
             )
@@ -600,7 +609,164 @@ def create_app(auth_code: str | None = None) -> Flask:
             return jsonify({"ok": False, **queued_payload}), 409
         if not queued.get("accepted"):
             return jsonify({"ok": False, **queued_payload}), 503
-        return jsonify({"ok": True, "started": True, **queued_payload}), 202
+        return jsonify({
+            "ok": True,
+            "started": True,
+            "queue": twofa_service.queue_settings(),
+            **queued_payload,
+        }), 202
+
+    @app.post("/api/accounts/<int:acc_id>/change-email")
+    def api_account_change_email(acc_id: int):
+        """给单个账号排队换绑邮箱。Body {source}."""
+        data = request.get_json(silent=True) or {}
+        source = str(data.get("source") or "").strip().lower()
+        allowed = {"outlook", "generic_api", "imap", "cloudflare_domain", "cloudflare", "gptmail", "mailnest", "cloudmail", "remail"}
+        if source not in allowed:
+            return jsonify({"ok": False, "error": "请选择有效的邮箱来源"}), 400
+        acc = db.get_account(acc_id)
+        if not acc:
+            return jsonify({"ok": False, "error": "账号不存在"}), 404
+        if not str(acc.get("access_token") or "").strip():
+            return jsonify({"ok": False, "error": "账号缺少 access_token，请先查活刷新 AT"}), 400
+        from core import email_change_service
+        result = email_change_service.enqueue(acc_id, source, trigger="manual")
+        public = {k: v for k, v in result.items() if k != "future"}
+        return jsonify({"ok": bool(result.get("accepted")), **public}), (202 if result.get("accepted") else 409)
+
+    @app.post("/api/accounts/change-email-bulk")
+    def api_accounts_change_email_bulk():
+        """批量换绑邮箱。Body {account_ids:[...], source}."""
+        data = request.get_json(silent=True) or {}
+        ids = data.get("account_ids") or data.get("ids") or []
+        source = str(data.get("source") or "").strip().lower()
+        allowed = {"outlook", "generic_api", "imap", "cloudflare_domain", "cloudflare", "gptmail", "mailnest", "cloudmail", "remail"}
+        if source not in allowed:
+            return jsonify({"ok": False, "error": "请选择有效的邮箱来源"}), 400
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
+        if len(ids) > 500:
+            return jsonify({"ok": False, "error": "单次最多提交 500 个账号"}), 400
+        from core import email_change_service
+        started, skipped = [], []
+        seen_ids: set[int] = set()
+        for raw_id in ids:
+            try:
+                acc_id = int(raw_id)
+            except (TypeError, ValueError):
+                skipped.append({"id": raw_id, "reason": "ID 非法"})
+                continue
+            if acc_id in seen_ids:
+                continue
+            seen_ids.add(acc_id)
+            acc = db.get_account(acc_id)
+            if not acc:
+                skipped.append({"id": acc_id, "reason": "账号不存在"})
+                continue
+            if not str(acc.get("access_token") or "").strip():
+                skipped.append({"id": acc_id, "email": acc.get("email"), "reason": "缺少 access_token"})
+                continue
+            result = email_change_service.enqueue(acc_id, source, trigger="manual_bulk")
+            if result.get("accepted"):
+                started.append({"id": acc_id, "email": acc.get("email"), "status": "queued"})
+            else:
+                skipped.append({"id": acc_id, "email": acc.get("email"), "reason": result.get("error")})
+        return jsonify({"ok": True, "started": started, "started_count": len(started), "skipped": skipped}), 202
+
+    @app.post("/api/accounts/totp-setup-bulk")
+    def api_accounts_totp_setup_bulk():
+        """批量把账号 2FA/TOTP 设置任务加入后台队列。Body {account_ids:[...]}。"""
+        data = request.get_json(silent=True) or {}
+        ids = data.get("account_ids") or data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
+        if len(ids) > 500:
+            return jsonify({"ok": False, "error": "单次最多提交 500 个账号"}), 400
+
+        account_ids = []
+        skipped = []
+        seen = set()
+        for raw in ids:
+            try:
+                acc_id = int(raw)
+            except (TypeError, ValueError):
+                skipped.append({"id": raw, "reason": "ID 非法"})
+                continue
+            if acc_id in seen:
+                continue
+            seen.add(acc_id)
+            account_ids.append(acc_id)
+
+        accounts = []
+        for acc_id in account_ids:
+            acc = db.get_account(acc_id)
+            if not acc:
+                skipped.append({"id": acc_id, "reason": "账号不存在"})
+                continue
+            email = str(acc.get("email") or "").strip()
+            token = str(acc.get("access_token") or "").strip()
+            if not token:
+                skipped.append({"id": acc_id, "email": email, "reason": "缺少 access_token"})
+                continue
+            if str(acc.get("totp_secret") or "").strip():
+                skipped.append({"id": acc_id, "email": email, "reason": "该账号已经开启 2FA"})
+                continue
+            if not email:
+                skipped.append({"id": acc_id, "reason": "邮箱为空"})
+                continue
+            accounts.append(acc)
+
+        try:
+            from core import twofa_service
+        except Exception as exc:
+            return jsonify({"ok": False, "error": f"2FA 服务加载失败：{type(exc).__name__}: {exc}"}), 503
+
+        started = []
+        busy = []
+        failed = []
+        for acc in accounts:
+            acc_id = int(acc.get("id") or 0)
+            email = str(acc.get("email") or "").strip()
+            try:
+                queued = twofa_service.enqueue_account_totp_setup(
+                    account_id=acc_id,
+                    email=email,
+                    access_token=str(acc.get("access_token") or "").strip(),
+                    trigger="manual_bulk",
+                    proxy=str(acc.get("proxy_used") or "") or None,
+                )
+            except Exception as exc:
+                failed.append({
+                    "id": acc_id,
+                    "email": email,
+                    "error": f"{type(exc).__name__}: {exc}",
+                })
+                continue
+
+            # Future 对象不可 JSON 序列化；批量接口只返回队列结果摘要。
+            public_result = {k: v for k, v in queued.items() if k != "future"}
+            item = {"id": acc_id, "email": email, **public_result}
+            if queued.get("accepted"):
+                item["status"] = "queued"
+                started.append(item)
+            elif queued.get("busy"):
+                busy.append(item)
+            else:
+                failed.append(item)
+
+        return jsonify({
+            "ok": True,
+            "message": f"已入队 {len(started)} 个 2FA 设置任务",
+            "started": started,
+            "started_count": len(started),
+            "busy": busy,
+            "busy_count": len(busy),
+            "failed": failed,
+            "failed_count": len(failed),
+            "skipped": skipped,
+            "skipped_count": len(skipped),
+            "queue": twofa_service.queue_settings(),
+        }), 202
 
     @app.post("/api/accounts/note-bulk")
     def api_accounts_note_bulk():
@@ -1450,20 +1616,40 @@ def create_app(auth_code: str | None = None) -> Flask:
         粘贴文本导入邮箱素材。
         Outlook：email----password----clientId----refreshToken
         通用 API：email----code_url
+        通用 IMAP：email----password 或 email:password；服务器/端口/SSL 单独传入
         分隔符兼容 ---- 与 ====。
         """
         data = request.get_json(silent=True) or {}
         source = (data.get("source") or data.get("type") or "").strip()
-        if source not in ("outlook", "generic_api"):
-            return jsonify({"ok": False, "error": "导入时请选择具体类型：Outlook 或 通用 API"}), 400
+        if source not in ("outlook", "generic_api", "imap"):
+            return jsonify({"ok": False, "error": "导入时请选择具体类型：Outlook、通用 API 或通用 IMAP"}), 400
         text = data.get("text") or ""
         as_registered = bool(data.get("as_registered", False))
+        imap_server = str(data.get("imap_server") or "").strip()
+        try:
+            imap_port = int(data.get("imap_port") or 993)
+        except (TypeError, ValueError):
+            imap_port = 0
+        imap_ssl_raw = data.get("imap_ssl", True)
+        imap_ssl = imap_ssl_raw if isinstance(imap_ssl_raw, bool) else str(imap_ssl_raw).strip().lower() not in {"0", "false", "no", "off"}
+        if source == "imap" and (not imap_server or not (1 <= imap_port <= 65535)):
+            return jsonify({"ok": False, "error": "通用 IMAP 导入必须填写有效的服务器和端口"}), 400
         records = []
         for line in text.splitlines():
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            parts = line.split("----") if "----" in line else line.split("====")
+            if source == "imap":
+                if "----" in line:
+                    parts = line.split("----", 1)
+                elif "====" in line:
+                    parts = line.split("====", 1)
+                elif ":" in line:
+                    parts = line.split(":", 1)
+                else:
+                    continue
+            else:
+                parts = line.split("----") if "----" in line else line.split("====")
             parts = [p.strip() for p in parts]
             if source == "generic_api":
                 if len(parts) < 2:
@@ -1473,6 +1659,15 @@ def create_app(auth_code: str | None = None) -> Flask:
                     "code_url": parts[1],
                     "access_token": parts[2] if len(parts) > 2 else "",
                     "totp_secret": parts[3] if len(parts) > 3 else "",
+                })
+                continue
+            if source == "imap":
+                if len(parts) < 2 or not parts[0] or not parts[1]:
+                    continue
+                records.append({
+                    "email": parts[0], "imap_password": parts[1],
+                    "imap_server": imap_server, "imap_port": imap_port,
+                    "imap_ssl": imap_ssl, "imap_username": "",
                 })
                 continue
             if len(parts) < 4:
@@ -1486,12 +1681,16 @@ def create_app(auth_code: str | None = None) -> Flask:
                 "totp_secret": parts[5] if len(parts) > 5 else "",
             })
         if not records:
-            need = "2 段：邮箱----取码地址" if source == "generic_api" else "4 段：email----password----clientId----refreshToken"
+            need = ("2 段：邮箱----取码地址" if source == "generic_api" else
+                    "邮箱----IMAP密码 或 邮箱:IMAP密码" if source == "imap" else
+                    "4 段：email----password----clientId----refreshToken")
             return jsonify({"ok": False, "error": f"未解析到有效邮箱行（需 {need}，---- 或 ==== 分隔）"}), 400
         if as_registered:
             inserted, skipped = db.import_registered_email_accounts(records, source=source)
         elif source == "generic_api":
             inserted, skipped = db.import_generic_api_emails(records)
+        elif source == "imap":
+            inserted, skipped = db.import_imap_emails(records)
         else:
             inserted, skipped = db.import_outlook_accounts(records)
         return jsonify({
@@ -1515,6 +1714,8 @@ def create_app(auth_code: str | None = None) -> Flask:
             source = "outlook"
         if source == "generic_api":
             db.release_generic_api_email(email, status=status, note=data.get("note"))
+        elif source == "imap":
+            db.release_imap_email(email, status=status, note=data.get("note"))
         elif source == "cloudflare_domain":
             db.release_domain_email(email, status=status, note=data.get("note"))
         else:
@@ -1558,6 +1759,8 @@ def create_app(auth_code: str | None = None) -> Flask:
             try:
                 if item_source == "generic_api":
                     db.release_generic_api_email(email, status=status, note=note)
+                elif item_source == "imap":
+                    db.release_imap_email(email, status=status, note=note)
                 elif item_source == "cloudflare_domain":
                     db.release_domain_email(email, status=status, note=note)
                 else:
@@ -1574,60 +1777,74 @@ def create_app(auth_code: str | None = None) -> Flask:
 
     @app.post("/api/outlook/delete")
     def api_outlook_delete():
-        """从邮箱池彻底删除一个邮箱：body {email}。"""
+        """从邮箱池彻底删除一个邮箱：body {email, source?}。"""
         data = request.get_json(silent=True) or {}
-        email = (data.get("email") or "").strip()
+        email = str(data.get("email") or "").strip()
         if not email:
             return jsonify({"ok": False, "error": "email 为空"}), 400
-        source = (data.get("source") or _pool_source_arg()).strip()
-        if source == "all":
-            source = "outlook"
-        deleted = (
-            db.delete_generic_api_email(email)
-            if source == "generic_api"
-            else db.delete_domain_email(email)
-            if source == "cloudflare_domain"
-            else db.delete_outlook(email)
+        raw_source = data.get("source") or data.get("type")
+        source = (
+            _pool_source_arg()
+            if not str(raw_source or "").strip()
+            else str(raw_source).strip().lower()
         )
+        if source not in _POOL_SOURCE_VALUES:
+            return jsonify({"ok": False, "error": "邮箱来源非法"}), 400
+        deleted = db.delete_email_pool(email, source=source)
         return jsonify({"ok": True, "deleted": deleted})
 
     @app.post("/api/outlook/delete-bulk")
     def api_outlook_delete_bulk():
-        """从邮箱池批量彻底删除邮箱：body {emails: [...]}。"""
+        """从邮箱池批量彻底删除邮箱：body {items/emails: [...], source?}。"""
         data = request.get_json(silent=True) or {}
-        source = _pool_source_arg()
+        raw_source = data.get("source") or data.get("type")
+        source = (
+            _pool_source_arg()
+            if not str(raw_source or "").strip()
+            else str(raw_source).strip().lower()
+        )
+        if source not in _POOL_SOURCE_VALUES:
+            return jsonify({"ok": False, "error": "邮箱来源非法"}), 400
         emails = data.get("items") or data.get("emails") or []
         if not isinstance(emails, list) or not emails:
             return jsonify({"ok": False, "error": "emails/items 必须是非空数组"}), 400
         if len(emails) > 5000:
             return jsonify({"ok": False, "error": "单次最多删除 5000 个邮箱"}), 400
 
-        deleted: list[str] = []
+        deleted: list[dict] = []
         skipped: list[dict] = []
         seen: set[str] = set()
         for raw_item in emails:
             if isinstance(raw_item, dict):
-                email = (str(raw_item.get("email") or "")).strip()
-                item_source = (raw_item.get("source") or source or "outlook").strip()
+                email = str(raw_item.get("email") or "").strip()
+                raw_item_source = raw_item.get("source") or raw_item.get("type")
+                item_source = (
+                    source
+                    if not str(raw_item_source or "").strip()
+                    else str(raw_item_source).strip().lower()
+                )
             else:
                 email = (str(raw_item or "")).strip()
                 item_source = source
-            if item_source == "all":
-                item_source = "outlook"
-            key = f"{item_source}:{email.lower()}"
             if not email:
                 skipped.append({"email": raw_item, "reason": "邮箱为空"})
                 continue
+            if item_source not in _POOL_SOURCE_VALUES:
+                skipped.append({"email": email, "source": item_source, "reason": "邮箱来源非法"})
+                continue
+            key = f"{item_source}:{email.casefold()}"
             if key in seen:
                 continue
             seen.add(key)
-            deleted_ok = (
-                db.delete_generic_api_email(email)
-                if item_source == "generic_api"
-                else db.delete_domain_email(email)
-                if item_source == "cloudflare_domain"
-                else db.delete_outlook(email)
-            )
+            try:
+                deleted_ok = db.delete_email_pool(email, source=item_source)
+            except Exception as exc:
+                skipped.append({
+                    "email": email,
+                    "source": item_source,
+                    "reason": f"{type(exc).__name__}: {exc}",
+                })
+                continue
             if deleted_ok:
                 deleted.append({"email": email, "source": item_source})
             else:
@@ -2241,6 +2458,22 @@ def create_app(auth_code: str | None = None) -> Flask:
             pass
         return jsonify(data)
 
+    @app.get("/api/accounts/<int:acc_id>/change-email-log")
+    def api_account_change_email_log(acc_id: int):
+        """读取账号最近一次邮箱换绑日志。"""
+        from core import email_change_service
+        acc = db.get_account(acc_id)
+        if not acc:
+            return jsonify({"ok": False, "error": "账号不存在"}), 404
+        data = _read_log_tail(
+            email_change_service.log_path(acc_id), max_bytes=80_000,
+            running_fn=lambda: email_change_service.is_running(acc_id),
+        )
+        data["account_id"] = acc_id
+        data["email"] = acc.get("email")
+        data["running"] = bool(data.get("running") or str(acc.get("email_change_status") or "") in {"queued", "running"})
+        return jsonify(data)
+
     # ----------------------------------------------------------
     # 注册任务
     # ----------------------------------------------------------
@@ -2411,12 +2644,19 @@ def create_app(auth_code: str | None = None) -> Flask:
             warning = ""
             if pool.get("available", 0) < count:
                 warning = f"通用 API 邮箱池仅 {pool.get('available', 0)} 个可用，少于任务数 {count}，不足的会失败"
+        elif sources == ["imap"]:
+            pool = db.imap_email_pool_summary()
+            warning = ""
+            if pool.get("available", 0) < count:
+                warning = f"通用 IMAP 邮箱池仅 {pool.get('available', 0)} 个可用，少于任务数 {count}，不足的会失败"
         elif len(sources) > 1:
             available = 0
             if "outlook" in sources:
                 available += db.outlook_pool_summary().get("available", 0)
             if "generic_api" in sources:
                 available += db.generic_api_email_pool_summary().get("available", 0)
+            if "imap" in sources:
+                available += db.imap_email_pool_summary().get("available", 0)
             warning = ""
             if available < count:
                 warning = f"多个邮箱池合计仅 {available} 个可用，少于任务数 {count}，不足的会失败"

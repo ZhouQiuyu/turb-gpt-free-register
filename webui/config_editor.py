@@ -16,7 +16,9 @@ from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _CONFIG_DIR = _PROJECT_ROOT / "config"
-EXPLICIT_EMPTY_LIST_KEYS = {"PROXY_POOL"}
+EXPLICIT_EMPTY_LIST_KEYS = {
+    "PROXY_POOL",
+}
 
 
 # ============================================================
@@ -279,6 +281,14 @@ EDITABLE_FIELDS = [
         "label": "启用 2FA(TOTP)", "help": "注册完成后自动设置动态口令（会多收一封 OTP 邮件）",
     },
     {
+        "key": "TWOFA_WORKERS", "file": "twofa.py", "type": "int", "group": "功能开关",
+        "label": "2FA并发数", "help": "同时执行的2FA设置任务数，默认4，范围1-16；修改后需重启服务",
+    },
+    {
+        "key": "TWOFA_QUEUE_LIMIT", "file": "twofa.py", "type": "int", "group": "功能开关",
+        "label": "2FA队列容量", "help": "允许排队等待的2FA任务总数，默认200",
+    },
+    {
         "key": "ENABLE_FLOW_TRIGGER", "file": "flow_trigger.py", "type": "bool", "group": "功能开关",
         "label": "启用 Flow 触发", "help": "注册成功后自动调用内部 Flow 接口（不影响注册结果）",
     },
@@ -317,7 +327,11 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "EMAIL_SOURCE", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
-        "label": "邮箱来源", "help": "可填单个或多个，逗号分隔并按顺序兜底：outlook,generic_api,cloudflare_domain,cloudflare,gptmail,mailnest,cloudmail,remail",
+        "label": "邮箱来源", "help": "可填单个或多个，逗号分隔并按顺序兜底：outlook,generic_api,imap,cloudflare_domain,cloudflare,gptmail,mailnest,cloudmail,remail",
+    },
+    {
+        "key": "IMAP_MAILBOX", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
+        "label": "通用 IMAP 收件箱", "help": "通用 IMAP 邮箱默认目录，通常为 INBOX；服务器、端口、用户名和密码在邮箱池导入",
     },
     {
         "key": "GPTMAIL_API_KEY", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
@@ -481,11 +495,51 @@ EDITABLE_FIELDS = [
         "key": "IP_GEO_TIMEOUT", "file": "browser.py", "type": "float", "group": "浏览器画像",
         "label": "IP定位超时(秒)", "help": "出口 IP 地理信息接口的单次请求超时；接口失败会自动回退，不影响注册",
     },
+    {
+        "key": "BROWSER_DATA_SAVER_MODE", "file": "browser.py", "type": "bool", "group": "浏览器画像",
+        "label": "本地浏览器省流量模式", "help": "仅 Roxy/Cloak 本地浏览器拦截图片和媒体等可选资源；Browser Use/Skyvern 云端浏览器不启用；默认关闭",
+    },
+    {
+        "key": "BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES", "file": "browser.py", "type": "list_str_multiline", "group": "浏览器画像",
+        "label": "本地浏览器省流量拦截类型", "help": "仅 Roxy/Cloak 生效；每行一种，默认 image、media；可选 stylesheet、font、manifest、texttrack。不要填写 script/xhr/fetch/document/websocket",
+    },
+    {
+        "key": "BROWSER_DATA_SAVER_BLOCKED_URL_PATTERNS", "file": "browser.py", "type": "list_str_multiline", "group": "浏览器画像",
+        "label": "本地浏览器省流量 URL 屏蔽规则", "help": "仅 Roxy/Cloak 生效；每行一条 URL glob；默认拦截 RUM/广告统计和 Google GSI（不用 Google 登录时）。不要屏蔽核心 API/sentinel；填 [] 可关闭默认规则",
+    },
+    {
+        "key": "BROWSER_TRAFFIC_DETAIL_LOG", "file": "browser.py", "type": "bool", "group": "浏览器画像",
+        "label": "本地浏览器流量明细日志", "help": "仅 Roxy/Cloak 生效；注册结束时输出每个资源的 URL、类型、方法、状态码和上传/下载大小；URL 查询值会脱敏，默认关闭",
+    },
+    {
+        "key": "BROWSER_TRAFFIC_DETAIL_MAX_ENTRIES", "file": "browser.py", "type": "int", "group": "浏览器画像",
+        "label": "流量明细最多条数", "help": "按单请求总字节降序输出，默认 2000，最大 10000；用于后续分析可屏蔽资源",
+    },
+    {
+        "key": "BROWSER_JS_COVERAGE_LOG", "file": "browser.py", "type": "bool", "group": "浏览器画像",
+        "label": "记录本地浏览器 JS 覆盖率", "help": "仅 Roxy/Cloak 生效；通过 Chrome CDP 记录本次注册实际执行的 JS 函数和 offset；Browser Use/Skyvern 不启用；默认关闭",
+    },
+    {
+        "key": "BROWSER_JS_COVERAGE_MAX_ENTRIES", "file": "browser.py", "type": "int", "group": "浏览器画像",
+        "label": "本地浏览器 JS 覆盖率最多条数", "help": "仅 Roxy/Cloak 生效；日志最多输出的已执行函数数，同时限制保存的脚本摘要数量，默认 1000，最大 10000",
+    },
 
     # ---- 代理池 ----
     {
         "key": "PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "代理池",
         "label": "代理池(每行一个)", "help": "每行一个代理 URL，留空行会被忽略；为空则不使用代理",
+        "recommended_links": [
+            {
+                "label": "IPRocket 家宽",
+                "url": "https://iprocket.io?viteCode=1PVNyLuJ",
+                "description": "高性价比家宽，可通过 TG 联系作者购买流量",
+            },
+            {
+                "label": "Rola-IP 家宽",
+                "url": "https://rola-ip.co/?code=0326C5HA",
+                "description": "Roxy 合作伙伴高质量家宽，注册可享 15% 优惠",
+            },
+        ],
     },
     {
         "key": "PLAN_CHECK_PROXY_MODE", "file": "proxy.py", "type": "str", "group": "代理池",
@@ -502,7 +556,7 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "PLAN_CHECK_MAX_ATTEMPTS", "file": "proxy.py", "type": "int", "group": "代理池",
-        "label": "套餐/Agent最大尝试次数", "help": "查套餐和生成 Agent Token 遇到网络错误、429、5xx 等临时错误时的重试次数，建议 2 次",
+        "label": "套餐/Agent最大尝试次数", "help": "查套餐和生成 Agent Token 遇到 403、429、5xx 或网络错误时的重试次数，建议 3 次",
     },
     {
         "key": "PLAN_CHECK_RETRY_DELAY", "file": "proxy.py", "type": "float", "group": "代理池",

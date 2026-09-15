@@ -64,11 +64,15 @@ def _run_live_check(*, account_id: int, email: str, proxy: str | None, trigger: 
             f"proxy_mode={route.get('proxy_mode')} proxy_used={route.get('proxy_used') or '-'} "
             f"fallback_reason={route.get('proxy_fallback_reason') or '-'}"
         )
+        # 每个网络路由尝试拥有自己的任务级身份状态；同一路由的完整认证链及
+        # 内部重试复用同一组 device/session 标识，不同账号绝不共享。
+        fingerprint_state: dict = {}
         result = check_account_liveness(
             email,
             proxy=selected_proxy,
             clear_log=False,
             email_source=email_source,
+            fingerprint_state=fingerprint_state,
         )
         # 认证链早期 403 通常是该出口被 CF 拦截，不代表账号死亡。
         # auto/proxy 模式下如果用了代理，额外直连兜底一次，便于和套餐查询的 auto 语义保持接近。
@@ -80,13 +84,19 @@ def _run_live_check(*, account_id: int, email: str, proxy: str | None, trigger: 
             and selected_proxy
             and str(route.get("network_route") or "") == "proxy"
         ):
-            _append_log(email, "[查活] 代理出口收到 403，尝试直连兜底一次")
+            _append_log(
+                email,
+                "[查活] 代理路线完整会话收到 403，启动独立直连会话兜底一次（不复用代理画像/Cookie/会话ID）",
+            )
             # BrowserSession 约定：None=从代理池抽取，""=明确直连。
+            # 出口发生变化时必须重新按真实出口探测画像，不能把代理的 JP/VN
+            # 语言时区伪装到直连；因此直连兜底使用独立的任务身份状态。
             result = check_account_liveness(
                 email,
                 proxy="",
                 clear_log=False,
                 email_source=email_source,
+                fingerprint_state={},
             )
         db.update_account_liveness(account_id, result)
         if result.get("ok"):
