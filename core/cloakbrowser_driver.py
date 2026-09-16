@@ -78,6 +78,9 @@ def _kill_pid_tree(pid: int) -> None:
         pass
 
 
+_CLOAK_ENSURE_LOCK = threading.Lock()
+
+
 class CloakElement:
     def __init__(self, page, locator=None, handle=None):
         self.page = page
@@ -253,7 +256,7 @@ class CloakSeleniumDriver:
             pass
 
     def set_page_load_timeout(self, seconds: int) -> None:
-        self._page_load_timeout_ms = int(seconds) * 1000
+        self._page_load_timeout_ms = max(int(seconds or 90) * 1000, 5000)
         try:
             self.page.set_default_navigation_timeout(self._page_load_timeout_ms)
             self.page.set_default_timeout(self._page_load_timeout_ms)
@@ -262,6 +265,14 @@ class CloakSeleniumDriver:
 
     def get(self, url: str) -> None:
         self.page.goto(url, wait_until="domcontentloaded", timeout=self._page_load_timeout_ms)
+
+    @property
+    def page_source(self) -> str:
+        return self.page.content()
+
+    @property
+    def title(self) -> str:
+        return self.page.title()
 
     def back(self) -> None:
         self.page.go_back(wait_until="domcontentloaded", timeout=self._page_load_timeout_ms)
@@ -280,9 +291,17 @@ class CloakSeleniumDriver:
         except Exception:
             pass
 
-        import threading
+        watchdog = None
+        if node_pid:
+            def _on_timeout():
+                logger.warning("[Cloak] 浏览器/驱动退出超过 5 秒，看门狗强制回收底层进程 node_pid=%s", node_pid)
+                _kill_pid_tree(node_pid)
 
-        def _close_gracefully():
+            watchdog = threading.Timer(5.0, _on_timeout)
+            watchdog.daemon = True
+            watchdog.start()
+
+        try:
             try:
                 if self.context is not None:
                     self.context.close()
@@ -293,16 +312,23 @@ class CloakSeleniumDriver:
                     self.browser.close()
             except Exception:
                 pass
-
-        t = threading.Thread(target=_close_gracefully, daemon=True)
-        t.start()
-        t.join(timeout=5.0)
-
-        if t.is_alive() or (node_pid and _is_pid_alive(node_pid)):
-            logger.warning("[Cloak] 浏览器/驱动退出超过 5 秒，执行强制进程回收 node_pid=%s", node_pid)
-            if node_pid:
-                _kill_pid_tree(node_pid)
-            t.join(timeout=1.0)
+        finally:
+            if watchdog is not None:
+                watchdog.cancel()
+            # 兜底清理：若当前线程残留有未停止的 asyncio event loop，强制重置，防止下次任务误判
+            try:
+                import asyncio
+                try:
+                    cur_loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    cur_loop = None
+                if cur_loop is not None and not cur_loop.is_closed():
+                    try:
+                        cur_loop.stop()
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
     def find_elements(self, by: Any, selector: str) -> list[CloakElement]:
         loc = self._locator(by, selector)
@@ -515,10 +541,32 @@ def build_cloak_driver(proxy: str | None = None) -> tuple[CloakSeleniumDriver, C
             proxy = pick_proxy()
         except Exception:
             proxy = None
+    # 启动前检查当前线程，如果有未关闭的残留 loop，显式重置，防止 Playwright sync_api 误判
     try:
-        from cloakbrowser import launch, launch_persistent_context
+        import asyncio
+        try:
+            cur_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            cur_loop = None
+        if cur_loop is not None and not cur_loop.is_closed():
+            logger.warning("[Cloak] 检测到当前线程有未退出的事件循环，执行重置")
+            try:
+                cur_loop.stop()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    try:
+        from cloakbrowser import launch, launch_persistent_context, ensure_binary
     except ImportError as exc:
         raise RuntimeError("未安装 cloakbrowser，请执行：pip install cloakbrowser") from exc
+
+    with _CLOAK_ENSURE_LOCK:
+        try:
+            ensure_binary()
+        except Exception as exc:
+            logger.warning("[Cloak] ensure_binary 检查异常: %s", exc)
 
     launch_args = list(getattr(_cfg, "CLOAK_EXTRA_ARGS", []) or [])
     seed = str(getattr(_cfg, "CLOAK_FINGERPRINT_SEED", "") or "").strip()

@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt && \
     playwright install-deps chromium && \
+    python -c "import cloakbrowser; cloakbrowser.ensure_binary()" && \
     rm -rf /var/lib/apt/lists/*
 
 ENV CLOAKBROWSER_SUPPRESS_FONT_WARNING=1
