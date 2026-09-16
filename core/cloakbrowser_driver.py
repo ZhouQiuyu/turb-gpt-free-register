@@ -109,18 +109,23 @@ class CloakElement:
             return ""
 
     def send_keys(self, *values: str) -> None:
-        # 兼容 Selenium 键入语义：按键追加而不是 fill 清空，并支持特殊控制键与组合键
+        # 兼容 Selenium 键入语义：获得焦点而不点击（避免破坏光标位置），按键追加并支持控制键
         try:
-            self.click()
+            if self.locator is not None:
+                self.locator.focus()
+            else:
+                self._handle().focus()
         except Exception:
             pass
 
         all_text = "".join(str(v or "") for v in values)
         lower = all_text.lower()
         if ("\ue03d" in all_text or "\ue009" in all_text or "command" in lower or "control" in lower) and ("a" in lower):
-            try:
+            if "\ue009" in all_text or "control" in lower:
+                self.page.keyboard.press("Control+A")
+            elif "\ue03d" in all_text or "command" in lower:
                 self.page.keyboard.press("Meta+A")
-            except Exception:
+            else:
                 self.page.keyboard.press("Control+A")
             return
 
@@ -143,19 +148,13 @@ class CloakElement:
                             pass
                     else:
                         try:
-                            if self.locator is not None:
-                                self.locator.press_sequentially(ch)
-                            else:
-                                self.page.keyboard.insert_text(ch)
+                            self.page.keyboard.type(ch)
                         except Exception:
                             self.page.keyboard.insert_text(ch)
                 continue
 
             try:
-                if self.locator is not None:
-                    self.locator.press_sequentially(s)
-                else:
-                    self.page.keyboard.insert_text(s)
+                self.page.keyboard.type(s)
             except Exception:
                 self.page.keyboard.insert_text(s)
 
