@@ -422,12 +422,46 @@ def _login_via_reauth(
         otp_after_ts,
         email_source=email_source,
     )
+    if "/mfa-challenge/" in str(continue_url):
+        return _handle_mfa_challenge(session, email, {}, str(continue_url))
     logger.info("[查活] reauth OTP 验证通过，开始交换新 token")
     human_delay("api")
     return _follow_continue_and_fetch(
         session,
         continue_url,
         referer="https://auth.openai.com/email-verification",
+    )
+
+
+def _handle_mfa_challenge(
+    session: BrowserSession,
+    email: str,
+    challenge_result: dict,
+    continue_url: str,
+) -> dict:
+    """处理 TOTP 二次验证：签发 challenge、生成验证码、完成 verify 并跟随回调拉取 session。"""
+    factor_id = _extract_factor_id(challenge_result, continue_url)
+    secret = _account_totp_secret(email)
+    if not factor_id:
+        raise RuntimeError(f"进入 MFA 但未拿到 factor_id: {challenge_result}")
+    if not secret:
+        raise RuntimeError(f"进入 MFA 但账号没有 totp_secret：{email}")
+    logger.info("[查活] 已进入 MFA challenge，开始提交 TOTP：%s factor_id=%s", email, factor_id)
+    try:
+        _mfa_issue_challenge(session, factor_id)
+    except Exception as exc:
+        logger.debug("[查活] issue_challenge 忽略异常: %s", exc)
+    code = _account_totp_code(email)
+    if not code:
+        raise RuntimeError(f"无法生成 TOTP 验证码：{email}")
+    mfa_result = _mfa_verify(session, factor_id, code)
+    mfa_continue_url = _extract_continue_url(mfa_result) or continue_url
+    if not mfa_continue_url:
+        raise RuntimeError(f"MFA 验证成功但没有 continue_url: {mfa_result}")
+    return _follow_continue_and_fetch(
+        session,
+        mfa_continue_url,
+        referer=f"https://auth.openai.com/mfa-challenge/{factor_id}",
     )
 
 
@@ -452,6 +486,10 @@ def _login_via_email_otp(
         raise RuntimeError(f"OTP 登录成功但没有 OAuth continue_url: {validate_result}")
     if "about-you" in str(continue_url) or page_type in {"about_you", "about-you"}:
         raise RuntimeError(f"该邮箱登录后进入资料页，疑似不是完整已注册账号: page_type={page_type}, continue_url={continue_url}")
+
+    if "/mfa-challenge/" in str(continue_url) or page_type == "mfa_challenge":
+        return _handle_mfa_challenge(session, email, validate_result, continue_url)
+
     logger.info("[查活] 邮箱 OTP 验证完成，开始跟随 OAuth callback")
     return _follow_continue_and_fetch(session, continue_url, referer="https://auth.openai.com/email-verification")
 
@@ -480,27 +518,8 @@ def _login_via_password_or_otp(
     page = page if isinstance(page, dict) else {}
     page_type = str(page.get("type") or "")
 
-    if "/mfa-challenge/" in continue_url or page_type == "mfa_challenge":
-        factor_id = _extract_factor_id(password_result, continue_url)
-        secret = _account_totp_secret(email)
-        if not factor_id:
-            raise RuntimeError(f"密码登录后进入 MFA 但未拿到 factor_id: {password_result}")
-        if not secret:
-            raise RuntimeError(f"密码登录后进入 MFA，但账号没有 totp_secret：{email}")
-        logger.info("[查活] 已进入 MFA challenge，开始提交 TOTP：%s factor_id=%s", email, factor_id)
-        _mfa_issue_challenge(session, factor_id)
-        code = _account_totp_code(email)
-        if not code:
-            raise RuntimeError(f"无法生成 TOTP 验证码：{email}")
-        mfa_result = _mfa_verify(session, factor_id, code)
-        mfa_continue_url = _extract_continue_url(mfa_result) or continue_url
-        if not mfa_continue_url:
-            raise RuntimeError(f"MFA 验证成功但没有 continue_url: {mfa_result}")
-        return _follow_continue_and_fetch(
-            session,
-            mfa_continue_url,
-            referer=f"https://auth.openai.com/mfa-challenge/{factor_id}",
-        )
+    if "/mfa-challenge/" in str(continue_url) or page_type == "mfa_challenge":
+        return _handle_mfa_challenge(session, email, password_result, continue_url)
 
     if "email-verification" in continue_url or page_type in {"email_verification", "email_otp_send"}:
         logger.info("[查活] 密码登录后仍进入邮箱 OTP，继续完成邮箱验证：%s", email)

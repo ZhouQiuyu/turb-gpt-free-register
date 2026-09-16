@@ -202,6 +202,40 @@ class AccountLivenessTests(unittest.TestCase):
         )
         self.assertTrue(slot.released)
 
+    def test_email_otp_handles_mfa_challenge_with_totp(self):
+        session = _DummyBrowserSession(proxy="")
+        validate_result = {
+            "continue_url": "https://auth.openai.com/mfa-challenge/factor-123",
+            "page": {
+                "type": "mfa_challenge",
+                "payload": {"factor_id": "factor-123"},
+            },
+        }
+        mfa_verify_result = {
+            "continue_url": "https://chatgpt.com/api/auth/callback/openai?code=abc",
+        }
+        session_info = {
+            "accessToken": "mfa-token",
+            "user": {"id": "user-2fa"},
+            "account": {"planType": "free"},
+        }
+        with patch.object(liveness, "_validate_with_retry", return_value=validate_result), \
+             patch.object(liveness, "_account_totp_secret", return_value="JBSWY3DPEHPK3PXP"), \
+             patch.object(liveness, "_mfa_issue_challenge") as issue_mock, \
+             patch.object(liveness, "_account_totp_code", return_value="123456"), \
+             patch.object(liveness, "_mfa_verify", return_value=mfa_verify_result) as verify_mock, \
+             patch.object(liveness, "_follow_continue_and_fetch", return_value=session_info) as follow_mock:
+            result = liveness._login_via_email_otp(session, "user2fa@example.com", 1.0)
+
+        self.assertEqual(result["accessToken"], "mfa-token")
+        issue_mock.assert_called_once_with(session, "factor-123")
+        verify_mock.assert_called_once_with(session, "factor-123", "123456")
+        follow_mock.assert_called_once_with(
+            session,
+            "https://chatgpt.com/api/auth/callback/openai?code=abc",
+            referer="https://auth.openai.com/mfa-challenge/factor-123",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
