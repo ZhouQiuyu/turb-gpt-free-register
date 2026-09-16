@@ -146,6 +146,18 @@ class CloakElement:
         except Exception:
             return ""
 
+    @property
+    def text(self) -> str:
+        try:
+            if self.locator is not None:
+                return (self.locator.inner_text(timeout=2000) or "").strip()
+            return (self.handle.inner_text() or "").strip()
+        except Exception:
+            try:
+                return str(self._eval("el => el.innerText || el.textContent || ''") or "").strip()
+            except Exception:
+                return ""
+
     def send_keys(self, *values: str) -> None:
         # 兼容 Selenium 键入语义：获得焦点而不点击（避免破坏光标位置），按键追加并支持控制键
         try:

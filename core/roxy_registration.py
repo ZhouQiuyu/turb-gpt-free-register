@@ -1063,39 +1063,50 @@ def _submit_email_and_wait_next(
     raise RuntimeError(f"邮箱提交后未进入密码页/验证码页，最后状态={last_state}")
 
 
-def _type_otp(driver, code: str) -> None:
+def _type_otp(driver, code: str, timeout: int = 15) -> None:
     from selenium.webdriver.common.by import By
 
-    # 单输入框
-    for selector in [
-        "input[autocomplete='one-time-code']",
-        "input[name='code']",
-        "input[inputmode='numeric']",
-        "input[type='tel']",
-    ]:
-        els = [e for e in driver.find_elements(By.CSS_SELECTOR, selector) if _visible(e)]
-        if len(els) == 1:
-            _human_type_text(driver, els[0], code, clear=True)
-            return
+    end = time.time() + max(int(timeout or 0), 3)
+    last_err = None
+    while time.time() < end:
+        # 单输入框
+        for selector in [
+            "input[autocomplete='one-time-code']",
+            "input[name='code']",
+            "input[inputmode='numeric']",
+            "input[type='tel']",
+        ]:
+            try:
+                els = [e for e in driver.find_elements(By.CSS_SELECTOR, selector) if _visible(e)]
+                if len(els) == 1:
+                    _human_type_text(driver, els[0], code, clear=True)
+                    return
+            except Exception as exc:
+                last_err = exc
 
-    # 6 个分格输入框
-    boxes = [e for e in driver.find_elements(By.CSS_SELECTOR, "input") if _visible(e)]
-    numeric_boxes = []
-    for e in boxes:
-        attrs = " ".join(str(e.get_attribute(k) or "") for k in ("inputmode", "autocomplete", "aria-label", "name", "id", "type"))
-        if any(x in attrs.lower() for x in ("numeric", "one-time", "code", "otp", "tel")):
-            numeric_boxes.append(e)
-    if len(numeric_boxes) >= len(code):
-        for e, ch in zip(numeric_boxes, code):
-            if _browser_actions_enabled():
-                _human_scroll_to(driver, e)
-                time.sleep(random.uniform(0.04, 0.18))
-            e.send_keys(ch)
-            if _browser_actions_enabled():
-                human_delay("keystroke")
-        return
+        # 6 个分格输入框
+        try:
+            boxes = [e for e in driver.find_elements(By.CSS_SELECTOR, "input") if _visible(e)]
+            numeric_boxes = []
+            for e in boxes:
+                attrs = " ".join(str(e.get_attribute(k) or "") for k in ("inputmode", "autocomplete", "aria-label", "name", "id", "type"))
+                if any(x in attrs.lower() for x in ("numeric", "one-time", "code", "otp", "tel")):
+                    numeric_boxes.append(e)
+            if len(numeric_boxes) >= len(code):
+                for e, ch in zip(numeric_boxes, code):
+                    if _browser_actions_enabled():
+                        _human_scroll_to(driver, e)
+                        time.sleep(random.uniform(0.04, 0.18))
+                    e.send_keys(ch)
+                    if _browser_actions_enabled():
+                        human_delay("keystroke")
+                return
+        except Exception as exc:
+            last_err = exc
 
-    raise RuntimeError("找不到 OTP 输入框")
+        time.sleep(0.5)
+
+    raise RuntimeError(f"找不到 OTP 输入框 (last_err={last_err}, state={_email_otp_page_state(driver)})")
 
 
 def _email_otp_page_state(driver) -> dict:
@@ -1178,7 +1189,10 @@ def _click_resend_email_otp(driver, timeout: int = 20) -> dict:
             return candidates.find(el => enabled(el) && /resend|send\s+(?:a\s+)?new\s+code|send\s+again|重新发送|重新发送电子邮件|重发|再次发送|再送信|新しい|届かない/.test((el.innerText || el.textContent || '').toLowerCase())) || null;
             """)
             if btn:
-                text = str(btn.text or btn.get_attribute('value') or btn.get_attribute('data-dd-action-name') or '').strip()
+                try:
+                    text = str(getattr(btn, "text", None) or btn.get_attribute("value") or btn.get_attribute("data-dd-action-name") or "").strip()
+                except Exception:
+                    text = ""
                 _human_click(driver, btn, label="resend_otp")
                 logger.info("%s[OTP] 已点击重新发送验证码按钮：%s", _log_prefix(driver), text or '-')
                 time.sleep(random.uniform(1.1, 2.4) if _browser_actions_enabled() else 1.5)
