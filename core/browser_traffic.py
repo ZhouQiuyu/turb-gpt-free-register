@@ -1106,7 +1106,14 @@ class PlaywrightTrafficTracker(_TrafficAccumulator):
                 )
                 continue
 
-            values = self._request_size_values(request) or {}
+            values = None
+            impl = getattr(request, "_impl_obj", None)
+            if impl and getattr(impl, "_response", None) is not None:
+                try:
+                    values = self._request_size_values(request)
+                except Exception:
+                    values = None
+            values = values or {}
             if values:
                 upload = (values.get("requestBodySize") or 0) + (values.get("requestHeadersSize") or 0)
                 download = (values.get("responseBodySize") or 0) + (values.get("responseHeadersSize") or 0)

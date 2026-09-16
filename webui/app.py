@@ -240,6 +240,11 @@ def _read_log_tail(path, *, max_bytes: int, default_running: bool = False, runni
     return {"ok": True, "log": content, "running": running}
 
 def create_app(auth_code: str | None = None) -> Flask:
+    try:
+        svc.cleanup_interrupted_jobs()
+    except Exception as exc:
+        logger.warning("清理历史中断任务失败: %s", exc)
+
     app = Flask(__name__, template_folder="templates")
     _prepared_downloads: dict[str, dict] = {}
 

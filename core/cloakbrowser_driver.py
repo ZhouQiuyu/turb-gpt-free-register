@@ -44,6 +44,40 @@ _SELENIUM_SPECIAL_KEY_MAP = {
 }
 
 
+def _is_pid_alive(pid: int) -> bool:
+    try:
+        import os
+        os.kill(pid, 0)
+        return True
+    except Exception:
+        return False
+
+
+def _kill_pid_tree(pid: int) -> None:
+    if not pid or pid <= 1:
+        return
+    import os, signal
+    children = []
+    try:
+        for entry in os.listdir("/proc"):
+            if entry.isdigit():
+                try:
+                    with open(f"/proc/{entry}/stat", "r") as f:
+                        fields = f.read().split()
+                        if len(fields) > 3 and int(fields[3]) == pid:
+                            children.append(int(entry))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    for child in children:
+        _kill_pid_tree(child)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except Exception:
+        pass
+
+
 class CloakElement:
     def __init__(self, page, locator=None, handle=None):
         self.page = page
@@ -236,15 +270,39 @@ class CloakSeleniumDriver:
         self.page.reload(wait_until="domcontentloaded", timeout=self._page_load_timeout_ms)
 
     def quit(self) -> None:
+        node_pid = None
         try:
-            if self.context is not None:
-                self.context.close()
+            conn = getattr(getattr(self.browser, "_impl_obj", None), "_connection", None)
+            transport = getattr(conn, "_transport", None)
+            proc = getattr(transport, "_proc", None)
+            if proc and hasattr(proc, "pid"):
+                node_pid = proc.pid
         except Exception:
             pass
-        try:
-            self.browser.close()
-        except Exception:
-            pass
+
+        import threading
+
+        def _close_gracefully():
+            try:
+                if self.context is not None:
+                    self.context.close()
+            except Exception:
+                pass
+            try:
+                if self.browser is not None:
+                    self.browser.close()
+            except Exception:
+                pass
+
+        t = threading.Thread(target=_close_gracefully, daemon=True)
+        t.start()
+        t.join(timeout=5.0)
+
+        if t.is_alive() or (node_pid and _is_pid_alive(node_pid)):
+            logger.warning("[Cloak] 浏览器/驱动退出超过 5 秒，执行强制进程回收 node_pid=%s", node_pid)
+            if node_pid:
+                _kill_pid_tree(node_pid)
+            t.join(timeout=1.0)
 
     def find_elements(self, by: Any, selector: str) -> list[CloakElement]:
         loc = self._locator(by, selector)

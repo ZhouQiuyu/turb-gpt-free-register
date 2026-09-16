@@ -703,3 +703,48 @@ def read_job_log(job_id: int, max_bytes: int = 50_000) -> str:
             f.seek(size - max_bytes)
         data = f.read()
     return data.decode("utf-8", errors="replace")
+
+
+def cleanup_interrupted_jobs() -> int:
+    """
+    服务启动时清理异常中断的历史任务。
+    把数据库中处于 running / stopping 状态的孤儿任务标记为 failed；
+    把数据库中处于 pending 状态的孤儿任务标记为 cancelled。
+    并释放未消费成功的临时邮箱。
+    """
+    jobs = db.list_jobs(limit=1000)
+    cleaned = 0
+    now_iso = datetime.now().isoformat(timespec="seconds")
+    for job in jobs:
+        status = job.get("status")
+        job_id = int(job["id"])
+        if status in ("running", "stopping"):
+            db.update_job(
+                job_id,
+                status="failed",
+                completed_at=now_iso,
+                error="服务重启或进程中断，任务未完成",
+            )
+            _release_unconsumed_job_email(
+                str(job.get("email") or "").strip() or None,
+                "服务重启清理未完成任务",
+            )
+            _append_job_log(job_id, "服务重启：检测到异常中断任务，已自动重置为 failed。")
+            cleaned += 1
+        elif status == "pending":
+            db.update_job(
+                job_id,
+                status="cancelled",
+                completed_at=now_iso,
+                error="服务重启，未执行的排队任务已自动取消",
+            )
+            _release_unconsumed_job_email(
+                str(job.get("email") or "").strip() or None,
+                "服务重启清理排队任务",
+            )
+            _append_job_log(job_id, "服务重启：排队任务未执行，已自动取消。")
+            cleaned += 1
+    if cleaned:
+        logger.warning(f"[Service] 已自动清理 {cleaned} 个前序中断/排队任务")
+    return cleaned
+
