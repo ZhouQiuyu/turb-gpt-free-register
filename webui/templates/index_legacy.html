@@ -3669,8 +3669,14 @@ function readConfigElementValue(el, f) {
   if (!f) return undefined;
   if (f.type === 'list_str_multiline') return el.value.split('\n').map(s=>s.trim()).filter(Boolean);
   if (f.type === 'bool') return el.value === 'true';
-  if (f.type === 'int') return parseInt(el.value || '0', 10);
-  if (f.type === 'float') return parseFloat(el.value || '0');
+  if (f.type === 'int') {
+    const v = parseInt(el.value, 10);
+    return isNaN(v) ? (f.value != null && !isNaN(f.value) ? f.value : 0) : v;
+  }
+  if (f.type === 'float') {
+    const v = parseFloat(el.value);
+    return isNaN(v) ? (f.value != null && !isNaN(f.value) ? f.value : 0.0) : v;
+  }
   return isPlaceholderEmpty(el.value) ? '' : el.value.trim();
 }
 

@@ -1002,9 +1002,19 @@ def _format_env_value(value, vtype: str) -> str:
             value = value.strip().lower() in ("true", "1", "yes", "on", "y")
         return "True" if value else "False"
     if vtype == "int":
-        return str(int(value))
+        if value is None or str(value).strip() == "" or str(value).strip().lower() in ("nan", "null", "none"):
+            return "0"
+        try:
+            return str(int(float(value)))
+        except (ValueError, TypeError):
+            return "0"
     if vtype == "float":
-        return repr(float(value))
+        if value is None or str(value).strip() == "" or str(value).strip().lower() in ("nan", "null", "none"):
+            return "0.0"
+        try:
+            return repr(float(value))
+        except (ValueError, TypeError):
+            return "0.0"
     if vtype == "list_str_multiline":
         lines = _normalize_config_value(value, vtype)
         return "\n".join(lines) if lines else "[]"
@@ -1024,6 +1034,8 @@ def update_config(updates: dict) -> dict:
         field = _FIELD_BY_KEY.get(key)
         if field is None:
             ignored.append(key)
+            continue
+        if value is None and field["type"] in ("int", "float"):
             continue
         env_updates[key] = _format_env_value(value, field["type"])
         updated.append(key)
