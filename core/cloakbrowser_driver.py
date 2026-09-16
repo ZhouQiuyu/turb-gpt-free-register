@@ -17,6 +17,31 @@ logger = logging.getLogger(__name__)
 class CloakOpenResult:
     profile_id: str = "cloakbrowser"
     raw: dict | None = None
+# Selenium Keys 私有区 Unicode 与 Playwright 按键名称映射
+_SELENIUM_SPECIAL_KEY_MAP = {
+    "\ue003": "Backspace",
+    "\ue004": "Tab",
+    "\ue005": "Clear",
+    "\ue006": "Enter",
+    "\ue007": "Enter",
+    "\ue008": "Shift",
+    "\ue009": "Control",
+    "\ue00a": "Alt",
+    "\ue00b": "Pause",
+    "\ue00c": "Escape",
+    "\ue00d": "Space",
+    "\ue00e": "PageUp",
+    "\ue00f": "PageDown",
+    "\ue010": "End",
+    "\ue011": "Home",
+    "\ue012": "ArrowLeft",
+    "\ue013": "ArrowUp",
+    "\ue014": "ArrowRight",
+    "\ue015": "ArrowDown",
+    "\ue016": "Insert",
+    "\ue017": "Delete",
+    "\ue03d": "Meta",
+}
 
 
 class CloakElement:
@@ -84,27 +109,55 @@ class CloakElement:
             return ""
 
     def send_keys(self, *values: str) -> None:
-        # 兼容 Selenium: el.send_keys(Keys.COMMAND, 'a')。
-        text = "".join(str(v or "") for v in values)
-        lower = text.lower()
+        # 兼容 Selenium 键入语义：按键追加而不是 fill 清空，并支持特殊控制键与组合键
         try:
             self.click()
         except Exception:
             pass
-        if "\ue03d" in text or "\ue009" in text or "command" in lower or "control" in lower:
-            # Selenium Keys.CONTROL/COMMAND 编码可能传入私有区字符；这里按全选处理。
+
+        all_text = "".join(str(v or "") for v in values)
+        lower = all_text.lower()
+        if ("\ue03d" in all_text or "\ue009" in all_text or "command" in lower or "control" in lower) and ("a" in lower):
             try:
                 self.page.keyboard.press("Meta+A")
             except Exception:
                 self.page.keyboard.press("Control+A")
             return
-        try:
-            if self.locator is not None:
-                self.locator.fill(text, timeout=10000)
-            else:
-                self.handle.fill(text, timeout=10000)
-        except Exception:
-            self.page.keyboard.type(text, delay=35)
+
+        for v in values:
+            if not v:
+                continue
+            s = str(v)
+            if s in _SELENIUM_SPECIAL_KEY_MAP:
+                try:
+                    self.page.keyboard.press(_SELENIUM_SPECIAL_KEY_MAP[s])
+                except Exception:
+                    pass
+                continue
+            if any(ch in _SELENIUM_SPECIAL_KEY_MAP for ch in s):
+                for ch in s:
+                    if ch in _SELENIUM_SPECIAL_KEY_MAP:
+                        try:
+                            self.page.keyboard.press(_SELENIUM_SPECIAL_KEY_MAP[ch])
+                        except Exception:
+                            pass
+                    else:
+                        try:
+                            if self.locator is not None:
+                                self.locator.press_sequentially(ch)
+                            else:
+                                self.page.keyboard.insert_text(ch)
+                        except Exception:
+                            self.page.keyboard.insert_text(ch)
+                continue
+
+            try:
+                if self.locator is not None:
+                    self.locator.press_sequentially(s)
+                else:
+                    self.page.keyboard.insert_text(s)
+            except Exception:
+                self.page.keyboard.insert_text(s)
 
     def get_attribute(self, name: str) -> str | None:
         try:
