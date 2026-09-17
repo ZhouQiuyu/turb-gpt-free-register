@@ -1566,8 +1566,8 @@
     .outlook-table-v2 .acc-v2-more-menu button.danger { color: #e64545; }
     .outlook-panel-v2 .jobs-v2-pager { border-top: 1px solid #ebeef5; }
 
-    /* ---- 邮箱池导入弹窗 ---- */
-    #outlookImportModal:not(.hidden), #emailChangeModalV2:not(.hidden) {
+    /* ---- 弹窗通用容器 ---- */
+    #outlookImportModal:not(.hidden), #emailChangeModalV2:not(.hidden), #proxyAddModal:not(.hidden), #proxyEditModal:not(.hidden) {
       position: fixed; inset: 0; z-index: 1200;
       display: flex; align-items: center; justify-content: center;
       padding: 24px; box-sizing: border-box;
@@ -1699,6 +1699,56 @@
       opacity: .7; cursor: not-allowed;
     }
 
+    /* ---- 代理池专属样式 ---- */
+    .proxy-pill-proto {
+      display: inline-flex; align-items: center; justify-content: center;
+      height: 24px; padding: 0 8px; border-radius: 4px;
+      font-size: 12px; font-weight: 600; line-height: 1; text-transform: uppercase;
+      border: 1px solid transparent;
+    }
+    .proxy-pill-proto.proto-socks {
+      color: #4f46e5; background: #eef2ff; border-color: #c7d2fe;
+    }
+    .proxy-pill-proto.proto-http {
+      color: #0284c7; background: #f0f9ff; border-color: #bae6fd;
+    }
+    .proxy-icon-btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 22px; height: 22px; padding: 0; margin-left: 4px;
+      border: 1px solid #e4e7ed; border-radius: 4px; background: #fff;
+      color: #909399; cursor: pointer; vertical-align: middle; transition: all .15s;
+    }
+    .proxy-icon-btn:hover {
+      color: #377DFF; border-color: #c6e2ff; background: #ecf5ff;
+    }
+    .proxy-icon-btn svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; }
+    .proxy-modal-tabs {
+      display: flex; gap: 8px; margin-bottom: 14px; border-bottom: 1px solid #ebeef5; padding-bottom: 10px;
+    }
+    .proxy-modal-tab-btn {
+      padding: 6px 16px; border-radius: 6px; border: 1px solid #dcdfe6;
+      background: #fff; color: #606266; font-size: 13px; font-weight: 500; cursor: pointer;
+      transition: all .15s;
+    }
+    .proxy-modal-tab-btn:hover {
+      color: #377DFF; border-color: #c6e2ff;
+    }
+    .proxy-modal-tab-btn.active {
+      color: #fff; background: #377DFF; border-color: #377DFF;
+    }
+    .quick-stats-bar {
+      display: flex; align-items: center; gap: 14px; padding: 8px 12px;
+      background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;
+      font-size: 12px; color: #64748b; margin-bottom: 8px;
+    }
+    .quick-stats-bar strong { font-size: 13px; }
+    .quick-format-radios {
+      display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
+      padding: 8px 12px; background: #fafbfc; border: 1px solid #ebeef5; border-radius: 6px;
+    }
+    .quick-format-radios label {
+      display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; color: #606266;
+    }
 
     /* ---- 新版配置布局（追加在概览下方） ---- */
     .config-layout-v2 {
@@ -1871,6 +1921,25 @@
     .config-recommendations-item { display: block; margin-top: 4px; }
     .config-recommendations-item a { color: #377DFF; font-weight: 500; text-decoration: none; }
     .config-recommendations-item a:hover { text-decoration: underline; }
+    /* 可搜索国家代码下拉框 */
+    .country-combobox { position: relative; width: 100%; }
+    .country-combobox-input-wrap { position: relative; display: flex; align-items: center; width: 100%; }
+    .country-combobox-input { width: 100% !important; padding-right: 52px !important; box-sizing: border-box !important; }
+    .country-combobox-actions { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); display: flex; align-items: center; gap: 2px; }
+    .country-combobox-clear, .country-combobox-arrow { background: transparent; border: none; cursor: pointer; color: #909399; font-size: 14px; padding: 2px 4px; line-height: 1; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; }
+    .country-combobox-clear:hover { color: #f56c6c; }
+    .country-combobox-arrow:hover { color: #377DFF; }
+    .country-combobox-dropdown { position: absolute; top: calc(100% + 4px); left: 0; right: 0; max-height: 250px; overflow-y: auto; background: #ffffff; border: 1px solid #dcdfe6; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.12); z-index: 1000; display: none; }
+    .country-combobox-dropdown.show { display: block; }
+    .country-combobox-item { padding: 8px 12px; font-size: 13px; cursor: pointer; display: flex; align-items: center; gap: 8px; color: #303133; border-bottom: 1px solid #f2f6fc; transition: background .1s; white-space: nowrap; }
+    .country-combobox-item:last-child { border-bottom: none; }
+    .country-combobox-item:hover, .country-combobox-item.active { background: #f0f7ff; color: #377DFF; }
+    .country-combobox-item-empty { padding: 12px; font-size: 13px; color: #909399; text-align: center; }
+    .country-combobox-code { font-family: monospace; font-weight: 700; color: #377DFF; min-width: 32px; }
+    .country-combobox-iso { display: inline-block; padding: 1px 5px; border-radius: 4px; background: #eef4ff; color: #377DFF; font-size: 11px; font-weight: 600; }
+    .country-combobox-chn { font-weight: 500; color: #303133; }
+    .country-combobox-item:hover .country-combobox-chn { color: #377DFF; }
+    .country-combobox-eng { font-size: 11px; color: #909399; margin-left: auto; padding-left: 8px; }
     .config-section-v2-actions {
       margin-top: 18px; display: flex; justify-content: flex-end; gap: 8px;
     }
@@ -2053,6 +2122,12 @@
         <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><path d="M22 6l-10 7L2 6"/>
       </svg>
       <span class="sidebar-item-label">邮箱池</span>
+    </button>
+    <button type="button" data-tab="proxies" class="sidebar-item">
+      <svg class="sidebar-item-icon" viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+      </svg>
+      <span class="sidebar-item-label">代理池</span>
     </button>
     <button type="button" data-tab="config" class="sidebar-item">
       <svg class="sidebar-item-icon" viewBox="0 0 24 24" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -2475,6 +2550,118 @@
     </section>
   </div>
 
+  <!-- ============ 代理池 ============ -->
+  <div id="tab-proxies" class="hidden">
+    <h1 class="register-title">代理池</h1>
+    <!-- 概览指标卡片 -->
+    <div class="stats" style="margin-bottom: 16px;">
+      <div class="stat">
+        <div class="stat-top"><span>总代理数</span><div class="stat-icon stat-icon--total"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></div></div>
+        <strong id="statProxyTotal">0</strong>
+      </div>
+      <div class="stat">
+        <div class="stat-top"><span>启用中</span><div class="stat-icon stat-icon--available"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div></div>
+        <strong id="statProxyActive">0</strong>
+      </div>
+      <div class="stat">
+        <div class="stat-top"><span>已禁用</span><div class="stat-icon stat-icon--used"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg></div></div>
+        <strong id="statProxyDisabled">0</strong>
+      </div>
+      <div class="stat">
+        <div class="stat-top"><span>连通失败</span><div class="stat-icon stat-icon--failed"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg></div></div>
+        <strong id="statProxyFailed">0</strong>
+      </div>
+      <div class="stat">
+        <div class="stat-top"><span>OpenAI 通畅</span><div class="stat-icon stat-icon--accounts"><svg viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div></div>
+        <strong id="statProxyQualityGood">0</strong>
+      </div>
+    </div>
+
+    <section class="outlook-panel-v2" id="proxyPanelV2" aria-label="代理池管理">
+      <div class="outlook-filter-v2" id="proxyFilterV2">
+        <!-- 状态筛选 -->
+        <div class="outlook-v2-select" id="proxyStatusFilterWrap">
+          <button type="button" class="outlook-v2-select-btn" id="proxyStatusFilterBtn" aria-haspopup="listbox" aria-expanded="false">全部状态</button>
+          <div class="outlook-v2-select-menu" role="listbox">
+            <button type="button" class="outlook-v2-select-item is-active" data-value="" role="option">全部状态</button>
+            <button type="button" class="outlook-v2-select-item" data-value="active" role="option">启用中</button>
+            <button type="button" class="outlook-v2-select-item" data-value="disabled" role="option">已禁用</button>
+          </div>
+          <input type="hidden" id="proxyStatusFilter" value="">
+        </div>
+
+        <!-- 协议筛选 -->
+        <div class="outlook-v2-select" id="proxyProtocolFilterWrap">
+          <button type="button" class="outlook-v2-select-btn" id="proxyProtocolFilterBtn" aria-haspopup="listbox" aria-expanded="false">全部协议</button>
+          <div class="outlook-v2-select-menu" role="listbox">
+            <button type="button" class="outlook-v2-select-item is-active" data-value="" role="option">全部协议</button>
+            <button type="button" class="outlook-v2-select-item" data-value="socks5" role="option">SOCKS5</button>
+            <button type="button" class="outlook-v2-select-item" data-value="socks5h" role="option">SOCKS5H</button>
+            <button type="button" class="outlook-v2-select-item" data-value="http" role="option">HTTP</button>
+            <button type="button" class="outlook-v2-select-item" data-value="https" role="option">HTTPS</button>
+          </div>
+          <input type="hidden" id="proxyProtocolFilter" value="">
+        </div>
+
+        <!-- 搜索框 -->
+        <div class="acc-v2-btn-group acc-v2-search-wrap">
+          <input id="qProxyV2" type="search" placeholder="搜索名称、地址、出口IP、国家…" autocomplete="off">
+        </div>
+
+        <!-- 智能复选按钮 -->
+        <button type="button" class="jobs-tb-btn jobs-tb-btn--danger" id="btnSelectFailedProxies" title="复选当前页中连通失败的代理">复选连通失败</button>
+        <button type="button" class="jobs-tb-btn jobs-tb-btn--danger" id="btnSelectBadQualityProxies" title="复选当前页中 OpenAI 质量检测不良(阻断/挑战)的代理">复选质量不良</button>
+
+        <!-- 批量操作按钮 -->
+        <button type="button" class="jobs-tb-btn" id="btnBatchDisableProxies" disabled title="批量停用选中的代理；停用后不会被注册任务领取">一键禁用</button>
+        <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnBatchEnableProxies" disabled title="批量启用选中的代理">一键启用</button>
+        <button type="button" class="jobs-tb-btn jobs-tb-btn--danger" id="btnBatchDeleteProxies" disabled title="批量删除选中的代理">一键删除</button>
+
+        <!-- 批量测试动作 -->
+        <button type="button" class="jobs-tb-btn" id="btnBatchTestProxies" title="测试代理连通性（默认包含已禁用的代理进行探活）">批量测试连接</button>
+        <button type="button" class="jobs-tb-btn" id="btnBatchQualityProxies" title="检测代理 OpenAI 穿透质量（判断 401通畅/403阻断/CF验证码）">批量质量检测</button>
+
+        <!-- 添加代理 -->
+        <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnAddProxyModalOpen" style="margin-left:auto;" title="添加新代理">+ 添加代理</button>
+      </div>
+
+      <div class="outlook-table-v2-wrap">
+        <table class="outlook-table-v2" id="proxyTableV2">
+          <colgroup>
+            <col class="col-check" style="width: 46px;">
+            <col style="width: 60px;">
+            <col style="width: 140px;">
+            <col style="width: 90px;">
+            <col style="width: 210px;">
+            <col style="width: 140px;">
+            <col style="width: 160px;">
+            <col style="width: 105px;">
+            <col style="width: 110px;">
+            <col style="width: 80px;">
+            <col class="col-actions" style="width: 200px;">
+          </colgroup>
+          <thead>
+            <tr>
+              <th class="col-check"><input type="checkbox" id="proxySelectAllV2" title="全选/取消全选当前页代理"></th>
+              <th>ID</th>
+              <th>名称</th>
+              <th>协议</th>
+              <th>节点地址 (Host:Port)</th>
+              <th>认证信息</th>
+              <th>出口 IP / 地区</th>
+              <th>连接延迟</th>
+              <th>OpenAI 质量</th>
+              <th>状态</th>
+              <th class="col-actions">操作</th>
+            </tr>
+          </thead>
+          <tbody id="proxyBodyV2"></tbody>
+        </table>
+      </div>
+      <div class="jobs-v2-pager" id="pager-proxies-v2"></div>
+    </section>
+  </div>
+
   <!-- ============ 配置 ============ -->
   <div id="tab-config" class="hidden">
     <div class="config-overview-v2" id="configOverviewV2" aria-label="配置概览">
@@ -2590,6 +2777,119 @@
     <div class="outlook-import-foot"><button type="button" class="jobs-tb-btn" id="btnCancelEmailChangeV2">取消</button><button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnSubmitEmailChangeV2">开始换绑</button></div>
   </div>
 </div>
+
+<div id="proxyAddModal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="proxyAddTitle">
+  <div class="outlook-import-dialog" role="document" style="max-width: 620px;">
+    <div class="outlook-import-head">
+      <div class="outlook-import-head-main">
+        <h3 id="proxyAddTitle">添加代理</h3>
+        <p>支持快捷批量添加与标准单条添加；支持设置默认协议与格式解析模式。</p>
+      </div>
+      <button type="button" class="outlook-import-close" id="btnCloseProxyAdd" onclick="closeProxyAddModal()" aria-label="关闭">×</button>
+    </div>
+    <div class="outlook-import-body">
+      <div class="proxy-modal-tabs">
+        <button type="button" class="proxy-modal-tab-btn active" id="tabBtnQuickAdd" onclick="switchProxyAddTab('quick')">快捷批量添加</button>
+        <button type="button" class="proxy-modal-tab-btn" id="tabBtnStdAdd" onclick="switchProxyAddTab('standard')">标准单条添加</button>
+      </div>
+
+      <!-- 快捷添加区域 -->
+      <div id="proxyQuickAddWrap">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 8px;">
+          <label class="outlook-import-field">
+            <span>默认协议</span>
+            <select id="quickDefaultProto" onchange="parseQuickAddPreview()">
+              <option value="socks5h" selected>SOCKS5H (推荐 / 远程DNS)</option>
+              <option value="socks5">SOCKS5</option>
+              <option value="http">HTTP</option>
+              <option value="https">HTTPS</option>
+            </select>
+          </label>
+          <div class="outlook-import-field">
+            <span>初始状态</span>
+            <label class="outlook-import-check" style="padding: 10px 12px; height: 40px; box-sizing: border-box;">
+              <input id="quickAddStatusActive" type="checkbox" checked>
+              <span>添加后默认启用</span>
+            </label>
+          </div>
+        </div>
+
+        <label class="outlook-import-field">
+          <span>格式解析模式</span>
+          <div class="quick-format-radios">
+            <label><input type="radio" name="quickFormatMode" value="host_port_user_pass" checked onchange="parseQuickAddPreview()"> <span>host:port:user:password</span></label>
+            <label><input type="radio" name="quickFormatMode" value="user_pass_host_port" onchange="parseQuickAddPreview()"> <span>user:password@host:port</span></label>
+          </div>
+        </label>
+
+        <div class="quick-stats-bar">
+          <span>总行数: <strong id="quickStatTotal">0</strong></span>
+          <span>有效解析: <strong id="quickStatValid" style="color: #166534;">0</strong></span>
+          <span>无效/空行: <strong id="quickStatInvalid" style="color: #e64545;">0</strong></span>
+        </div>
+
+        <label class="outlook-import-field">
+          <span>代理列表</span>
+          <textarea id="quickAddText" placeholder="每行一个代理。无协议头时自动使用上方选中的默认协议，例如：&#10;127.0.0.1:1080&#10;192.168.1.100:8080:username:password&#10;或完整 URL：&#10;socks5://user:pass@1.2.3.4:1080" oninput="parseQuickAddPreview()"></textarea>
+        </label>
+      </div>
+
+      <!-- 标准单条添加区域 -->
+      <div id="proxyStdAddWrap" class="hidden">
+        <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 12px;">
+          <label class="outlook-import-field"><span>代理名称</span><input id="stdProxyName" type="text" placeholder="如：香港专线 (可选)"></label>
+          <label class="outlook-import-field"><span>协议</span><select id="stdProxyProto"><option value="socks5h" selected>SOCKS5H</option><option value="socks5">SOCKS5</option><option value="http">HTTP</option><option value="https">HTTPS</option></select></label>
+        </div>
+        <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 12px;">
+          <label class="outlook-import-field"><span>主机 / IP *</span><input id="stdProxyHost" type="text" placeholder="如：127.0.0.1 或 proxy.example.com"></label>
+          <label class="outlook-import-field"><span>端口 *</span><input id="stdProxyPort" type="number" min="1" max="65535" placeholder="1080"></label>
+        </div>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+          <label class="outlook-import-field"><span>用户名 (可选)</span><input id="stdProxyUser" type="text" placeholder="username"></label>
+          <label class="outlook-import-field"><span>密码 (可选)</span><input id="stdProxyPass" type="text" placeholder="password"></label>
+        </div>
+        <label class="outlook-import-field"><span>状态</span><select id="stdProxyStatus"><option value="active" selected>启用</option><option value="disabled">禁用</option></select></label>
+      </div>
+    </div>
+    <div class="outlook-import-foot">
+      <button type="button" class="jobs-tb-btn" onclick="closeProxyAddModal()">取消</button>
+      <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnSubmitQuickProxy" onclick="submitQuickProxyAdd()">批量添加 (<span id="quickBtnCount">0</span>)</button>
+      <button type="button" class="jobs-tb-btn jobs-tb-btn--primary hidden" id="btnSubmitStdProxy" onclick="submitStandardProxyAdd()">确认添加</button>
+    </div>
+  </div>
+</div>
+
+<div id="proxyEditModal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="proxyEditTitle">
+  <div class="outlook-import-dialog" role="document" style="max-width: 520px;">
+    <div class="outlook-import-head">
+      <div class="outlook-import-head-main">
+        <h3 id="proxyEditTitle">编辑代理 <span id="editProxyIdDisp" style="color:#909399;font-weight:normal;font-size:14px;"></span></h3>
+        <p>修改代理节点连接配置与启用状态。</p>
+      </div>
+      <button type="button" class="outlook-import-close" onclick="closeProxyEditModal()" aria-label="关闭">×</button>
+    </div>
+    <div class="outlook-import-body">
+      <input type="hidden" id="editProxyId">
+      <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 12px;">
+        <label class="outlook-import-field"><span>名称</span><input id="editProxyName" type="text" placeholder="名称"></label>
+        <label class="outlook-import-field"><span>协议</span><select id="editProxyProto"><option value="socks5h">SOCKS5H</option><option value="socks5">SOCKS5</option><option value="http">HTTP</option><option value="https">HTTPS</option></select></label>
+      </div>
+      <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 12px;">
+        <label class="outlook-import-field"><span>主机 / IP *</span><input id="editProxyHost" type="text" placeholder="127.0.0.1"></label>
+        <label class="outlook-import-field"><span>端口 *</span><input id="editProxyPort" type="number" min="1" max="65535" placeholder="1080"></label>
+      </div>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+        <label class="outlook-import-field"><span>用户名</span><input id="editProxyUser" type="text" placeholder="可选"></label>
+        <label class="outlook-import-field"><span>密码</span><input id="editProxyPass" type="text" placeholder="可选"></label>
+      </div>
+      <label class="outlook-import-field"><span>状态</span><select id="editProxyStatus"><option value="active">启用</option><option value="disabled">已禁用</option></select></label>
+    </div>
+    <div class="outlook-import-foot">
+      <button type="button" class="jobs-tb-btn" onclick="closeProxyEditModal()">取消</button>
+      <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnSubmitEditProxy" onclick="submitProxyEdit()">保存修改</button>
+    </div>
+  </div>
+</div>
 <div class="body hidden" id="logPanel">
   <h3>任务 #<span id="logJobId"></span> 日志 <button class="btn" id="btnCloseLog" style="float:right;min-height:28px;">关闭</button></h3>
   <div class="log" id="logContent">加载中…</div>
@@ -2628,6 +2928,7 @@ const PAGERS = {
   accounts: { page: 1, size: 20 },
   outlook:  { page: 1, size: 20 },
   codex:    { page: 1, size: 20 },
+  proxies:  { page: 1, size: 20 },
 };
 
 function _renderPager(id, total) {
@@ -2647,18 +2948,20 @@ function _renderPager(id, total) {
   const el = document.getElementById('pager-' + id);
   if (el) el.innerHTML = html;
 
-  if (id === 'jobs' || id === 'accounts' || id === 'codex' || id === 'outlook') {
+  if (id === 'jobs' || id === 'accounts' || id === 'codex' || id === 'outlook' || id === 'proxies') {
     const elV2 = document.getElementById(
       id === 'jobs' ? 'pager-jobs-v2'
         : id === 'accounts' ? 'pager-accounts-v2'
         : id === 'codex' ? 'pager-codex-v2'
-        : 'pager-outlook-v2'
+        : id === 'outlook' ? 'pager-outlook-v2'
+        : 'pager-proxies-v2'
     );
     if (elV2) {
       const sizeWrapId = id === 'jobs' ? 'jobsPagerSize'
         : id === 'accounts' ? 'accountsPagerSize'
         : id === 'codex' ? 'codexPagerSize'
-        : 'outlookPagerSize';
+        : id === 'outlook' ? 'outlookPagerSize'
+        : 'proxiesPagerSize';
       const v2Sizes = [10, 20, 30, 50, 100];
       const pages = [];
       let from = Math.max(1, p.page - 2);
@@ -2719,6 +3022,7 @@ function pagerGoTo(id, page) {
     : id === 'accounts' ? ACCOUNTS_TOTAL
     : id === 'outlook' ? OUTLOOK_TOTAL
     : id === 'codex' ? CODEX_TOTAL
+    : id === 'proxies' ? PROXIES_TOTAL
     : (p.size || 20);
   const totalPages = Math.max(1, Math.ceil(Number(total || 0) / p.size) || 1);
   p.page = Math.max(1, Math.min(parseInt(page, 10) || 1, totalPages));
@@ -2729,7 +3033,7 @@ function pagerJump(id, val) {
 }
 
 function _reloadPagedList(id) {
-  ({ jobs: refreshJobs, accounts: loadAccounts, outlook: loadOutlook, codex: loadCodex })[id]?.();
+  ({ jobs: refreshJobs, accounts: loadAccounts, outlook: loadOutlook, codex: loadCodex, proxies: loadProxies })[id]?.();
 }
 function pagerGo(id, dir) {
   PAGERS[id].page = Math.max(1, PAGERS[id].page + dir);
@@ -2825,7 +3129,7 @@ function debounce(fn, wait=250) {
 
 // ---------- Tab 切换 ----------
 function activateTab(tab, persist=true) {
-  const allowed = ['register','accounts','codex','outlook','config'];
+  const allowed = ['register','accounts','codex','outlook','proxies','config'];
   if (!allowed.includes(tab)) tab = 'register';
   $$('nav button').forEach(x => x.classList.toggle('active', x.dataset.tab === tab));
   allowed.forEach(t => $('#tab-'+t).classList.toggle('hidden', t !== tab));
@@ -2833,6 +3137,7 @@ function activateTab(tab, persist=true) {
   if (tab === 'accounts') loadAccounts();
   if (tab === 'codex') loadCodex();
   if (tab === 'outlook') loadOutlook();
+  if (tab === 'proxies') loadProxies();
   if (tab === 'config') loadConfig();
   if (tab === 'register') refreshJobs();
 }
@@ -3066,7 +3371,9 @@ function updateModalScrollLock() {
     || !$('#emailChangeLogPanel').classList.contains('hidden')
     || !$('#qrPanel').classList.contains('hidden')
     || !$('#outlookImportModal').classList.contains('hidden')
-    || !$('#emailChangeModalV2').classList.contains('hidden');
+    || !$('#emailChangeModalV2').classList.contains('hidden')
+    || ($('#proxyAddModal') && !$('#proxyAddModal').classList.contains('hidden'))
+    || ($('#proxyEditModal') && !$('#proxyEditModal').classList.contains('hidden'));
   const locked = document.body.classList.contains('modal-open');
   if (opened && !locked) {
     modalScrollY = window.scrollY || document.documentElement.scrollTop || 0;
@@ -3448,6 +3755,30 @@ function _discountLabel(r) {
   if (!Number.isNaN(n)) return `${n}折扣`;
   return `${amount}折扣`;
 }
+function _plusTrialSummary(r) {
+  if (!r || !r.plus_trial_eligible) return '';
+  const pct = Number(r.plus_trial_discount_percentage);
+  const periods = r.plus_trial_duration_num_periods;
+  const period = (r.plus_trial_duration_period || 'month').toString().toLowerCase();
+  const periodUnit = period === 'month' ? '个月' : (period === 'year' ? '年' : (period === 'day' ? '天' : period));
+  const periodStr = periods ? `${periods}${periodUnit}` : '';
+
+  if (!Number.isNaN(pct) && pct > 0) {
+    if (pct === 100) {
+      return periodStr ? `Plus免单/${periodStr}` : 'Plus免单试用';
+    }
+    let discountStr = '';
+    if (pct === 50) {
+      discountStr = 'Plus 5折';
+    } else if ((100 - pct) > 0 && (100 - pct) % 10 === 0) {
+      discountStr = `Plus ${(100 - pct) / 10}折`;
+    } else {
+      discountStr = `Plus ${pct}%优惠`;
+    }
+    return periodStr ? `${discountStr}/${periodStr}` : discountStr;
+  }
+  return '可Plus试用';
+}
 function _planCell(r) {
   const ok = r.plan_check_ok;
   const err = r.plan_check_error || '';
@@ -3469,7 +3800,8 @@ function _planCell(r) {
   if (err || r.plan_check_status === 'failed') {
     const reason = err || '套餐查询失败，未返回具体原因';
     const hasLastSuccess = Boolean(r.plan_last_success_at);
-    const lastPlan = hasLastSuccess ? `${plan}${r.plus_trial_eligible ? '/可Plus试用' : ''}` : '';
+    const lastPromo = _plusTrialSummary(r);
+    const lastPlan = hasLastSuccess ? `${plan}${lastPromo ? `/${lastPromo}` : ''}` : '';
     const lastText = lastPlan ? `（上次: ${lastPlan}）` : '';
     const lastTitle = hasLastSuccess ? `上次成功: ${esc(r.plan_last_success_at)}` : '';
     return `<div class="extract-link-cell"><span class="pill status-failed" title="${[esc(reason), lastTitle].filter(Boolean).join('；')}">查询失败${esc(lastText)}</span><div class="extract-link-error" title="${esc(reason)}">${esc(reason)}</div></div>`;
@@ -3481,10 +3813,12 @@ function _planCell(r) {
     if (!checkedOk) {
       return `<span class="pill status-running" title="${title}">${esc(plan)}（待查资格）</span>`;
     }
-    const text = r.plus_trial_eligible ? 'free(可Plus试用)' : 'free';
+    const promo = _plusTrialSummary(r);
+    const text = promo ? `free(${promo})` : 'free';
     const cls = r.plus_trial_eligible ? 'status-success' : 'status-used';
-    const t = r.plus_trial_eligible ? `${title}；Plus 试用资格可用` : title;
-    return `<span class="pill ${cls}" title="${t}">${esc(text)}</span>`;
+    const promoTitle = r.plus_trial_title ? `优惠活动: ${r.plus_trial_title}` : (r.plus_trial_eligible ? 'Plus 试用/优惠资格可用' : '');
+    const t = [title, promoTitle].filter(Boolean).join('；');
+    return `<span class="pill ${cls}" title="${esc(t)}">${esc(text)}</span>`;
   }
 
   const cls = 'status-success';
@@ -5932,7 +6266,7 @@ function emailConfigSectionForKey(key) {
     return ['通用邮箱 / OTP', '邮箱来源选择、OTP 等待参数、手动邮箱等通用设置'];
   }
   if (key.startsWith('GPTMAIL_')) return ['GPTMail', 'GPTMail 临时邮箱 API 配置'];
-  if (key.startsWith('MAIL_NEST_')) return ['MailNest', 'MailNest / 迈巢临时邮箱 API 配置'];
+  if (key.startsWith('MAIL_NEST_')) return ['MailNest', 'MailNest / 迈巢邮箱 API 配置（支持临时邮箱与独占邮箱）'];
   if (key.startsWith('CLOUDMAIL_')) return ['CloudMail', 'CloudMail 域名随机邮箱、Token 和收信 API 配置'];
   if (key.startsWith('REMAIL_')) return ['Remail', 'Remail 开放 API、项目下单和取件配置'];
   if (key.startsWith('OUTLOOK_')) return ['Outlook 邮箱池', 'Outlook 邮箱池和取件模式配置'];
@@ -6231,10 +6565,112 @@ function renderConfigRecommendedLinks(f) {
   if (!items) return '';
   return `<div class="config-recommendations" role="note"><span class="config-recommendations-title">推荐家宽</span>${items}</div>`;
 }
+// ---------- 接码国家代码库与可搜索下拉组件 ----------
+const SMS_COUNTRIES = [{"code":"4","iso":"PH","chn":"菲律宾","eng":"Philippines"},{"code":"16","iso":"GB","chn":"英国","eng":"United Kingdom"},{"code":"187","iso":"US","chn":"美国","eng":"USA"},{"code":"6","iso":"ID","chn":"印度尼西亚","eng":"Indonesia"},{"code":"73","iso":"BR","chn":"巴西","eng":"Brazil"},{"code":"43","iso":"DE","chn":"德国","eng":"Germany"},{"code":"7","iso":"MY","chn":"马来西亚","eng":"Malaysia"},{"code":"10","iso":"VN","chn":"越南","eng":"Vietnam"},{"code":"52","iso":"TH","chn":"泰国","eng":"Thailand"},{"code":"182","iso":"JP","chn":"日本","eng":"Japan"},{"code":"36","iso":"CA","chn":"加拿大","eng":"Canada"},{"code":"14","iso":"HK","chn":"香港","eng":"Hong Kong"},{"code":"55","iso":"TW","chn":"台湾","eng":"Taiwan"},{"code":"2","iso":"KZ","chn":"哈萨克斯坦","eng":"Kazakhstan"},{"code":"39","iso":"AR","chn":"阿根廷","eng":"Argentina"},{"code":"66","iso":"PK","chn":"巴基斯坦","eng":"Pakistan"},{"code":"15","iso":"PL","chn":"波兰","eng":"Poland"},{"code":"117","iso":"PT","chn":"葡萄牙","eng":"Portugal"},{"code":"78","iso":"FR","chn":"法国","eng":"France"},{"code":"33","iso":"CO","chn":"哥伦比亚","eng":"Colombia"},{"code":"158","iso":"BH","chn":"丁烷","eng":"Bhutan"},{"code":"3","iso":"CN","chn":"中国","eng":"China"},{"code":"125","iso":"CE","chn":"中非共和國","eng":"Central African Republic"},{"code":"172","iso":"DK","chn":"丹麦","eng":"Denmark"},{"code":"1","iso":"UA","chn":"乌克兰","eng":"Ukraine"},{"code":"40","iso":"UZ","chn":"乌兹别克斯坦","eng":"Uzbekistan"},{"code":"75","iso":"UG","chn":"乌干达","eng":"Uganda"},{"code":"42","iso":"CH","chn":"乍得","eng":"Chad"},{"code":"30","iso":"YE","chn":"也门","eng":"Yemen"},{"code":"148","iso":"AM","chn":"亚美尼亚","eng":"Armenia"},{"code":"13","iso":"IL","chn":"以色列","eng":"Israel"},{"code":"47","iso":"IR","chn":"伊拉克","eng":"Iraq"},{"code":"57","iso":"IR","chn":"伊朗","eng":"Iran"},{"code":"124","iso":"BE","chn":"伯利茲","eng":"Belize"},{"code":"128","iso":"GE","chn":"格鲁吉亚","eng":"Georgia"},{"code":"186","iso":"CA","chn":"佛得角","eng":"Cape Verde"},{"code":"83","iso":"BG","chn":"保加利亚","eng":"Bulgaria"},{"code":"45","iso":"HR","chn":"克罗地亚","eng":"Croatia"},{"code":"28","iso":"GA","chn":"冈比亚","eng":"Gambia"},{"code":"132","iso":"IS","chn":"冰岛","eng":"Iceland"},{"code":"68","iso":"GU","chn":"几内亚","eng":"Guinea"},{"code":"200","iso":"LI","chn":"列支敦士登","eng":"Liechtenstein"},{"code":"18","iso":"DR","chn":"刚果","eng":"DR Congo"},{"code":"102","iso":"LY","chn":"利比亚","eng":"Libya"},{"code":"135","iso":"LR","chn":"利比里亚","eng":"Liberia"},{"code":"150","iso":"CO","chn":"剛果","eng":"Congo"},{"code":"38","iso":"GH","chn":"加纳","eng":"Ghana"},{"code":"154","iso":"GA","chn":"加蓬","eng":"Gabon"},{"code":"84","iso":"HU","chn":"匈牙利","eng":"Hungary"},{"code":"183","iso":"MK","chn":"北马其顿","eng":"North Macedonia"},{"code":"177","iso":"SS","chn":"南苏丹","eng":"South Sudan"},{"code":"31","iso":"ZA","chn":"南非","eng":"South Africa"},{"code":"123","iso":"BW","chn":"博茨瓦纳","eng":"Botswana"},{"code":"111","iso":"QA","chn":"卡塔尔","eng":"Qatar"},{"code":"165","iso":"LU","chn":"卢森堡","eng":"Luxembourg"},{"code":"22","iso":"IN","chn":"印度","eng":"India"},{"code":"94","iso":"GT","chn":"危地马拉","eng":"Guatemala"},{"code":"105","iso":"EC","chn":"厄瓜多尔","eng":"Ecuador"},{"code":"176","iso":"ER","chn":"厄立特里亚","eng":"Eritrea"},{"code":"113","iso":"CU","chn":"古巴","eng":"Cuba"},{"code":"11","iso":"KY","chn":"吉尔吉斯斯坦","eng":"Kyrgyzstan"},{"code":"168","iso":"DJ","chn":"吉布地","eng":"Djibouti"},{"code":"93","iso":"CR","chn":"哥斯达黎加","eng":"Costa Rica"},{"code":"41","iso":"CM","chn":"喀麦隆","eng":"Cameroon"},{"code":"146","iso":"RE","chn":"留尼汪","eng":"Reunion"},{"code":"161","iso":"TU","chn":"土库曼斯坦","eng":"Turkmenistan"},{"code":"62","iso":"TR","chn":"土耳其","eng":"Turkey"},{"code":"164","iso":"SA","chn":"圣卢西亚","eng":"Saint Lucia"},{"code":"166","iso":"SA","chn":"圣文森特和格林纳丁斯","eng":"Saint Vincent and the Grenadines"},{"code":"131","iso":"GY","chn":"圭亚那","eng":"Guyana"},{"code":"9","iso":"TA","chn":"坦桑尼亚","eng":"Tanzania"},{"code":"21","iso":"EG","chn":"埃及","eng":"Egypt"},{"code":"71","iso":"ET","chn":"埃塞俄比亚","eng":"Ethiopia"},{"code":"143","iso":"TA","chn":"塔吉克斯坦","eng":"Tajikistan"},{"code":"61","iso":"SN","chn":"塞内加尔","eng":"Senegal"},{"code":"29","iso":"RS","chn":"塞尔维亚","eng":"Serbia"},{"code":"115","iso":"SI","chn":"塞拉利昂","eng":"Sierra Leone"},{"code":"77","iso":"CY","chn":"塞浦路斯","eng":"Cyprus"},{"code":"184","iso":"SC","chn":"塞舌尔","eng":"Seychelles"},{"code":"54","iso":"MX","chn":"墨西哥","eng":"Mexico"},{"code":"99","iso":"TO","chn":"多哥","eng":"Togo"},{"code":"109","iso":"DO","chn":"多米尼加共和国","eng":"Dominican Republic"},{"code":"126","iso":"DM","chn":"多米尼克","eng":"Dominica"},{"code":"50","iso":"AT","chn":"奥地利","eng":"Austria"},{"code":"70","iso":"VE","chn":"委内瑞拉","eng":"Venezuela"},{"code":"60","iso":"BD","chn":"孟加拉国","eng":"Bangladesh"},{"code":"76","iso":"AN","chn":"安哥拉","eng":"Angola"},{"code":"181","iso":"AI","chn":"安圭拉","eng":"Anguilla"},{"code":"169","iso":"AN","chn":"安提瓜和巴布达","eng":"Antigua and Barbuda"},{"code":"90","iso":"NI","chn":"尼加拉瓜","eng":"Nicaragua"},{"code":"19","iso":"NG","chn":"尼日利亚","eng":"Nigeria"},{"code":"139","iso":"NE","chn":"尼日尔","eng":"Niger"},{"code":"81","iso":"NP","chn":"尼泊尔","eng":"Nepal"},{"code":"188","iso":"PA","chn":"巴勒斯坦","eng":"Palestine"},{"code":"122","iso":"BS","chn":"巴哈马","eng":"Bahamas"},{"code":"118","iso":"BA","chn":"巴巴多斯","eng":"Barbados"},{"code":"79","iso":"PG","chn":"巴布亚新几内亚","eng":"Papua"},{"code":"87","iso":"PY","chn":"巴拉圭","eng":"Paraguay"},{"code":"112","iso":"PA","chn":"巴拿马","eng":"Panama"},{"code":"145","iso":"BH","chn":"巴林","eng":"Bahrain"},{"code":"152","iso":"BF","chn":"布基纳法索","eng":"Burkina Faso"},{"code":"119","iso":"BU","chn":"布隆迪","eng":"Burundi"},{"code":"129","iso":"GR","chn":"希腊","eng":"Greece"},{"code":"130","iso":"GW","chn":"几内亚比绍","eng":"Guinea-Bissau"},{"code":"170","iso":"CA","chn":"开曼群岛","eng":"Cayman Islands"},{"code":"49","iso":"LV","chn":"拉脱维亚","eng":"Latvia"},{"code":"174","iso":"NO","chn":"挪威","eng":"Norway"},{"code":"63","iso":"CZ","chn":"捷克共和国","eng":"Czech"},{"code":"37","iso":"MA","chn":"摩洛哥","eng":"Morocco"},{"code":"85","iso":"MD","chn":"摩尔多瓦","eng":"Moldova"},{"code":"144","iso":"MC","chn":"摩纳哥","eng":"Monaco"},{"code":"110","iso":"SY","chn":"叙利亚","eng":"Syria"},{"code":"121","iso":"BN","chn":"文莱","eng":"Brunei"},{"code":"189","iso":"FJ","chn":"斐济","eng":"Fiji"},{"code":"106","iso":"SZ","chn":"斯威士兰","eng":"Swaziland"},{"code":"141","iso":"SK","chn":"斯洛伐克","eng":"Slovakia"},{"code":"59","iso":"SI","chn":"斯洛文尼亚","eng":"Slovenia"},{"code":"64","iso":"LK","chn":"斯里兰卡","eng":"Sri Lanka"},{"code":"196","iso":"SG","chn":"新加坡","eng":"Singapore"},{"code":"185","iso":"NC","chn":"新喀里多尼亚","eng":"New Caledonia"},{"code":"67","iso":"NZ","chn":"新西兰","eng":"New Zealand"},{"code":"151","iso":"CL","chn":"智利","eng":"Chile"},{"code":"91","iso":"TL","chn":"东帝汶","eng":"Timor-Leste"},{"code":"24","iso":"KH","chn":"柬埔寨","eng":"Cambodia"},{"code":"127","iso":"GD","chn":"格林纳达","eng":"Grenada"},{"code":"82","iso":"BE","chn":"比利时","eng":"Belgium"},{"code":"114","iso":"MR","chn":"毛里塔尼亚","eng":"Mauritania"},{"code":"157","iso":"MU","chn":"毛里求斯","eng":"Mauritius"},{"code":"53","iso":"SA","chn":"沙特阿拉伯","eng":"Saudi Arabia"},{"code":"162","iso":"FR","chn":"法属圭亚那","eng":"French Guiana"},{"code":"97","iso":"PU","chn":"波多黎各","eng":"Puerto Rico"},{"code":"108","iso":"BA","chn":"波黑","eng":"Bosnia"},{"code":"96","iso":"ZW","chn":"津巴布韦","eng":"Zimbabwe"},{"code":"88","iso":"HN","chn":"洪都拉斯","eng":"Honduras"},{"code":"26","iso":"HA","chn":"海地","eng":"Haiti"},{"code":"175","iso":"AU","chn":"澳大利亚","eng":"Australia"},{"code":"20","iso":"MA","chn":"澳门","eng":"Macao"},{"code":"156","iso":"UY","chn":"乌拉圭","eng":"Uruguay"},{"code":"23","iso":"IE","chn":"爱尔兰","eng":"Ireland"},{"code":"34","iso":"EE","chn":"爱沙尼亚","eng":"Estonia"},{"code":"103","iso":"JM","chn":"牙买加","eng":"Jamaica"},{"code":"104","iso":"TT","chn":"特立尼达和多巴哥","eng":"Trinidad and Tobago"},{"code":"92","iso":"BO","chn":"玻利维亚","eng":"Bolivia"},{"code":"46","iso":"SE","chn":"瑞典","eng":"Sweden"},{"code":"173","iso":"CH","chn":"瑞士","eng":"Switzerland"},{"code":"160","iso":"GU","chn":"瓜德罗普岛","eng":"Guadeloupe"},{"code":"51","iso":"BY","chn":"白俄罗斯","eng":"Belarus"},{"code":"140","iso":"RW","chn":"卢旺达","eng":"Rwanda"},{"code":"201","iso":"GI","chn":"直布罗陀","eng":"Gibraltar"},{"code":"100","iso":"KW","chn":"科威特","eng":"Kuwait"},{"code":"133","iso":"CO","chn":"科摩羅","eng":"Comoros"},{"code":"203","iso":"KO","chn":"科索沃","eng":"Kosovo"},{"code":"65","iso":"PE","chn":"秘鲁","eng":"Peru"},{"code":"89","iso":"TN","chn":"突尼斯","eng":"Tunisia"},{"code":"44","iso":"LT","chn":"立陶宛","eng":"Lithuania"},{"code":"116","iso":"JO","chn":"约旦","eng":"Jordan"},{"code":"138","iso":"NA","chn":"纳米比亚","eng":"Namibia"},{"code":"149","iso":"SO","chn":"索马里","eng":"Somalia"},{"code":"204","iso":"NI","chn":"纽埃","eng":"Niue"},{"code":"5","iso":"MM","chn":"缅甸","eng":"Myanmar"},{"code":"32","iso":"RO","chn":"罗马尼亚","eng":"Romania"},{"code":"86","iso":"IT","chn":"意大利","eng":"Italy"},{"code":"25","iso":"LA","chn":"老挝","eng":"Laos"},{"code":"134","iso":"KN","chn":"圣基茨和尼维斯","eng":"Saint Kitts and Nevis"},{"code":"178","iso":"ST","chn":"圣多美和普林西比","eng":"Sao Tome and Principe"},{"code":"8","iso":"KE","chn":"肯尼亚","eng":"Kenya"},{"code":"163","iso":"FI","chn":"芬兰","eng":"Finland"},{"code":"48","iso":"NL","chn":"荷兰","eng":"Netherlands"},{"code":"80","iso":"MO","chn":"莫桑比克","eng":"Mozambique"},{"code":"136","iso":"LS","chn":"莱索托","eng":"Lesotho"},{"code":"198","iso":"SA","chn":"萨摩亚","eng":"Samoa"},{"code":"72","iso":"MN","chn":"蒙古","eng":"Mongolia"},{"code":"180","iso":"MS","chn":"蒙特塞拉特","eng":"Montserrat"},{"code":"101","iso":"SV","chn":"萨尔瓦多","eng":"Salvador"},{"code":"98","iso":"SD","chn":"苏丹","eng":"Sudan"},{"code":"142","iso":"SR","chn":"苏里南","eng":"Suriname"},{"code":"56","iso":"ES","chn":"西班牙","eng":"Spain"},{"code":"27","iso":"CI","chn":"象牙海岸","eng":"Ivory Coast"},{"code":"120","iso":"BJ","chn":"贝宁","eng":"Benin"},{"code":"147","iso":"ZM","chn":"赞比亚","eng":"Zambia"},{"code":"167","iso":"EQ","chn":"赤道几内亚","eng":"Equatorial Guinea"},{"code":"35","iso":"AZ","chn":"阿塞拜疆","eng":"Azerbaijan"},{"code":"74","iso":"AF","chn":"阿富汗","eng":"Afghanistan"},{"code":"58","iso":"DZ","chn":"阿尔及利亚","eng":"Algeria"},{"code":"95","iso":"AE","chn":"阿联酋","eng":"UAE"},{"code":"107","iso":"OM","chn":"阿曼","eng":"Oman"},{"code":"155","iso":"AL","chn":"阿尔巴尼亚","eng":"Albania"},{"code":"179","iso":"AW","chn":"阿鲁巴","eng":"Aruba"},{"code":"137","iso":"MW","chn":"马拉维","eng":"Malawi"},{"code":"159","iso":"MA","chn":"马尔代夫","eng":"Maldives"},{"code":"199","iso":"MA","chn":"马耳他","eng":"Malta"},{"code":"17","iso":"MA","chn":"马达加斯加","eng":"Madagascar"},{"code":"69","iso":"MA","chn":"马里","eng":"Mali"},{"code":"153","iso":"LE","chn":"黎巴嫩","eng":"Lebanon"},{"code":"171","iso":"MO","chn":"黑山共和国","eng":"Montenegro"}];
+
+function formatCountryDisplay(code) {
+  if (code == null) return '';
+  const s = String(code).trim();
+  if (!s || s === '0') return '';
+  const c = SMS_COUNTRIES.find(x => String(x.code) === s);
+  if (c) return `${c.code} - ${c.iso} - ${c.chn}`;
+  return s;
+}
+
+function renderCountryCombobox(f, fv) {
+  const rawCode = isPlaceholderEmpty(fv) ? '' : String(fv ?? '').trim();
+  const displayVal = formatCountryDisplay(rawCode);
+  return `
+    <div class="country-combobox" data-country-combobox>
+      <div class="country-combobox-input-wrap">
+        <input type="text"
+               class="country-combobox-input"
+               data-key="${attrEsc(f.key)}"
+               data-raw-value="${attrEsc(rawCode)}"
+               value="${attrEsc(displayVal)}"
+               placeholder="留空不限 / 输入代码、缩写或国家名检索"
+               autocomplete="off"
+               spellcheck="false">
+        <div class="country-combobox-actions">
+          <button type="button" class="country-combobox-clear" title="清空选择" tabindex="-1">×</button>
+          <button type="button" class="country-combobox-arrow" title="展开国家列表" tabindex="-1">▾</button>
+        </div>
+      </div>
+      <div class="country-combobox-dropdown" tabindex="-1" onmousedown="event.preventDefault()"></div>
+    </div>
+  `;
+}
+
+function renderCountryDropdownItems(comboboxEl, query = '') {
+  const dropdown = comboboxEl.querySelector('.country-combobox-dropdown');
+  if (!dropdown) return;
+  const input = comboboxEl.querySelector('.country-combobox-input');
+  const curRaw = input ? (input.dataset.rawValue || '') : '';
+  const q = String(query).trim().toLowerCase();
+
+  let matches = SMS_COUNTRIES;
+  if (q) {
+    const cleanQ = q.split('-')[0].trim() || q;
+    matches = SMS_COUNTRIES.filter(c => 
+      c.code.toLowerCase().includes(q) ||
+      c.iso.toLowerCase().includes(q) ||
+      c.chn.toLowerCase().includes(q) ||
+      c.eng.toLowerCase().includes(q) ||
+      c.code.toLowerCase().includes(cleanQ) ||
+      c.iso.toLowerCase().includes(cleanQ) ||
+      c.chn.toLowerCase().includes(cleanQ)
+    );
+  }
+
+  let html = `
+    <div class="country-combobox-item${!curRaw ? ' active' : ''}" data-code="" data-display="">
+      <span class="country-combobox-code" style="color:#909399;">ALL</span>
+      <span class="country-combobox-chn" style="color:#909399;">留空（不限国家）</span>
+    </div>
+  `;
+
+  if (matches.length === 0) {
+    html += `<div class="country-combobox-item-empty">无匹配国家/地区</div>`;
+  } else {
+    html += matches.map(c => {
+      const active = String(c.code) === curRaw ? ' active' : '';
+      const display = `${c.code} - ${c.iso} - ${c.chn}`;
+      return `
+        <div class="country-combobox-item${active}" data-code="${attrEsc(c.code)}" data-display="${attrEsc(display)}">
+          <span class="country-combobox-code">${esc(c.code)}</span>
+          <span class="country-combobox-iso">${esc(c.iso)}</span>
+          <span class="country-combobox-chn">${esc(c.chn)}</span>
+          <span class="country-combobox-eng">${esc(c.eng)}</span>
+        </div>
+      `;
+    }).join('');
+  }
+  dropdown.innerHTML = html;
+}
+
+function openCountryDropdown(comboboxEl, query = '') {
+  document.querySelectorAll('.country-combobox-dropdown.show').forEach(dd => {
+    if (dd.closest('.country-combobox') !== comboboxEl) dd.classList.remove('show');
+  });
+  renderCountryDropdownItems(comboboxEl, query);
+  const dd = comboboxEl.querySelector('.country-combobox-dropdown');
+  if (dd) dd.classList.add('show');
+}
+
 function renderConfigPlainFieldV2(f) {
   const fv = Object.prototype.hasOwnProperty.call(CONFIG_PENDING_UPDATES, f.key) ? CONFIG_PENDING_UPDATES[f.key] : f.value;
   let control = '';
-  if (f.type === 'int') {
+  if (f.widget === 'country_select' || ['SMS_COUNTRY', 'HERO_SMS_COUNTRY'].includes(f.key)) {
+    control = renderCountryCombobox(f, fv);
+  } else if (Array.isArray(f.options) && f.options.length) {
+    const opts = f.options.map(opt => {
+      const val = typeof opt === 'object' && opt !== null ? opt.value : opt;
+      const label = typeof opt === 'object' && opt !== null ? (opt.label || opt.value) : opt;
+      const selected = String(fv ?? '') === String(val) ? ' selected' : '';
+      return `<option value="${attrEsc(val)}"${selected}>${esc(label)}</option>`;
+    }).join('');
+    control = `<select data-key="${attrEsc(f.key)}">${opts}</select>`;
+  } else if (f.type === 'int') {
     control = `<input type="number" data-key="${attrEsc(f.key)}" value="${attrEsc(fv == null ? '' : fv)}">`;
   } else if (f.type === 'float') {
     control = `<input type="number" step="0.1" data-key="${attrEsc(f.key)}" value="${attrEsc(fv == null ? '' : fv)}">`;
@@ -6766,6 +7202,30 @@ async function saveRoxyWorkspaceSelection() {
 
 function readConfigElementValue(el, f) {
   if (!f) return undefined;
+  if (f.widget === 'country_select' || ['SMS_COUNTRY', 'HERO_SMS_COUNTRY'].includes(f.key)) {
+    const raw = (el.value || '').trim();
+    if (!raw || raw.includes('不限') || raw === '留空') {
+      if (el.dataset) el.dataset.rawValue = '';
+      return '';
+    }
+    const m = raw.match(/^(\d+)/);
+    if (m) {
+      if (el.dataset) el.dataset.rawValue = m[1];
+      return m[1];
+    }
+    const q = raw.toLowerCase();
+    const found = SMS_COUNTRIES.find(c => 
+      c.code.toLowerCase() === q ||
+      c.iso.toLowerCase() === q ||
+      c.chn.toLowerCase() === q ||
+      c.eng.toLowerCase() === q
+    );
+    if (found) {
+      if (el.dataset) el.dataset.rawValue = found.code;
+      return found.code;
+    }
+    return raw;
+  }
   if (f.type === 'list_str_multiline') return el.value.split('\n').map(s=>s.trim()).filter(Boolean);
   if (f.type === 'bool') {
     if (el.type === 'checkbox') return !!el.checked;
@@ -6819,6 +7279,781 @@ $('#tab-config').addEventListener('click', (e) => {
   if (!btn) return;
   saveConfigUpdates(btn);
 });
+
+
+// ---------- 国家代码可搜索下拉框全局交互事件 ----------
+document.addEventListener('click', (e) => {
+  const item = e.target.closest('.country-combobox-item');
+  if (item) {
+    const box = item.closest('.country-combobox');
+    if (!box) return;
+    const input = box.querySelector('.country-combobox-input');
+    const code = item.dataset.code || '';
+    const display = item.dataset.display || '';
+    if (input) {
+      input.value = display;
+      input.dataset.rawValue = code;
+      const key = input.dataset.key;
+      const f = CONFIG.find(x => x.key === key);
+      if (f) {
+        CONFIG_PENDING_UPDATES[f.key] = code;
+      }
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    const dd = box.querySelector('.country-combobox-dropdown');
+    if (dd) dd.classList.remove('show');
+    return;
+  }
+
+  const clearBtn = e.target.closest('.country-combobox-clear');
+  if (clearBtn) {
+    const box = clearBtn.closest('.country-combobox');
+    if (!box) return;
+    const input = box.querySelector('.country-combobox-input');
+    if (input) {
+      input.value = '';
+      input.dataset.rawValue = '';
+      const key = input.dataset.key;
+      const f = CONFIG.find(x => x.key === key);
+      if (f) {
+        CONFIG_PENDING_UPDATES[f.key] = '';
+      }
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    const dd = box.querySelector('.country-combobox-dropdown');
+    if (dd) dd.classList.remove('show');
+    return;
+  }
+
+  const arrowBtn = e.target.closest('.country-combobox-arrow');
+  if (arrowBtn) {
+    const box = arrowBtn.closest('.country-combobox');
+    if (!box) return;
+    const dd = box.querySelector('.country-combobox-dropdown');
+    if (dd && dd.classList.contains('show')) {
+      dd.classList.remove('show');
+    } else {
+      const input = box.querySelector('.country-combobox-input');
+      openCountryDropdown(box, input ? input.value : '');
+      if (input) input.focus();
+    }
+    return;
+  }
+
+  const input = e.target.closest('.country-combobox-input');
+  if (input) {
+    const box = input.closest('.country-combobox');
+    if (box) {
+      openCountryDropdown(box, input.value);
+    }
+    return;
+  }
+
+  if (!e.target.closest('.country-combobox')) {
+    document.querySelectorAll('.country-combobox-dropdown.show').forEach(dd => dd.classList.remove('show'));
+  }
+});
+
+document.addEventListener('input', (e) => {
+  if (e.target && e.target.classList && e.target.classList.contains('country-combobox-input')) {
+    const box = e.target.closest('.country-combobox');
+    if (box) {
+      openCountryDropdown(box, e.target.value);
+    }
+  }
+});
+
+document.addEventListener('focusin', (e) => {
+  if (e.target && e.target.classList && e.target.classList.contains('country-combobox-input')) {
+    const box = e.target.closest('.country-combobox');
+    if (box) {
+      openCountryDropdown(box, e.target.value);
+    }
+  }
+});
+
+document.addEventListener('focusout', (e) => {
+  if (e.target && e.target.classList && e.target.classList.contains('country-combobox-input')) {
+    const input = e.target;
+    setTimeout(() => {
+      if (document.activeElement === input) return;
+      const raw = (input.value || '').trim();
+      if (!raw || raw.includes('不限') || raw === '留空') {
+        input.value = '';
+        input.dataset.rawValue = '';
+      } else {
+        const m = raw.match(/^(\d+)/);
+        if (m) {
+          input.value = formatCountryDisplay(m[1]);
+          input.dataset.rawValue = m[1];
+        } else {
+          const q = raw.toLowerCase();
+          const found = SMS_COUNTRIES.find(c => 
+            c.code.toLowerCase() === q ||
+            c.iso.toLowerCase() === q ||
+            c.chn.toLowerCase() === q ||
+            c.eng.toLowerCase() === q
+          );
+          if (found) {
+            input.value = `${found.code} - ${found.iso} - ${found.chn}`;
+            input.dataset.rawValue = found.code;
+          }
+        }
+      }
+    }, 200);
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    document.querySelectorAll('.country-combobox-dropdown.show').forEach(dd => dd.classList.remove('show'));
+  }
+});
+
+// ---------- 代理池 (Proxy Pool) ----------
+let PROXIES = [];
+let PROXIES_TOTAL = 0;
+const PROXY_SELECTED = new Set();
+
+function getCountryFlag(code) {
+  if (!code || code.length !== 2) return '';
+  try {
+    const codePoints = [...code.toUpperCase()].map(c => 127397 + c.charCodeAt(0));
+    return String.fromCodePoint(...codePoints);
+  } catch(e) { return ''; }
+}
+
+function getProxyStatusFilter() {
+  return ($('#proxyStatusFilter')?.value || '').trim();
+}
+function getProxyProtocolFilter() {
+  return ($('#proxyProtocolFilter')?.value || '').trim();
+}
+function getProxyQuery() {
+  return ($('#qProxyV2')?.value || '').trim();
+}
+
+function setProxyStatusFilter(val) {
+  const hidden = $('#proxyStatusFilter');
+  const btn = $('#proxyStatusFilterBtn');
+  const wrap = $('#proxyStatusFilterWrap');
+  if (!hidden) return;
+  hidden.value = val;
+  const labels = { '': '全部状态', 'active': '启用中', 'disabled': '已禁用' };
+  if (btn) btn.textContent = labels[val] || '全部状态';
+  if (wrap) {
+    wrap.querySelectorAll('.outlook-v2-select-item').forEach(item => {
+      item.classList.toggle('is-active', (item.dataset.value || '') === val);
+    });
+  }
+}
+
+function setProxyProtocolFilter(val) {
+  const hidden = $('#proxyProtocolFilter');
+  const btn = $('#proxyProtocolFilterBtn');
+  const wrap = $('#proxyProtocolFilterWrap');
+  if (!hidden) return;
+  hidden.value = val;
+  const labels = { '': '全部协议', 'socks5': 'SOCKS5', 'socks5h': 'SOCKS5H', 'http': 'HTTP', 'https': 'HTTPS' };
+  if (btn) btn.textContent = labels[val] || '全部协议';
+  if (wrap) {
+    wrap.querySelectorAll('.outlook-v2-select-item').forEach(item => {
+      item.classList.toggle('is-active', (item.dataset.value || '') === val);
+    });
+  }
+}
+
+async function loadProxyStats() {
+  try {
+    const s = await api('/api/proxies/stats');
+    if ($('#statProxyTotal')) $('#statProxyTotal').textContent = s.total ?? 0;
+    if ($('#statProxyActive')) $('#statProxyActive').textContent = s.active ?? 0;
+    if ($('#statProxyDisabled')) $('#statProxyDisabled').textContent = s.disabled ?? 0;
+    if ($('#statProxyFailed')) $('#statProxyFailed').textContent = s.failed ?? 0;
+    if ($('#statProxyQualityGood')) $('#statProxyQualityGood').textContent = s.quality_good ?? 0;
+  } catch(e) {}
+}
+
+async function loadProxies() {
+  try {
+    const p = PAGERS.proxies;
+    const status = getProxyStatusFilter();
+    const protocol = getProxyProtocolFilter();
+    const q = getProxyQuery();
+    const res = await api(`/api/proxies?page=${p.page}&page_size=${p.size}&status=${encodeURIComponent(status)}&protocol=${encodeURIComponent(protocol)}&q=${encodeURIComponent(q)}`);
+    PROXIES = res.items || [];
+    PROXIES_TOTAL = Number(res.total || PROXIES.length || 0);
+    const totalPages = Math.max(1, Math.ceil(PROXIES_TOTAL / p.size));
+    if (p.page > totalPages) {
+      p.page = totalPages;
+      return loadProxies();
+    }
+    renderProxies();
+    _renderPager('proxies', PROXIES_TOTAL);
+    updateProxySelectionUi();
+    loadProxyStats();
+  } catch(e) {
+    showToast('加载代理列表失败: ' + e.message);
+  }
+}
+
+function updateProxySelectionUi() {
+  const count = PROXY_SELECTED.size;
+  const any = count > 0;
+  ['btnBatchDisableProxies', 'btnBatchEnableProxies', 'btnBatchDeleteProxies'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = !any;
+  });
+  const allCheckbox = $('#proxySelectAllV2');
+  if (allCheckbox) {
+    const pageIds = PROXIES.map(p => p.id);
+    allCheckbox.checked = pageIds.length > 0 && pageIds.every(id => PROXY_SELECTED.has(id));
+  }
+}
+
+function renderProxies() {
+  const body = $('#proxyBodyV2');
+  if (!body) return;
+  if (!PROXIES.length) {
+    body.innerHTML = `<tr><td colspan="11" style="text-align:center;padding:48px 16px;color:#909399;">暂无代理数据。可点击右上角「+ 添加代理」添加节点</td></tr>`;
+    return;
+  }
+
+  body.innerHTML = PROXIES.map(r => {
+    const checked = PROXY_SELECTED.has(r.id) ? 'checked' : '';
+    const isSocks = r.protocol.includes('socks');
+    const protoPill = `<span class="proxy-pill-proto ${isSocks ? 'proto-socks' : 'proto-http'}">${esc(r.protocol)}</span>`;
+
+    // 地址与复制
+    const hostPort = `${esc(r.host)}:${esc(r.port)}`;
+    const copyAddrBtn = `<button type="button" class="proxy-icon-btn" onclick="copyText('${esc(r.host)}:${esc(r.port)}')" title="复制节点地址"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>`;
+
+    // 认证信息
+    let authHtml = '<span style="color:#c0c4cc;">-</span>';
+    if (r.username || r.password) {
+      const authStr = `${esc(r.username)}:${esc(r.password)}`;
+      authHtml = `<span style="font-family:ui-monospace,Consolas,monospace;font-size:12px;" title="${authStr}">${esc(r.username)}:••••</span><button type="button" class="proxy-icon-btn" onclick="copyText('${esc(r.username)}:${esc(r.password)}')" title="复制账号密码"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>`;
+    }
+
+    // 出口 IP 与地理位置
+    let exitHtml = '<span style="color:#c0c4cc;">未探测</span>';
+    if (r.exit_ip) {
+      const flag = getCountryFlag(r.country_code);
+      const loc = [r.country_code, r.city].filter(Boolean).join(' ');
+      exitHtml = `<div style="display:flex;align-items:center;gap:4px;"><span style="cursor:pointer;color:#377DFF;font-weight:500;" onclick="copyText('${esc(r.exit_ip)}')" title="点击复制出口IP">${esc(r.exit_ip)}</span><span style="font-size:12px;color:#909399;" title="${esc(r.country || '')}">${flag} ${esc(loc)}</span></div>`;
+    }
+
+    // 延迟状态
+    let latHtml = `<span class="pill" style="color:#909399;background:#f4f4f5;border-color:#e4e7ed;">未测试</span>`;
+    if (r.latency_status === 'success') {
+      latHtml = `<span class="pill status-available" title="${esc(r.latency_message || '连接正常')}">${r.latency_ms}ms</span>`;
+    } else if (r.latency_status === 'failed') {
+      latHtml = `<span class="pill status-failed" title="${esc(r.latency_message || '连接失败')}">失败</span>`;
+    }
+
+    // OpenAI 质量
+    let qualHtml = `<span class="pill" style="color:#909399;background:#f4f4f5;border-color:#e4e7ed;">未检测</span>`;
+    if (r.quality_status === 'pass') {
+      qualHtml = `<span class="pill status-available" title="${esc(r.quality_message || 'OpenAI 接口畅通 (401/200)')}">通畅</span>`;
+    } else if (r.quality_status === 'warn') {
+      qualHtml = `<span class="pill status-disabled" title="${esc(r.quality_message || 'OpenAI 接口限流 (429)')}">限流</span>`;
+    } else if (r.quality_status === 'fail' || r.quality_status === 'challenge') {
+      qualHtml = `<span class="pill status-failed" title="${esc(r.quality_message || '403阻断或CF人机挑战')}">阻断/CF</span>`;
+    }
+
+    // 状态切换按钮
+    const isActive = r.status === 'active';
+    const statusBtn = isActive
+      ? `<button type="button" class="pill status-available" onclick="toggleProxyStatus(${r.id}, 'disabled')" title="点击禁用">启用中</button>`
+      : `<button type="button" class="pill status-disabled" onclick="toggleProxyStatus(${r.id}, 'active')" title="点击启用">已禁用</button>`;
+
+    return `<tr>
+      <td class="col-check"><input type="checkbox" class="proxy-select-item" data-id="${r.id}" ${checked}></td>
+      <td style="color:#909399;font-size:12px;">#${r.id}</td>
+      <td style="font-weight:600;color:#303133;" title="${esc(r.name || '')}">${esc(r.name || '代理 #' + r.id)}</td>
+      <td>${protoPill}</td>
+      <td><span style="font-family:ui-monospace,Consolas,monospace;font-size:13px;">${hostPort}</span>${copyAddrBtn}</td>
+      <td>${authHtml}</td>
+      <td>${exitHtml}</td>
+      <td>${latHtml}</td>
+      <td>${qualHtml}</td>
+      <td>${statusBtn}</td>
+      <td class="col-actions">
+        <div class="acc-v2-actions">
+          <button type="button" onclick="testProxyConn(${r.id})" title="测试TCP与IP连通性">测速</button>
+          <button type="button" onclick="testProxyQual(${r.id})" title="测试 OpenAI API 直连状态">质检</button>
+          <button type="button" onclick="openProxyEditModal(${r.id})" title="修改配置">编辑</button>
+          <button type="button" class="danger" onclick="deleteProxySingle(${r.id})" title="删除代理">删除</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+// 代理行选择事件代理
+document.addEventListener('change', (e) => {
+  if (e.target && e.target.classList.contains('proxy-select-item')) {
+    const id = parseInt(e.target.dataset.id, 10);
+    if (e.target.checked) PROXY_SELECTED.add(id);
+    else PROXY_SELECTED.delete(id);
+    updateProxySelectionUi();
+  }
+  if (e.target && e.target.id === 'proxySelectAllV2') {
+    const checked = e.target.checked;
+    PROXIES.forEach(p => {
+      if (checked) PROXY_SELECTED.add(p.id);
+      else PROXY_SELECTED.delete(p.id);
+    });
+    document.querySelectorAll('.proxy-select-item').forEach(cb => cb.checked = checked);
+    updateProxySelectionUi();
+  }
+});
+
+// 智能复选: 连通失败
+function selectFailedLatencyProxies() {
+  const failed = PROXIES.filter(p => p.latency_status === 'failed');
+  if (!failed.length) {
+    showToast('当前页没有连通失败的代理');
+    return;
+  }
+  failed.forEach(p => PROXY_SELECTED.add(p.id));
+  updateProxySelectionUi();
+  renderProxies();
+  showToast(`已复选 ${failed.length} 个连通失败代理`);
+}
+
+// 智能复选: 质量不良
+function selectBadQualityProxies() {
+  const bad = PROXIES.filter(p => ['fail', 'challenge', 'warn'].includes(p.quality_status));
+  if (!bad.length) {
+    showToast('当前页没有质量不良的代理');
+    return;
+  }
+  bad.forEach(p => PROXY_SELECTED.add(p.id));
+  updateProxySelectionUi();
+  renderProxies();
+  showToast(`已复选 ${bad.length} 个质量不良代理`);
+}
+
+// 一键禁用
+async function batchDisableProxies() {
+  const ids = Array.from(PROXY_SELECTED);
+  if (!ids.length) { showToast('请先勾选代理'); return; }
+  const btn = $('#btnBatchDisableProxies');
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api('/api/proxies/batch-status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids, status: 'disabled' })
+    });
+    showToast(`已禁用 ${r.updated_count || ids.length} 个代理`);
+    loadProxies();
+  } catch(e) {
+    showToast('批量禁用失败: ' + e.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// 一键启用
+async function batchEnableProxies() {
+  const ids = Array.from(PROXY_SELECTED);
+  if (!ids.length) { showToast('请先勾选代理'); return; }
+  const btn = $('#btnBatchEnableProxies');
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api('/api/proxies/batch-status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids, status: 'active' })
+    });
+    showToast(`已启用 ${r.updated_count || ids.length} 个代理`);
+    loadProxies();
+  } catch(e) {
+    showToast('批量启用失败: ' + e.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// 一键删除
+async function batchDeleteProxies() {
+  const ids = Array.from(PROXY_SELECTED);
+  if (!ids.length) { showToast('请先勾选代理'); return; }
+  if (!confirm(`确定删除选中的 ${ids.length} 个代理吗？\n\n此操作不可撤销。`)) return;
+  const btn = $('#btnBatchDeleteProxies');
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api('/api/proxies/batch-delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids })
+    });
+    ids.forEach(id => PROXY_SELECTED.delete(id));
+    showToast(`已删除 ${r.deleted_count || ids.length} 个代理`);
+    loadProxies();
+  } catch(e) {
+    showToast('批量删除失败: ' + e.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// 批量测试连接 (默认测试包含已禁用的所有代理)
+async function batchTestProxies() {
+  const ids = Array.from(PROXY_SELECTED);
+  const btn = $('#btnBatchTestProxies');
+  if (btn) { btn.disabled = true; btn.textContent = '测试中…'; }
+  try {
+    const payload = ids.length ? { ids } : {
+      include_disabled: true,
+      status: getProxyStatusFilter(),
+      protocol: getProxyProtocolFilter()
+    };
+    const r = await api('/api/proxies/batch-test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    showToast(`批量测试完成：总数 ${r.total}，成功 ${r.success}，失败 ${r.failed}`);
+    loadProxies();
+  } catch(e) {
+    showToast('批量连接测试失败: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '批量测试连接'; }
+  }
+}
+
+// 批量质量检测
+async function batchQualityProxies() {
+  const ids = Array.from(PROXY_SELECTED);
+  const btn = $('#btnBatchQualityProxies');
+  if (btn) { btn.disabled = true; btn.textContent = '检测中…'; }
+  try {
+    const payload = ids.length ? { ids } : {
+      status: getProxyStatusFilter(),
+      protocol: getProxyProtocolFilter()
+    };
+    const r = await api('/api/proxies/batch-quality', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    showToast(`质量检测完成：通畅 ${r.pass}，限流 ${r.warn}，阻断/拦截 ${r.fail + (r.challenge || 0)}`);
+    loadProxies();
+  } catch(e) {
+    showToast('批量质量检测失败: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '批量质量检测'; }
+  }
+}
+
+// 单条操作
+async function toggleProxyStatus(id, newStatus) {
+  try {
+    await api(`/api/proxies/${id}/toggle-status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: newStatus })
+    });
+    showToast(`代理已${newStatus === 'active' ? '启用' : '禁用'}`);
+    loadProxies();
+  } catch(e) {
+    showToast('切换状态失败: ' + e.message);
+  }
+}
+
+async function testProxyConn(id) {
+  showToast('正在测试连通性…');
+  try {
+    const r = await api(`/api/proxies/${id}/test`, { method: 'POST' });
+    if (r.latency_status === 'success') {
+      showToast(`连接成功: ${r.latency_ms}ms (${r.exit_ip || ''})`);
+    } else {
+      showToast(`连接失败: ${r.latency_message || '不可达'}`);
+    }
+    loadProxies();
+  } catch(e) {
+    showToast('测试连接失败: ' + e.message);
+  }
+}
+
+async function testProxyQual(id) {
+  showToast('正在检测 OpenAI 质量…');
+  try {
+    const r = await api(`/api/proxies/${id}/quality`, { method: 'POST' });
+    if (r.quality_status === 'pass') {
+      showToast('OpenAI 接口直连通畅 (401/200)');
+    } else if (r.quality_status === 'warn') {
+      showToast('OpenAI 接口限流 (429)');
+    } else {
+      showToast(`OpenAI 访问阻断: ${r.quality_message || '403 / Cloudflare'}`);
+    }
+    loadProxies();
+  } catch(e) {
+    showToast('质量检测失败: ' + e.message);
+  }
+}
+
+async function deleteProxySingle(id) {
+  if (!confirm('确定删除此代理吗？此操作不可撤销。')) return;
+  try {
+    await api(`/api/proxies/${id}/delete`, { method: 'POST' });
+    PROXY_SELECTED.delete(id);
+    showToast('代理已删除');
+    loadProxies();
+  } catch(e) {
+    showToast('删除代理失败: ' + e.message);
+  }
+}
+
+// 弹窗逻辑
+function openProxyAddModal() {
+  switchProxyAddTab('quick');
+  $('#proxyAddModal').classList.remove('hidden');
+  updateModalScrollLock();
+  parseQuickAddPreview();
+}
+function closeProxyAddModal() {
+  $('#proxyAddModal').classList.add('hidden');
+  updateModalScrollLock();
+}
+function switchProxyAddTab(tab) {
+  const isStd = tab === 'standard';
+  $('#tabBtnStdAdd')?.classList.toggle('active', isStd);
+  $('#tabBtnQuickAdd')?.classList.toggle('active', !isStd);
+  $('#proxyStdAddWrap')?.classList.toggle('hidden', !isStd);
+  $('#proxyQuickAddWrap')?.classList.toggle('hidden', isStd);
+  $('#btnSubmitStdProxy')?.classList.toggle('hidden', !isStd);
+  $('#btnSubmitQuickProxy')?.classList.toggle('hidden', isStd);
+}
+
+function parseQuickAddPreview() {
+  const text = ($('#quickAddText')?.value || '');
+  const defaultProto = ($('#quickDefaultProto')?.value || 'socks5h').trim();
+  const formatMode = document.querySelector('input[name="quickFormatMode"]:checked')?.value || 'host_port_user_pass';
+  const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+  let validCount = 0;
+  let invalidCount = 0;
+
+  for (const line of lines) {
+    if (line.startsWith('#') || line.startsWith('//')) continue;
+    let s = line;
+    const protoMatch = s.match(/^([a-zA-Z0-9]+):\/\//);
+    if (protoMatch) {
+      s = s.substring(protoMatch[0].length);
+    }
+    let valid = false;
+    if (formatMode === 'user_pass_host_port') {
+      if (s.includes('@')) {
+        const parts = s.split('@');
+        const hostPort = parts[1].split(':');
+        if (hostPort.length === 2 && parseInt(hostPort[1], 10) > 0) valid = true;
+      } else {
+        const parts = s.split(':');
+        if (parts.length === 2 && parseInt(parts[1], 10) > 0) valid = true;
+      }
+    } else { // host_port_user_pass
+      const parts = s.split(':');
+      if ((parts.length === 2 || parts.length === 4) && parseInt(parts[1], 10) > 0) {
+        valid = true;
+      }
+    }
+    if (valid) validCount++;
+    else invalidCount++;
+  }
+
+  if ($('#quickStatTotal')) $('#quickStatTotal').textContent = lines.length;
+  if ($('#quickStatValid')) $('#quickStatValid').textContent = validCount;
+  if ($('#quickStatInvalid')) $('#quickStatInvalid').textContent = invalidCount;
+  if ($('#quickBtnCount')) $('#quickBtnCount').textContent = validCount;
+  const btn = $('#btnSubmitQuickProxy');
+  if (btn) btn.disabled = (validCount === 0);
+}
+
+async function submitQuickProxyAdd() {
+  const text = ($('#quickAddText')?.value || '').trim();
+  const default_protocol = ($('#quickDefaultProto')?.value || 'socks5h').trim();
+  const format_mode = document.querySelector('input[name="quickFormatMode"]:checked')?.value || 'host_port_user_pass';
+  const status = $('#quickAddStatusActive')?.checked ? 'active' : 'disabled';
+  if (!text) { showToast('请先输入代理列表'); return; }
+  const btn = $('#btnSubmitQuickProxy');
+  if (btn) btn.disabled = true;
+  try {
+    const r = await api('/api/proxies/batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, default_protocol, format_mode, status })
+    });
+    showToast(`批量添加完成：成功新增 ${r.created} 个，跳过/重复 ${r.skipped} 个`);
+    closeProxyAddModal();
+    if ($('#quickAddText')) $('#quickAddText').value = '';
+    loadProxies();
+  } catch(e) {
+    showToast('批量添加失败: ' + e.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function submitStandardProxyAdd() {
+  const name = ($('#stdProxyName')?.value || '').trim();
+  const protocol = ($('#stdProxyProto')?.value || 'socks5h').trim();
+  const host = ($('#stdProxyHost')?.value || '').trim();
+  const port = parseInt($('#stdProxyPort')?.value || '0', 10);
+  const username = ($('#stdProxyUser')?.value || '').trim();
+  const password = ($('#stdProxyPass')?.value || '').trim();
+  const status = ($('#stdProxyStatus')?.value || 'active').trim();
+  if (!host || port <= 0 || port > 65535) {
+    showToast('请填写有效的主机地址和端口 (1-65535)');
+    return;
+  }
+  const btn = $('#btnSubmitStdProxy');
+  if (btn) btn.disabled = true;
+  try {
+    await api('/api/proxies', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, protocol, host, port, username, password, status })
+    });
+    showToast('添加代理成功');
+    closeProxyAddModal();
+    ['stdProxyName', 'stdProxyHost', 'stdProxyPort', 'stdProxyUser', 'stdProxyPass'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
+    loadProxies();
+  } catch(e) {
+    showToast('添加代理失败: ' + e.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function openProxyEditModal(id) {
+  const p = PROXIES.find(x => x.id === id);
+  if (!p) return;
+  $('#editProxyId').value = p.id;
+  $('#editProxyIdDisp').textContent = '#' + p.id;
+  $('#editProxyName').value = p.name || '';
+  $('#editProxyProto').value = p.protocol || 'socks5h';
+  $('#editProxyHost').value = p.host || '';
+  $('#editProxyPort').value = p.port || 1080;
+  $('#editProxyUser').value = p.username || '';
+  $('#editProxyPass').value = p.password || '';
+  $('#editProxyStatus').value = p.status || 'active';
+  $('#proxyEditModal').classList.remove('hidden');
+  updateModalScrollLock();
+}
+function closeProxyEditModal() {
+  $('#proxyEditModal').classList.add('hidden');
+  updateModalScrollLock();
+}
+
+async function submitProxyEdit() {
+  const id = parseInt($('#editProxyId')?.value || '0', 10);
+  if (!id) return;
+  const name = ($('#editProxyName')?.value || '').trim();
+  const protocol = ($('#editProxyProto')?.value || 'socks5h').trim();
+  const host = ($('#editProxyHost')?.value || '').trim();
+  const port = parseInt($('#editProxyPort')?.value || '0', 10);
+  const username = ($('#editProxyUser')?.value || '').trim();
+  const password = ($('#editProxyPass')?.value || '').trim();
+  const status = ($('#editProxyStatus')?.value || 'active').trim();
+  if (!host || port <= 0 || port > 65535) {
+    showToast('请填写有效的主机地址和端口 (1-65535)');
+    return;
+  }
+  const btn = $('#btnSubmitEditProxy');
+  if (btn) btn.disabled = true;
+  try {
+    await api(`/api/proxies/${id}/update`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, protocol, host, port, username, password, status })
+    });
+    showToast('修改代理成功');
+    closeProxyEditModal();
+    loadProxies();
+  } catch(e) {
+    showToast('修改代理失败: ' + e.message);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// 绑定代理池工具栏事件
+(function bindProxiesEvents() {
+  const qEl = $('#qProxyV2');
+  if (qEl) {
+    qEl.addEventListener('input', debounce(() => {
+      PAGERS.proxies.page = 1;
+      loadProxies();
+    }, 250));
+  }
+
+  const statusWrap = $('#proxyStatusFilterWrap');
+  const statusBtn = $('#proxyStatusFilterBtn');
+  if (statusWrap && statusBtn) {
+    statusBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const willOpen = !statusWrap.classList.contains('open');
+      statusWrap.classList.toggle('open', willOpen);
+      statusBtn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    });
+    statusWrap.querySelectorAll('.outlook-v2-select-item').forEach(item => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setProxyStatusFilter(item.dataset.value || '');
+        statusWrap.classList.remove('open');
+        statusBtn.setAttribute('aria-expanded', 'false');
+        PAGERS.proxies.page = 1;
+        loadProxies();
+      });
+    });
+    document.addEventListener('click', (e) => {
+      if (statusWrap.contains(e.target)) return;
+      statusWrap.classList.remove('open');
+      statusBtn.setAttribute('aria-expanded', 'false');
+    });
+  }
+
+  const protoWrap = $('#proxyProtocolFilterWrap');
+  const protoBtn = $('#proxyProtocolFilterBtn');
+  if (protoWrap && protoBtn) {
+    protoBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const willOpen = !protoWrap.classList.contains('open');
+      protoWrap.classList.toggle('open', willOpen);
+      protoBtn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    });
+    protoWrap.querySelectorAll('.outlook-v2-select-item').forEach(item => {
+      item.addEventListener('click', (e) => {
+        e.stopPropagation();
+        setProxyProtocolFilter(item.dataset.value || '');
+        protoWrap.classList.remove('open');
+        protoBtn.setAttribute('aria-expanded', 'false');
+        PAGERS.proxies.page = 1;
+        loadProxies();
+      });
+    });
+    document.addEventListener('click', (e) => {
+      if (protoWrap.contains(e.target)) return;
+      protoWrap.classList.remove('open');
+      protoBtn.setAttribute('aria-expanded', 'false');
+    });
+  }
+
+  $('#btnSelectFailedProxies')?.addEventListener('click', selectFailedLatencyProxies);
+  $('#btnSelectBadQualityProxies')?.addEventListener('click', selectBadQualityProxies);
+  $('#btnBatchDisableProxies')?.addEventListener('click', batchDisableProxies);
+  $('#btnBatchEnableProxies')?.addEventListener('click', batchEnableProxies);
+  $('#btnBatchDeleteProxies')?.addEventListener('click', batchDeleteProxies);
+  $('#btnBatchTestProxies')?.addEventListener('click', batchTestProxies);
+  $('#btnBatchQualityProxies')?.addEventListener('click', batchQualityProxies);
+  $('#btnAddProxyModalOpen')?.addEventListener('click', openProxyAddModal);
+})();
 
 // ---------- 全局复制委托 ----------
 document.addEventListener('click', (e) => {

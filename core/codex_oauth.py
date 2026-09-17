@@ -1025,14 +1025,22 @@ def _do_phone_verification(session: BrowserSession) -> None:
                 logger.info("[Codex] 手机号验证通过")
                 return
 
-            except sms_provider.SmsNoBalanceError:
-                # 余额不足，重试无意义，直接抛
+            except (sms_provider.SmsNoBalanceError, getattr(sms_provider, "SmsConfigError", tuple())):
+                # 余额不足或配置缺失，重试无意义，直接抛
                 raise
             except sms_provider.SmsProviderError as exc:
                 last_err = exc
+                err_text = str(exc) or ""
                 logger.warning(f"[Codex] 接码尝试 {attempt} 失败：{exc}")
                 if activation_id:
                     sms_provider.cancel(activation_id, http)
+                if any(k in err_text for k in (
+                    "NO_BALANCE", "NO_NUMBERS", "BALANCE", "余额不足",
+                    "暂无可用号码", "没有可用号码", "insufficient", "not enough balance",
+                    "不能为空", "未配置", "BAD_KEY", "ERROR_SQL", "BAD_ACTION",
+                    "WRONG_SERVICE", "NOT_AUTHENTICATED", "Unauthorized", "invalid_api_key",
+                )):
+                    raise RuntimeError(f"接码平台配置错误或无可用号码/余额，已停止换号止损：{err_text[:180]}") from exc
                 _sleep_before_phone_retry(attempt, max_retries)
                 continue
 

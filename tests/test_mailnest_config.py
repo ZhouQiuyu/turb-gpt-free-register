@@ -11,6 +11,7 @@ class MailNestConfigTests(unittest.TestCase):
     def test_email_config_declares_mailnest_defaults(self):
         source = Path(email.__file__).read_text(encoding="utf-8")
         self.assertIn('MAIL_NEST_API_KEY = env_str("MAIL_NEST_API_KEY", "")', source)
+        self.assertIn('MAIL_NEST_MODE = env_str("MAIL_NEST_MODE", "temporary")', source)
         self.assertIn('MAIL_NEST_PROJECT_CODE = "chatgpt001"', source)
         self.assertIn('"mailnest"', source)
 
@@ -22,6 +23,10 @@ class MailNestConfigTests(unittest.TestCase):
         self.assertEqual(key_field["group"], "邮箱 / OTP")
         self.assertTrue(key_field["secret"])
         self.assertEqual(key_field["storage"], "env")
+        mode_field = next(item for item in EDITABLE_FIELDS if item["key"] == "MAIL_NEST_MODE")
+        self.assertEqual(mode_field["type"], "str")
+        self.assertEqual(mode_field["options"][0]["value"], "temporary")
+        self.assertEqual(mode_field["options"][1]["value"], "exclusive")
         project_field = next(item for item in EDITABLE_FIELDS if item["key"] == "MAIL_NEST_PROJECT_CODE")
         self.assertEqual(project_field["type"], "str")
 

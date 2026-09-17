@@ -74,7 +74,16 @@ def normalize_proxy_url(proxy: str) -> str:
 
 
 def pick_proxy() -> str:
-    """从代理池中随机抽取一个代理 URL；池为空时返回空串（即不使用代理）。"""
+    """从代理池中随机抽取一个已启用的代理 URL；池为空时安全回退到 PROXY_POOL 或空串。"""
+    try:
+        from core.db import get_active_proxies
+        active_list = get_active_proxies()
+        if active_list:
+            chosen = random.choice(active_list)
+            return chosen.get("url") or normalize_proxy_url(chosen)
+    except Exception:
+        pass
+
     raw = random.choice(PROXY_POOL) if PROXY_POOL else ""
     return normalize_proxy_url(raw)
 

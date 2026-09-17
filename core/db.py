@@ -151,6 +151,29 @@ def _ensure_sqlite() -> None:
                 created_at TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT '',
                 payload TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS proxy_pool (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL DEFAULT '',
+                protocol TEXT NOT NULL DEFAULT 'socks5h',
+                host TEXT NOT NULL DEFAULT '',
+                port INTEGER NOT NULL DEFAULT 1080,
+                username TEXT NOT NULL DEFAULT '',
+                password TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active',
+                latency_ms INTEGER,
+                latency_status TEXT NOT NULL DEFAULT 'untested',
+                latency_message TEXT NOT NULL DEFAULT '',
+                exit_ip TEXT NOT NULL DEFAULT '',
+                country TEXT NOT NULL DEFAULT '',
+                country_code TEXT NOT NULL DEFAULT '',
+                city TEXT NOT NULL DEFAULT '',
+                quality_status TEXT NOT NULL DEFAULT 'untested',
+                quality_message TEXT NOT NULL DEFAULT '',
+                quality_score INTEGER NOT NULL DEFAULT 0,
+                quality_checked_at TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT ''
+            );
             CREATE TABLE IF NOT EXISTS storage_meta (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -167,6 +190,9 @@ def _ensure_sqlite() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_accounts_created ON codex_accounts(created_at DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_agent_accounts_email ON codex_agent_accounts(email COLLATE NOCASE)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_codex_agent_accounts_updated ON codex_agent_accounts(updated_at DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_proxy_pool_status ON proxy_pool(status, id DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_proxy_pool_latency ON proxy_pool(latency_status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_proxy_pool_quality ON proxy_pool(quality_status)")
         migration_done = conn.execute(
             "SELECT 1 FROM storage_meta WHERE key='legacy_import_completed' LIMIT 1"
         ).fetchone()
@@ -323,6 +349,14 @@ def _ensure_sqlite() -> None:
                 conn.execute(f"DROP TABLE {old_table}")
         if not migration_done:
             conn.execute("INSERT OR REPLACE INTO storage_meta(key, value) VALUES('legacy_import_completed', ?)", (_now(),))
+        proxy_migration_done = conn.execute(
+            "SELECT 1 FROM storage_meta WHERE key='legacy_proxy_import_completed' LIMIT 1"
+        ).fetchone()
+        if not proxy_migration_done:
+            has_proxy = conn.execute("SELECT 1 FROM proxy_pool LIMIT 1").fetchone()
+            if not has_proxy:
+                _migrate_legacy_proxies_into_db(conn)
+            conn.execute("INSERT OR REPLACE INTO storage_meta(key, value) VALUES('legacy_proxy_import_completed', ?)", (_now(),))
         conn.commit()
         conn.close()
         _SQLITE_READY = True
@@ -1500,6 +1534,8 @@ def list_account_plan_check_statuses(
     fields = (
         "id", "email", "archived",
         "plan_type", "current_plan_type", "plus_trial_eligible",
+        "plus_trial_discount_percentage", "plus_trial_duration_num_periods",
+        "plus_trial_duration_period", "plus_trial_title", "plus_trial_campaign_id",
         "plan_check_status", "plan_check_ok", "plan_check_error",
         "plan_check_trigger", "plan_check_queued_at", "plan_check_started_at",
         "plan_check_completed_at", "plan_checked_at", "plan_last_success_at",
@@ -1574,6 +1610,7 @@ def list_account_plan_check_statuses(
                     "current_plan_type": row.get("current_plan_type"),
                     "plan_type": row.get("plan_type"),
                     "plus_trial_eligible": row.get("plus_trial_eligible"),
+                    "plus_trial_discount_percentage": row.get("plus_trial_discount_percentage"),
                     "extract_link_status": row.get("extract_link_status"),
                     "codex_status": row.get("codex_status"),
                     "codex_agent_status": row.get("codex_agent_status"),
@@ -3349,3 +3386,473 @@ def domain_email_pool_summary() -> dict:
 def delete_domain_email(email: str) -> bool:
     """从域名邮箱池删除一个邮箱。"""
     return delete_email_pool(email, source="cloudflare_domain")
+
+
+# ==================== 代理池 (Proxy Pool) 持久化与操作 ====================
+
+def parse_proxy_url_to_dict(
+    raw: str,
+    default_protocol: str = "socks5h",
+    format_mode: str = "auto",
+    default_name: str = "",
+) -> dict | None:
+    """标准化并解析单条代理字符串为字典对象。
+    
+    format_mode:
+        - "auto": 自动识别 (含 protocol://, @, 或 4 段/2 段冒号)
+        - "host:port:user:password": 优先解析 host:port:user:password 或 host:port
+        - "user:password@host:port": 优先解析 user:password@host:port 或 host:port
+    """
+    line = str(raw or "").strip()
+    if not line:
+        return None
+
+    protocol = (default_protocol or "socks5h").lower().strip()
+    if protocol == "socks5":
+        protocol = "socks5h"
+
+    if "://" in line:
+        p, rest = line.split("://", 1)
+        if p.strip():
+            protocol = p.lower().strip()
+            if protocol == "socks5":
+                protocol = "socks5h"
+    else:
+        rest = line
+
+    host = ""
+    port = 0
+    username = ""
+    password = ""
+
+    if format_mode == "user:password@host:port":
+        if "@" in rest:
+            auth_part, host_part = rest.rsplit("@", 1)
+            auth_pieces = auth_part.split(":", 1)
+            username = auth_pieces[0]
+            password = auth_pieces[1] if len(auth_pieces) > 1 else ""
+            host_pieces = host_part.split(":")
+            if len(host_pieces) == 2:
+                host = host_pieces[0]
+                try:
+                    port = int(host_pieces[1])
+                except ValueError:
+                    return None
+            else:
+                return None
+        else:
+            pieces = rest.split(":")
+            if len(pieces) == 2:
+                host = pieces[0]
+                try:
+                    port = int(pieces[1])
+                except ValueError:
+                    return None
+            else:
+                return None
+
+    elif format_mode == "host:port:user:password":
+        pieces = rest.split(":")
+        if len(pieces) == 4:
+            host = pieces[0]
+            try:
+                port = int(pieces[1])
+            except ValueError:
+                return None
+            username = pieces[2]
+            password = pieces[3]
+        elif len(pieces) == 2:
+            host = pieces[0]
+            try:
+                port = int(pieces[1])
+            except ValueError:
+                return None
+        elif "@" in rest:
+            auth_part, host_part = rest.rsplit("@", 1)
+            auth_pieces = auth_part.split(":", 1)
+            username = auth_pieces[0]
+            password = auth_pieces[1] if len(auth_pieces) > 1 else ""
+            host_pieces = host_part.split(":")
+            if len(host_pieces) == 2:
+                host = host_pieces[0]
+                try:
+                    port = int(host_pieces[1])
+                except ValueError:
+                    return None
+            else:
+                return None
+        else:
+            return None
+
+    else:  # auto
+        if "@" in rest:
+            auth_part, host_part = rest.rsplit("@", 1)
+            auth_pieces = auth_part.split(":", 1)
+            username = auth_pieces[0]
+            password = auth_pieces[1] if len(auth_pieces) > 1 else ""
+            host_pieces = host_part.split(":")
+            if len(host_pieces) == 2:
+                host = host_pieces[0]
+                try:
+                    port = int(host_pieces[1])
+                except ValueError:
+                    return None
+            else:
+                return None
+        else:
+            pieces = rest.split(":")
+            if len(pieces) == 4:
+                host = pieces[0]
+                try:
+                    port = int(pieces[1])
+                except ValueError:
+                    return None
+                username = pieces[2]
+                password = pieces[3]
+            elif len(pieces) == 2:
+                host = pieces[0]
+                try:
+                    port = int(pieces[1])
+                except ValueError:
+                    return None
+            else:
+                return None
+
+    host = host.strip()
+    username = username.strip()
+    password = password.strip()
+    if not host or port <= 0 or port > 65535:
+        return None
+
+    return {
+        "name": default_name.strip(),
+        "protocol": protocol,
+        "host": host,
+        "port": port,
+        "username": username,
+        "password": password,
+        "status": "active",
+    }
+
+
+def proxy_to_url(proxy: dict) -> str:
+    """将代理字典转换为标准 URL 格式（优先使用 socks5h）。"""
+    protocol = str(proxy.get("protocol") or "socks5h").lower().strip()
+    if protocol == "socks5":
+        protocol = "socks5h"
+    host = str(proxy.get("host") or "").strip()
+    port = proxy.get("port") or 1080
+    user = str(proxy.get("username") or "").strip()
+    pwd = str(proxy.get("password") or "").strip()
+    if user or pwd:
+        return f"{protocol}://{user}:{pwd}@{host}:{port}"
+    return f"{protocol}://{host}:{port}"
+
+
+def _migrate_legacy_proxies_into_db(conn: sqlite3.Connection) -> None:
+    """从 config.proxy 或 .env 中读取旧 PROXY_POOL 首次迁入数据库。"""
+    try:
+        from config.proxy import PROXY_POOL
+        if not PROXY_POOL:
+            return
+        now_str = _now()
+        for raw in PROXY_POOL:
+            parsed = parse_proxy_url_to_dict(raw, default_protocol="socks5h", format_mode="auto")
+            if not parsed:
+                continue
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO proxy_pool(
+                    name, protocol, host, port, username, password,
+                    status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    parsed["name"], parsed["protocol"], parsed["host"], parsed["port"],
+                    parsed["username"], parsed["password"], "active", now_str, now_str
+                )
+            )
+    except Exception:
+        pass
+
+
+def list_proxies_page(
+    status: str | None = None,
+    protocol: str | None = None,
+    latency_status: str | None = None,
+    quality_status: str | None = None,
+    q: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    sort_by: str = "id",
+    sort_order: str = "desc",
+) -> dict:
+    """分页与筛选代理池列表。"""
+    _ensure_sqlite()
+    limit = max(1, min(int(limit or 50), 500))
+    offset = max(0, int(offset or 0))
+
+    where = ["1=1"]
+    params: list[Any] = []
+
+    if status and status != "all":
+        where.append("status=?")
+        params.append(status)
+    if protocol and protocol != "all":
+        p = protocol.lower().strip()
+        if p == "socks5":
+            where.append("protocol IN ('socks5', 'socks5h')")
+        else:
+            where.append("protocol=?")
+            params.append(p)
+    if latency_status and latency_status != "all":
+        where.append("latency_status=?")
+        params.append(latency_status)
+    if quality_status and quality_status != "all":
+        where.append("quality_status=?")
+        params.append(quality_status)
+    if q and str(q).strip():
+        like = f"%{str(q).strip().lower()}%"
+        where.append("(lower(host) LIKE ? OR lower(name) LIKE ? OR lower(city) LIKE ? OR lower(country) LIKE ? OR lower(exit_ip) LIKE ?)")
+        params.extend([like, like, like, like, like])
+
+    valid_sorts = {
+        "id": "id",
+        "latency_ms": "latency_ms",
+        "quality_score": "quality_score",
+        "created_at": "created_at",
+        "updated_at": "updated_at",
+    }
+    col = valid_sorts.get(sort_by, "id")
+    order = "ASC" if str(sort_order).lower() == "asc" else "DESC"
+    order_clause = f"{col} {order}" if col != "latency_ms" else f"CASE WHEN latency_ms IS NULL THEN 999999 ELSE latency_ms END {order}"
+
+    clause = " AND ".join(where)
+
+    with _LOCK, closing(_sqlite_conn()) as conn:
+        total = int(conn.execute(f"SELECT COUNT(*) FROM proxy_pool WHERE {clause}", params).fetchone()[0])
+        rows = conn.execute(
+            f"SELECT * FROM proxy_pool WHERE {clause} ORDER BY {order_clause} LIMIT ? OFFSET ?",
+            [*params, limit, offset]
+        ).fetchall()
+        items = []
+        for r in rows:
+            d = dict(r)
+            d["url"] = proxy_to_url(d)
+            items.append(d)
+        return {
+            "items": items,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+
+
+def get_proxy_stats() -> dict:
+    """获取代理池顶部统计指标。"""
+    _ensure_sqlite()
+    with _LOCK, closing(_sqlite_conn()) as conn:
+        row = conn.execute("""
+            SELECT
+                COUNT(*) as total,
+                SUM(CASE WHEN status='active' THEN 1 ELSE 0 END) as active,
+                SUM(CASE WHEN status='disabled' THEN 1 ELSE 0 END) as disabled,
+                SUM(CASE WHEN latency_status='failed' THEN 1 ELSE 0 END) as latency_failed,
+                SUM(CASE WHEN quality_status='pass' THEN 1 ELSE 0 END) as quality_pass
+            FROM proxy_pool
+        """).fetchone()
+        if not row:
+            return {"total": 0, "active": 0, "disabled": 0, "latency_failed": 0, "quality_pass": 0}
+        return {
+            "total": int(row["total"] or 0),
+            "active": int(row["active"] or 0),
+            "disabled": int(row["disabled"] or 0),
+            "latency_failed": int(row["latency_failed"] or 0),
+            "quality_pass": int(row["quality_pass"] or 0),
+        }
+
+
+def get_proxy(proxy_id: int) -> dict | None:
+    _ensure_sqlite()
+    with _LOCK, closing(_sqlite_conn()) as conn:
+        row = conn.execute("SELECT * FROM proxy_pool WHERE id=?", (proxy_id,)).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["url"] = proxy_to_url(d)
+        return d
+
+
+def create_proxy(data: dict) -> dict:
+    _ensure_sqlite()
+    now_str = _now()
+    protocol = str(data.get("protocol") or "socks5h").lower().strip()
+    if protocol == "socks5":
+        protocol = "socks5h"
+    with _LOCK, closing(_sqlite_conn()) as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO proxy_pool (
+                name, protocol, host, port, username, password, status,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(data.get("name") or "").strip(),
+                protocol,
+                str(data.get("host") or "").strip(),
+                int(data.get("port") or 1080),
+                str(data.get("username") or "").strip(),
+                str(data.get("password") or "").strip(),
+                str(data.get("status") or "active"),
+                now_str,
+                now_str,
+            )
+        )
+        conn.commit()
+        pid = cursor.lastrowid
+    return get_proxy(pid) or {}
+
+
+def batch_create_proxies(proxies: list[dict]) -> dict:
+    _ensure_sqlite()
+    if not proxies:
+        return {"created": 0, "skipped": 0, "total": 0}
+
+    now_str = _now()
+    created = 0
+    skipped = 0
+
+    with _LOCK, closing(_sqlite_conn()) as conn:
+        existing = set()
+        for row in conn.execute("SELECT host, port, username, password FROM proxy_pool").fetchall():
+            key = f"{row['host']}:{row['port']}:{row['username']}:{row['password']}"
+            existing.add(key)
+
+        for p in proxies:
+            host = str(p.get("host") or "").strip()
+            port = int(p.get("port") or 0)
+            user = str(p.get("username") or "").strip()
+            pwd = str(p.get("password") or "").strip()
+            if not host or port <= 0:
+                skipped += 1
+                continue
+            key = f"{host}:{port}:{user}:{pwd}"
+            if key in existing:
+                skipped += 1
+                continue
+            existing.add(key)
+
+            protocol = str(p.get("protocol") or "socks5h").lower().strip()
+            if protocol == "socks5":
+                protocol = "socks5h"
+
+            conn.execute(
+                """
+                INSERT INTO proxy_pool (
+                    name, protocol, host, port, username, password, status,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(p.get("name") or "").strip(),
+                    protocol,
+                    host,
+                    port,
+                    user,
+                    pwd,
+                    str(p.get("status") or "active"),
+                    now_str,
+                    now_str,
+                )
+            )
+            created += 1
+        conn.commit()
+
+    return {"created": created, "skipped": skipped, "total": len(proxies)}
+
+
+def update_proxy(proxy_id: int, updates: dict) -> dict | None:
+    _ensure_sqlite()
+    now_str = _now()
+    allowed_keys = {
+        "name", "protocol", "host", "port", "username", "password", "status",
+        "latency_ms", "latency_status", "latency_message", "exit_ip",
+        "country", "country_code", "city", "quality_status", "quality_message",
+        "quality_score", "quality_checked_at"
+    }
+    set_clauses = []
+    params = []
+    for k, v in updates.items():
+        if k in allowed_keys:
+            if k == "protocol":
+                v = str(v or "socks5h").lower().strip()
+                if v == "socks5":
+                    v = "socks5h"
+            set_clauses.append(f"{k}=?")
+            params.append(v)
+    if not set_clauses:
+        return get_proxy(proxy_id)
+
+    set_clauses.append("updated_at=?")
+    params.append(now_str)
+    params.append(proxy_id)
+
+    with _LOCK, closing(_sqlite_conn()) as conn:
+        conn.execute(f"UPDATE proxy_pool SET {', '.join(set_clauses)} WHERE id=?", params)
+        conn.commit()
+    return get_proxy(proxy_id)
+
+
+def batch_update_proxy_status(proxy_ids: list[int], status: str) -> int:
+    _ensure_sqlite()
+    if not proxy_ids:
+        return 0
+    now_str = _now()
+    st = "active" if status == "active" else "disabled"
+    placeholders = ",".join(["?"] * len(proxy_ids))
+    with _LOCK, closing(_sqlite_conn()) as conn:
+        cursor = conn.execute(
+            f"UPDATE proxy_pool SET status=?, updated_at=? WHERE id IN ({placeholders})",
+            [st, now_str, *proxy_ids]
+        )
+        conn.commit()
+        return cursor.rowcount
+
+
+def delete_proxy(proxy_id: int) -> bool:
+    _ensure_sqlite()
+    with _LOCK, closing(_sqlite_conn()) as conn:
+        cursor = conn.execute("DELETE FROM proxy_pool WHERE id=?", (proxy_id,))
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+def batch_delete_proxies(proxy_ids: list[int]) -> int:
+    _ensure_sqlite()
+    if not proxy_ids:
+        return 0
+    placeholders = ",".join(["?"] * len(proxy_ids))
+    with _LOCK, closing(_sqlite_conn()) as conn:
+        cursor = conn.execute(
+            f"DELETE FROM proxy_pool WHERE id IN ({placeholders})",
+            proxy_ids
+        )
+        conn.commit()
+        return cursor.rowcount
+
+
+def get_active_proxies() -> list[dict]:
+    """获取所有处于启用状态的代理，供 pick_proxy() 抽选。"""
+    _ensure_sqlite()
+    with _LOCK, closing(_sqlite_conn()) as conn:
+        rows = conn.execute(
+            "SELECT * FROM proxy_pool WHERE status='active' ORDER BY id ASC"
+        ).fetchall()
+        items = []
+        for r in rows:
+            d = dict(r)
+            d["url"] = proxy_to_url(d)
+            items.append(d)
+        return items
+

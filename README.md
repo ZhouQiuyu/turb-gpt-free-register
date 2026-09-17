@@ -336,12 +336,13 @@ QQ_IMAP_PASSWORD = "QQ邮箱IMAP授权码"
 
 Cloudflare Email Routing 需要把域名邮件转发到 QQ 邮箱。此模式不调用 Worker 创建接口，仅本地生成地址并通过 QQ IMAP 取件。
 
-#### MailNest-迈巢 Outlook 临时邮箱
+#### MailNest-迈巢 Outlook 邮箱
 
-可直接在 Web-UI 中配置 API Key 与项目代码`MAIL_NEST_PROJECT_CODE`，也可以在配置文件中配置。
+可直接在 Web-UI 中配置 API Key、邮箱模式`MAIL_NEST_MODE`与项目代码`MAIL_NEST_PROJECT_CODE`，也可以在配置文件中配置。
 
 - `api-key`获取页面：https://mailnest.top/account
-- 项目代码获取页面：https://mailnest.top/buy-email。默认为`chatgpt001`，可以直接使用
+- 邮箱模式：支持`temporary`（临时邮箱，默认）与`exclusive`（独占邮箱，不限项目、独占不共享）
+- 项目代码获取页面：https://mailnest.top/buy-email。仅临时邮箱模式有效，默认为`chatgpt001`；独占模式无需填写
 
 #### Remail 开放 API
 

@@ -266,9 +266,12 @@ def _is_mfa_challenge_page(driver) -> bool:
         state = driver.execute_script(r"""
         const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
           && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
-        const form = [...document.querySelectorAll('form')].find(f => /\/mfa-challenge/i.test(f.getAttribute('action') || ''));
-        const input = form ? [...form.querySelectorAll('input[name="code"], input[autocomplete="one-time-code"], input[maxlength="6"]')].find(visible) : null;
-        return {ok: !!(form && input), url: location.href};
+        let form = [...document.querySelectorAll('form')].find(f => /\/mfa-challenge/i.test(f.getAttribute('action') || ''));
+        if (!form) {
+            form = [...document.querySelectorAll('form')].find(f => f.querySelector('input[name="code"], input[autocomplete="one-time-code"], input[maxlength="6"]')) || document;
+        }
+        const input = form && form.querySelector ? [...form.querySelectorAll('input[name="code"], input[autocomplete="one-time-code"], input[maxlength="6"]')].find(visible) : null;
+        return {ok: !!input, url: location.href};
         """) or {}
         return bool(state.get("ok"))
     except Exception:
@@ -279,8 +282,11 @@ def _fill_mfa_challenge_if_present(driver, email: str, timeout: int = 15) -> boo
     """如果当前进入 MFA challenge 页面，自动填入账号 TOTP 并提交。"""
     code = _account_totp_code_for_email(email)
     if not code:
+        logger.warning("[Codex][Browser] 账号未配置有效 TOTP 密钥，跳过 MFA challenge：%s", email)
         return False
+    logger.info("[Codex][Browser] 准备处理 MFA challenge (2FA TOTP)：%s", email)
     end = time.time() + timeout
+    last_reason = ""
     while time.time() < end:
         try:
             if not _is_mfa_challenge_page(driver):
@@ -290,20 +296,42 @@ def _fill_mfa_challenge_if_present(driver, email: str, timeout: int = 15) -> boo
             const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
               && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'
               && !el.disabled && !el.readOnly;
-            const form = [...document.querySelectorAll('form')].find(f => /\/mfa-challenge/i.test(f.getAttribute('action') || ''));
-            if (!form) return {ok:false, reason:'missing_form'};
-            const input = [...form.querySelectorAll('input[name="code"], input[autocomplete="one-time-code"], input[maxlength="6"]')].find(visible);
+            let form = [...document.querySelectorAll('form')].find(f => /\/mfa-challenge/i.test(f.getAttribute('action') || ''));
+            if (!form) {
+                const forms = [...document.querySelectorAll('form')];
+                form = forms.find(f => f.querySelector('input[name="code"], input[autocomplete="one-time-code"], input[maxlength="6"], input[type="text"], input[type="tel"]')) || forms[0] || null;
+            }
+            const root = form || document;
+            const input = [...root.querySelectorAll('input[name="code"], input[autocomplete="one-time-code"], input[maxlength="6"], input[type="text"], input[type="tel"], input')].find(visible);
             if (!input) return {ok:false, reason:'missing_code_input'};
-            const button = [...form.querySelectorAll('button[type="submit"], button[data-dd-action-name="Continue"], button')].find(visible);
+            const button = [...root.querySelectorAll('button[type="submit"], button[data-dd-action-name="Continue"], button')].find(visible)
+              || [...document.querySelectorAll('button[type="submit"], button[data-dd-action-name="Continue"], button')].find(visible);
             if (!button) return {ok:false, reason:'missing_submit'};
             return {ok:true, input, button};
             """) or {}
             if not result.get("ok"):
+                reason = result.get("reason", "unknown")
+                if reason != last_reason:
+                    logger.debug("[Codex][Browser] 等待 MFA 输入元素：%s", reason)
+                    last_reason = reason
                 time.sleep(0.4)
                 continue
-            _human_type_text(driver, result.get("input"), code, clear=True)
+            fresh_code = _account_totp_code_for_email(email) or code
+            _human_type_text(driver, result.get("input"), fresh_code, clear=True)
             human_delay("otp_input")
-            _human_click(driver, result.get("button"), label="codex_mfa_submit")
+            clicked = False
+            if result.get("button"):
+                try:
+                    _human_click(driver, result.get("button"), label="codex_mfa_submit")
+                    clicked = True
+                except Exception:
+                    pass
+            if not clicked:
+                try:
+                    from selenium.webdriver.common.keys import Keys
+                    result.get("input").send_keys(Keys.ENTER)
+                except Exception:
+                    pass
             logger.info("[Codex][Browser] 已填写并提交 MFA 验证码：%s", email)
             wait_end = time.time() + 12
             while time.time() < wait_end:
@@ -314,6 +342,7 @@ def _fill_mfa_challenge_if_present(driver, email: str, timeout: int = 15) -> boo
         except Exception as exc:
             logger.debug("[Codex][Browser] MFA challenge 处理失败：%s", str(exc)[:160])
             time.sleep(0.5)
+    logger.warning("[Codex][Browser] 等待并填写 MFA challenge 超时（%ss）：%s", timeout, email)
     return False
 
 
@@ -1281,14 +1310,16 @@ def _do_phone_verification_if_present(driver) -> None:
                         sms_provider.cancel(activation_id, http)
                     except Exception:
                         pass
-                # 余额不足 / 无可用号码：重试多少次都不会成功，立即失败止损，
+                # 接码平台配置错误 / 余额不足 / 无可用号码：重试多少次都不会成功，立即失败止损，
                 # 避免白等 N 轮换号重试（每轮还要刷新页面 + 随机等待）。
-                if any(k in err_text for k in (
+                if isinstance(exc, (sms_provider.SmsNoBalanceError, getattr(sms_provider, "SmsConfigError", tuple()))) or any(k in err_text for k in (
                     "NO_BALANCE", "NO_NUMBERS", "BALANCE", "余额不足",
                     "暂无可用号码", "没有可用号码", "insufficient", "not enough balance",
+                    "不能为空", "未配置", "BAD_KEY", "ERROR_SQL", "BAD_ACTION",
+                    "WRONG_SERVICE", "NOT_AUTHENTICATED", "Unauthorized", "invalid_api_key",
                 )):
                     raise RuntimeError(
-                        f"接码平台余额不足或无可用号码，已停止换号止损：{err_text[:180]}"
+                        f"接码平台配置错误或无可用号码/余额，已停止换号止损：{err_text[:180]}"
                     ) from exc
                 if "invalid_auth_step" in str(exc):
                     raise RuntimeError(
@@ -1319,13 +1350,15 @@ def _do_phone_verification_if_present(driver) -> None:
             pass
 
 
-def _finish_consent_workspace(driver) -> str:
+def _finish_consent_workspace(driver, email: str = "") -> str:
     """点击 Codex consent/workspace 页面里的继续/允许按钮，直到 callback。"""
     end = time.time() + int(_roxy_cfg.ROXY_CODEX_CALLBACK_TIMEOUT)
     while time.time() < end:
         callback = _extract_callback_url_from_any_window(driver)
         if callback:
             return callback
+        if email and _is_mfa_challenge_page(driver):
+            _fill_mfa_challenge_if_present(driver, email, timeout=10)
         current = str(driver.current_url or "")
         clicked = False
         for selectors in [
@@ -1444,10 +1477,16 @@ def _run_roxy_codex_oauth_once(
 
         _fill_email_and_otp(driver, email, otp_provider, auth_url)
         human_delay("api")
+        if _is_mfa_challenge_page(driver):
+            logger.info("[Codex][Browser] 检测到 MFA challenge 页面，执行 2FA 验证码输入")
+            _fill_mfa_challenge_if_present(driver, email, timeout=15)
         logger.info("[Codex][Browser] 检查是否需要手机号验证")
         _do_phone_verification_if_present(driver)
+        if _is_mfa_challenge_page(driver):
+            logger.info("[Codex][Browser] 手机步骤后检测到 MFA challenge 页面，执行 2FA 验证码输入")
+            _fill_mfa_challenge_if_present(driver, email, timeout=15)
         logger.info("[Codex][Browser] 手机验证处理完成/无需处理，等待授权确认和 callback")
-        callback_url = _finish_consent_workspace(driver)
+        callback_url = _finish_consent_workspace(driver, email=email)
         code = proto._extract_code(callback_url, state)
         logger.info("[Codex][Browser] 已捕获 callback code：%s...", code[:24])
 

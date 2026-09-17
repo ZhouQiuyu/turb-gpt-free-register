@@ -408,8 +408,16 @@ EDITABLE_FIELDS = [
         "storage": "env", "secret": True,
     },
     {
+        "key": "MAIL_NEST_MODE", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
+        "label": "MailNest 邮箱模式", "help": "选择 temporary（临时邮箱）或 exclusive（独占邮箱）；默认 temporary",
+        "options": [
+            {"value": "temporary", "label": "临时邮箱 (temporary) - 按项目购买，价格实惠"},
+            {"value": "exclusive", "label": "独占邮箱 (exclusive) - 独占独立邮箱，不限项目"},
+        ],
+    },
+    {
         "key": "MAIL_NEST_PROJECT_CODE", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
-        "label": "MailNest 项目代码", "help": "项目代码 默认 chatgpt001 获取页面 mailnest.top/buy-email",
+        "label": "MailNest 项目代码", "help": "仅临时邮箱模式有效，默认 chatgpt001（独占模式无需填写）；获取页面 mailnest.top/buy-email",
     },
     {
         "key": "CLOUDMAIL_API_BASE", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
@@ -524,62 +532,46 @@ EDITABLE_FIELDS = [
         "label": "本地浏览器 JS 覆盖率最多条数", "help": "仅 Roxy/Cloak 生效；日志最多输出的已执行函数数，同时限制保存的脚本摘要数量，默认 1000，最大 10000",
     },
 
-    # ---- 代理池 ----
+    # ---- 网络与套餐策略 (原代理池策略) ----
     {
-        "key": "PROXY_POOL", "file": "proxy.py", "type": "list_str_multiline", "group": "代理池",
-        "label": "代理池(每行一个)", "help": "每行一个代理 URL，留空行会被忽略；为空则不使用代理",
-        "recommended_links": [
-            {
-                "label": "IPRocket 家宽",
-                "url": "https://iprocket.io?viteCode=1PVNyLuJ",
-                "description": "高性价比家宽，可通过 TG 联系作者购买流量",
-            },
-            {
-                "label": "Rola-IP 家宽",
-                "url": "https://rola-ip.co/?code=0326C5HA",
-                "description": "Roxy 合作伙伴高质量家宽，注册可享 15% 优惠",
-            },
-        ],
-    },
-    {
-        "key": "PLAN_CHECK_PROXY_MODE", "file": "proxy.py", "type": "str", "group": "代理池",
+        "key": "PLAN_CHECK_PROXY_MODE", "file": "proxy.py", "type": "str", "group": "网络与套餐策略",
         "label": "套餐/Agent网络模式", "help": "用于查套餐和生成 Agent Token；auto=本地代理可用则走代理、未监听则直连；proxy=强制代理；direct=强制直连",
     },
     {
-        "key": "PLAN_CHECK_PROXY", "file": "proxy.py", "type": "str", "group": "代理池",
+        "key": "PLAN_CHECK_PROXY", "file": "proxy.py", "type": "str", "group": "网络与套餐策略",
         "label": "套餐/Agent专用代理", "help": "用于查套餐和生成 Agent Token；留空时 auto/proxy 从代理池选择。可能包含认证信息，仅保存到 .env",
         "storage": "env", "secret": True,
     },
     {
-        "key": "PLAN_CHECK_TIMEOUT", "file": "proxy.py", "type": "float", "group": "代理池",
+        "key": "PLAN_CHECK_TIMEOUT", "file": "proxy.py", "type": "float", "group": "网络与套餐策略",
         "label": "套餐/Agent超时(秒)", "help": "查套餐和生成 Agent Token 的单次请求超时，建议 10-20 秒；独立于注册请求超时",
     },
     {
-        "key": "PLAN_CHECK_MAX_ATTEMPTS", "file": "proxy.py", "type": "int", "group": "代理池",
+        "key": "PLAN_CHECK_MAX_ATTEMPTS", "file": "proxy.py", "type": "int", "group": "网络与套餐策略",
         "label": "套餐/Agent最大尝试次数", "help": "查套餐和生成 Agent Token 遇到 403、429、5xx 或网络错误时的重试次数，建议 3 次",
     },
     {
-        "key": "PLAN_CHECK_RETRY_DELAY", "file": "proxy.py", "type": "float", "group": "代理池",
+        "key": "PLAN_CHECK_RETRY_DELAY", "file": "proxy.py", "type": "float", "group": "网络与套餐策略",
         "label": "套餐/Agent重试间隔(秒)", "help": "查套餐和生成 Agent Token 的重试间隔，按尝试次数递增；服务端 Retry-After 优先",
     },
     {
-        "key": "PLAN_CHECK_REGISTRATION_RECHECK_DELAY", "file": "proxy.py", "type": "float", "group": "代理池",
+        "key": "PLAN_CHECK_REGISTRATION_RECHECK_DELAY", "file": "proxy.py", "type": "float", "group": "网络与套餐策略",
         "label": "新账号资格复查延迟(秒)", "help": "新注册 free 账号未发现试用资格或首次查询失败时复查一次；0 表示关闭",
     },
     {
-        "key": "PLAN_CHECK_WORKERS", "file": "proxy.py", "type": "int", "group": "代理池",
+        "key": "PLAN_CHECK_WORKERS", "file": "proxy.py", "type": "int", "group": "网络与套餐策略",
         "label": "套餐查询并发数", "help": "自动、手动和批量查套餐共用；Agent Token 生成使用独立队列；建议 2-4 个线程",
     },
     {
-        "key": "PLAN_CHECK_QUEUE_LIMIT", "file": "proxy.py", "type": "int", "group": "代理池",
+        "key": "PLAN_CHECK_QUEUE_LIMIT", "file": "proxy.py", "type": "int", "group": "网络与套餐策略",
         "label": "套餐查询队列上限", "help": "防止异常批量操作无限堆积，建议 100-1000",
     },
     {
-        "key": "PLAN_CHECK_MIN_INTERVAL", "file": "proxy.py", "type": "float", "group": "代理池",
+        "key": "PLAN_CHECK_MIN_INTERVAL", "file": "proxy.py", "type": "float", "group": "网络与套餐策略",
         "label": "套餐/Agent请求最小间隔(秒)", "help": "限制查套餐和生成 Agent Token 的请求启动频率，降低 429 风险",
     },
     {
-        "key": "PLAN_CHECK_JITTER", "file": "proxy.py", "type": "float", "group": "代理池",
+        "key": "PLAN_CHECK_JITTER", "file": "proxy.py", "type": "float", "group": "网络与套餐策略",
         "label": "套餐/Agent请求随机抖动(秒)", "help": "在查套餐和生成 Agent Token 的最小间隔上增加随机延迟，避免请求过于规律",
     },
     # ---- 提链 ----
@@ -655,11 +647,18 @@ EDITABLE_FIELDS = [
 
     {
         "key": "SMS_PROVIDER", "file": "codex.py", "type": "str", "group": "接码平台",
-        "label": "接码通道", "help": "hero / grizzly / l / h；hero 为 Hero-SMS，grizzly 为 GrizzlySMS，l 使用 L_API.md，h 使用 H_API.md",
+        "label": "接码通道", "help": "选择接码通道：Hero-SMS / GrizzlySMS / L 接码 / H 接码",
+        "options": [
+            {"value": "hero", "label": "Hero-SMS (推荐，稳定支持 OpenAI 接码)"},
+            {"value": "grizzly", "label": "GrizzlySMS (支持 handler_api.php)"},
+            {"value": "l", "label": "L 接码 (自建 /take-phone & /fetch-code API)"},
+            {"value": "h", "label": "H 接码 (自建 H_API.md 服务)"},
+        ],
     },
     {
         "key": "SMS_COUNTRY", "file": "codex.py", "type": "str", "group": "接码平台",
-        "label": "国家代码", "help": "传给接码平台的 country；Hero-SMS/GrizzlySMS 常用：美国=187；H 通道作为 H_API.md 的 country",
+        "label": "国家代码", "help": "选择或搜索国家代码；留空则不限国家",
+        "widget": "country_select",
     },
     {
         "key": "SMS_SERVICE", "file": "codex.py", "type": "str", "group": "接码平台",
@@ -688,11 +687,12 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "HERO_SMS_COUNTRY", "file": "codex.py", "type": "str", "group": "接码平台",
-        "label": "Hero-SMS 国家代码", "help": "例如美国填 187；留空则复用通用国家代码",
+        "label": "Hero-SMS 国家代码", "help": "选择或搜索 Hero-SMS 专属国家代码；留空则复用通用国家代码",
+        "widget": "country_select",
     },
     {
         "key": "HERO_SMS_MAX_PRICE", "file": "codex.py", "type": "str", "group": "接码平台",
-        "label": "Hero-SMS 最高限价", "help": "单号愿意支付的最高价格，留空=不限",
+        "label": "Hero-SMS 最高限价", "help": "单号允许的最高美元价格，例如 0.2 或 0.8；若设置过低且国家价格高于此值会导致取号失败，留空=不限",
     },
     {
         "key": "SMS_API_KEY", "file": "codex.py", "type": "str", "group": "接码平台",

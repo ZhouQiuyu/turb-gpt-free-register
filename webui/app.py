@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 from flask import Flask, Response, jsonify, make_response, render_template, request
 import pyotp
 
-from core import codex_retry_service, db, plan_check_service, extract_link_service, codex_agent_service, live_check_service
+from core import codex_retry_service, db, plan_check_service, extract_link_service, codex_agent_service, live_check_service, proxy_service
 from webui.auth import init_auth, register_auth_routes
 from core import registration_service as svc
 from webui import config_editor
@@ -126,10 +126,12 @@ def _compact_account_for_list(row: dict) -> dict:
 
     # 下面字段仅在有值时返回，避免每行堆满 null/空字符串/内部状态。
     optional_keys = (
-        # 套餐展示补充：付费到期/折扣/失败原因。
+        # 套餐展示补充：付费到期/折扣/失败原因/Plus试用优惠详情。
         "plan_check_error", "plan_expires_at", "plan_renews_at", "renews_at",
         "billing_period", "billing_currency", "discount_amount", "discount_type",
         "discount_expires_at", "discount_promo_campaign_id",
+        "plus_trial_discount_percentage", "plus_trial_duration_num_periods",
+        "plus_trial_duration_period", "plus_trial_title", "plus_trial_campaign_id",
         "token_expired", "token_expires_at",
         # 查活状态。
         "live_check_status", "live_check_error", "live_checked_at",
@@ -1897,6 +1899,157 @@ def create_app(auth_code: str | None = None) -> Flask:
         return jsonify({"ok": True, "deleted": deleted})
 
     # ----------------------------------------------------------
+    # 代理池 (Proxy Pool - 仿 Sub2API IP管理)
+    # ----------------------------------------------------------
+    @app.get("/api/proxies")
+    def api_proxies_list():
+        status = request.args.get("status") or None
+        protocol = request.args.get("protocol") or None
+        latency_status = request.args.get("latency_status") or None
+        quality_status = request.args.get("quality_status") or None
+        q = str(request.args.get("q", default="") or "").strip()
+        page = max(1, request.args.get("page", default=1, type=int))
+        page_size = max(1, min(500, request.args.get("page_size", default=50, type=int)))
+        sort_by = request.args.get("sort_by", default="id")
+        sort_order = request.args.get("sort_order", default="desc")
+        offset = (page - 1) * page_size
+
+        result = db.list_proxies_page(
+            status=status,
+            protocol=protocol,
+            latency_status=latency_status,
+            quality_status=quality_status,
+            q=q,
+            limit=page_size,
+            offset=offset,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+        result["ok"] = True
+        result["page"] = page
+        result["page_size"] = page_size
+        return jsonify(result)
+
+    @app.get("/api/proxies/stats")
+    def api_proxies_stats():
+        stats = db.get_proxy_stats()
+        return jsonify({"ok": True, "stats": stats})
+
+    @app.post("/api/proxies")
+    def api_proxies_create():
+        data = request.get_json(silent=True) or {}
+        host = str(data.get("host") or "").strip()
+        try:
+            port = int(data.get("port") or 0)
+        except (ValueError, TypeError):
+            port = 0
+        if not host or port <= 0 or port > 65535:
+            return jsonify({"ok": False, "error": "请填写有效的主机地址和端口号 (1-65535)"}), 400
+
+        proxy = db.create_proxy(data)
+        return jsonify({"ok": True, "proxy": proxy})
+
+    @app.post("/api/proxies/batch")
+    def api_proxies_batch_create():
+        data = request.get_json(silent=True) or {}
+        proxies_list = data.get("proxies")
+
+        # 支持直接传 text + default_protocol + format_mode
+        if proxies_list is None and "text" in data:
+            raw_text = str(data.get("text") or "")
+            default_protocol = str(data.get("default_protocol") or "socks5h")
+            format_mode = str(data.get("format_mode") or "auto")
+            proxies_list = []
+            for line in raw_text.splitlines():
+                parsed = db.parse_proxy_url_to_dict(
+                    line, default_protocol=default_protocol, format_mode=format_mode
+                )
+                if parsed:
+                    proxies_list.append(parsed)
+
+        if not proxies_list or not isinstance(proxies_list, list):
+            return jsonify({"ok": False, "error": "没有可添加的有效代理条目"}), 400
+
+        res = db.batch_create_proxies(proxies_list)
+        return jsonify({
+            "ok": True,
+            "created": res["created"],
+            "skipped": res["skipped"],
+            "total": res["total"],
+        })
+
+    @app.post("/api/proxies/<int:proxy_id>/update")
+    def api_proxies_update(proxy_id: int):
+        data = request.get_json(silent=True) or {}
+        updated = db.update_proxy(proxy_id, data)
+        if not updated:
+            return jsonify({"ok": False, "error": f"代理 #{proxy_id} 不存在"}), 404
+        return jsonify({"ok": True, "proxy": updated})
+
+    @app.post("/api/proxies/<int:proxy_id>/toggle-status")
+    def api_proxies_toggle_status(proxy_id: int):
+        data = request.get_json(silent=True) or {}
+        p = db.get_proxy(proxy_id)
+        if not p:
+            return jsonify({"ok": False, "error": f"代理 #{proxy_id} 不存在"}), 404
+        target_status = data.get("status")
+        if not target_status:
+            target_status = "disabled" if p.get("status") == "active" else "active"
+        updated = db.update_proxy(proxy_id, {"status": target_status})
+        return jsonify({"ok": True, "proxy": updated, "status": target_status})
+
+    @app.post("/api/proxies/<int:proxy_id>/delete")
+    def api_proxies_delete(proxy_id: int):
+        deleted = db.delete_proxy(proxy_id)
+        return jsonify({"ok": True, "deleted": deleted})
+
+    @app.post("/api/proxies/batch-status")
+    def api_proxies_batch_status():
+        data = request.get_json(silent=True) or {}
+        ids = data.get("ids") or []
+        status = str(data.get("status") or "active").strip().lower()
+        if not ids or not isinstance(ids, list):
+            return jsonify({"ok": False, "error": "请指定要操作的代理 ID 列表"}), 400
+        count = db.batch_update_proxy_status([int(x) for x in ids], status)
+        return jsonify({"ok": True, "count": count, "updated_count": count, "status": status})
+
+    @app.post("/api/proxies/batch-delete")
+    def api_proxies_batch_delete():
+        data = request.get_json(silent=True) or {}
+        ids = data.get("ids") or []
+        if not ids or not isinstance(ids, list):
+            return jsonify({"ok": False, "error": "请指定要删除的代理 ID 列表"}), 400
+        count = db.batch_delete_proxies([int(x) for x in ids])
+        return jsonify({"ok": True, "count": count, "deleted": count, "deleted_count": count})
+
+    @app.post("/api/proxies/<int:proxy_id>/test")
+    def api_proxies_test_single(proxy_id: int):
+        timeout = request.args.get("timeout", default=8.0, type=float)
+        res = proxy_service.test_proxy_connectivity(proxy_id, timeout=timeout)
+        return jsonify({"ok": res.get("success", False), **res})
+
+    @app.post("/api/proxies/<int:proxy_id>/quality")
+    def api_proxies_quality_single(proxy_id: int):
+        timeout = request.args.get("timeout", default=10.0, type=float)
+        res = proxy_service.test_proxy_quality_openai(proxy_id, timeout=timeout)
+        return jsonify({"ok": res.get("success", False), **res})
+
+    @app.post("/api/proxies/batch-test")
+    def api_proxies_batch_test():
+        data = request.get_json(silent=True) or {}
+        ids = data.get("ids") or None
+        # 默认对包含禁用在内的所有代理执行连通测试
+        res = proxy_service.batch_test_proxies(proxy_ids=ids, test_type="connection")
+        return jsonify({"ok": True, **res})
+
+    @app.post("/api/proxies/batch-quality")
+    def api_proxies_batch_quality():
+        data = request.get_json(silent=True) or {}
+        ids = data.get("ids") or None
+        res = proxy_service.batch_test_proxies(proxy_ids=ids, test_type="quality")
+        return jsonify({"ok": True, **res})
+
+    # ----------------------------------------------------------
     # Codex 授权账号（CPA 兼容凭证）
     # ----------------------------------------------------------
     @app.get("/api/codex")
@@ -2584,16 +2737,17 @@ def create_app(auth_code: str | None = None) -> Flask:
                 }), 400
         if "mailnest" in sources:
             api_key = str(getattr(_email_cfg, "MAIL_NEST_API_KEY", "") or "").strip()
+            mode = str(getattr(_email_cfg, "MAIL_NEST_MODE", "temporary") or "temporary").strip().lower()
             project_code = str(getattr(_email_cfg, "MAIL_NEST_PROJECT_CODE", "") or "").strip()
             if not api_key:
                 return jsonify({
                     "ok": False,
                     "error": "已选择 mailnest 邮箱来源，请填写 MailNest API Key（配置 → 邮箱 / OTP）。",
                 }), 400
-            if not project_code:
+            if mode != "exclusive" and not project_code:
                 return jsonify({
                     "ok": False,
-                    "error": "已选择 mailnest 邮箱来源，请填写 MailNest 项目代码（配置 → 邮箱 / OTP）。",
+                    "error": "已选择 mailnest 临时邮箱，请填写 MailNest 项目代码（配置 → 邮箱 / OTP）。",
                 }), 400
         if "cloudmail" in sources:
             api_base = str(getattr(_email_cfg, "CLOUDMAIL_API_BASE", "") or "").strip()

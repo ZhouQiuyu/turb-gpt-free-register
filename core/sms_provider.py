@@ -45,6 +45,10 @@ class SmsProviderError(RuntimeError):
     """接码平台通用错误。"""
 
 
+class SmsConfigError(SmsProviderError):
+    """接码平台配置缺失或凭证错误（如 API Key/Auth Code 为空、BAD_KEY 等），重试无意义——上层应立即停止。"""
+
+
 class SmsNoNumbersError(SmsProviderError):
     """暂无可用号码（NO_NUMBERS），可换国家或稍后重试。"""
 
@@ -83,7 +87,7 @@ def _request_grizzly(http: CurlSession, params: dict) -> str:
 
     # 公共错误码（任何 action 都可能返回）
     if text == "BAD_KEY":
-        raise SmsProviderError("接码平台 API key 无效（BAD_KEY）")
+        raise SmsConfigError("接码平台 API key 无效（BAD_KEY）")
     if text == "NO_BALANCE":
         raise SmsNoBalanceError("接码平台余额不足（NO_BALANCE），请充值")
     if text == "NO_NUMBERS":
@@ -107,7 +111,7 @@ def _request_hero(http: CurlSession, params: dict) -> str:
     """
     api_key = str(getattr(_cfg, "HERO_SMS_API_KEY", "") or getattr(_cfg, "SMS_API_KEY", "") or "").strip()
     if not api_key:
-        raise SmsProviderError("Hero-SMS API key 不能为空，请在配置或 .env 中填写 HERO_SMS_API_KEY")
+        raise SmsConfigError("Hero-SMS API key 不能为空，请在配置或 .env 中填写 HERO_SMS_API_KEY")
 
     base_url = str(getattr(_cfg, "HERO_SMS_API_BASE", "") or "https://hero-sms.com/stubs/handler_api.php").strip()
     base_params = {"api_key": api_key}
@@ -127,7 +131,7 @@ def _request_hero(http: CurlSession, params: dict) -> str:
                     info_msg = str(info.get("message") or info.get("code") or "")
                 combined = f"{title} {details} {info_msg}".strip()
                 if title == "BAD_KEY" or "unauthorized" in combined.lower():
-                    raise SmsProviderError("Hero-SMS API key 无效（BAD_KEY）")
+                    raise SmsConfigError("Hero-SMS API key 无效（BAD_KEY）")
                 if title in ("NO_BALANCE", "EARLY_CANCEL_NO_BALANCE") or "balance" in combined.lower():
                     raise SmsNoBalanceError("Hero-SMS 余额不足（NO_BALANCE），请充值")
                 if title == "NO_NUMBERS" or "numbers" in combined.lower():
@@ -141,7 +145,7 @@ def _request_hero(http: CurlSession, params: dict) -> str:
 
     # 识别标准文本错误码
     if text == "BAD_KEY":
-        raise SmsProviderError("Hero-SMS API key 无效（BAD_KEY）")
+        raise SmsConfigError("Hero-SMS API key 无效（BAD_KEY）")
     if text in ("NO_BALANCE", "EARLY_CANCEL_NO_BALANCE"):
         raise SmsNoBalanceError("Hero-SMS 余额不足（NO_BALANCE），请充值")
     if text == "NO_NUMBERS":
@@ -157,14 +161,14 @@ def _request_hero(http: CurlSession, params: dict) -> str:
 def _l_url(path: str) -> str:
     base = str(getattr(_cfg, "L_API_BASE", "") or "").strip()
     if not base:
-        raise SmsProviderError("L_API_BASE 不能为空")
+        raise SmsConfigError("L_API_BASE 不能为空")
     return urljoin(base.rstrip("/") + "/", path.lstrip("/"))
 
 
 def _l_headers() -> dict:
     token = str(getattr(_cfg, "L_ADMIN_AUTH_CODE", "") or "").strip()
     if not token:
-        raise SmsProviderError("L_ADMIN_AUTH_CODE 不能为空")
+        raise SmsConfigError("L_ADMIN_AUTH_CODE 不能为空")
     return {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
@@ -179,6 +183,9 @@ def _post_l_json(http: CurlSession, path: str, payload: dict) -> dict:
     except Exception:
         data = {}
 
+    if resp.status_code in (401, 403):
+        msg = data.get("error") if isinstance(data, dict) else ""
+        raise SmsConfigError(f"L 鉴权失败 HTTP {resp.status_code}: {(msg or text)[:200]}")
     if resp.status_code != 200:
         msg = data.get("error") if isinstance(data, dict) else ""
         raise SmsProviderError(f"L HTTP {resp.status_code}: {(msg or text)[:200]}")
@@ -190,6 +197,8 @@ def _post_l_json(http: CurlSession, path: str, payload: dict) -> dict:
             raise SmsNoBalanceError(f"L 余额不足：{combined}")
         if "NO_NUMBERS" in combined or "暂无号码" in combined:
             raise SmsNoNumbersError(f"L 暂无可用号码：{combined}")
+        if "auth" in combined.lower() or "token" in combined.lower() or "unauthorized" in combined.lower():
+            raise SmsConfigError(f"L 鉴权失败：{combined}")
         raise SmsProviderError(f"L 请求失败：{combined}")
     if not isinstance(data, dict):
         raise SmsProviderError(f"L 响应不是 JSON 对象：{text[:200]}")
@@ -199,14 +208,14 @@ def _post_l_json(http: CurlSession, path: str, payload: dict) -> dict:
 def _h_url(path: str) -> str:
     base = str(getattr(_cfg, "H_API_BASE", "") or "").strip()
     if not base:
-        raise SmsProviderError("H_API_BASE 不能为空")
+        raise SmsConfigError("H_API_BASE 不能为空")
     return urljoin(base.rstrip("/") + "/", path.lstrip("/"))
 
 
 def _h_headers() -> dict:
     token = str(getattr(_cfg, "H_ADMIN_AUTH_CODE", "") or "").strip()
     if not token:
-        raise SmsProviderError("H_ADMIN_AUTH_CODE 不能为空")
+        raise SmsConfigError("H_ADMIN_AUTH_CODE 不能为空")
     return {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
@@ -221,6 +230,9 @@ def _post_h_json(http: CurlSession, path: str, payload: dict) -> dict:
     except Exception:
         data = {}
 
+    if resp.status_code in (401, 403):
+        msg = data.get("error") if isinstance(data, dict) else ""
+        raise SmsConfigError(f"H 鉴权失败 HTTP {resp.status_code}: {(msg or text)[:200]}")
     if resp.status_code != 200:
         msg = data.get("error") if isinstance(data, dict) else ""
         raise SmsProviderError(f"H HTTP {resp.status_code}: {(msg or text)[:200]}")
@@ -232,6 +244,8 @@ def _post_h_json(http: CurlSession, path: str, payload: dict) -> dict:
             raise SmsNoBalanceError(f"H 余额不足：{combined}")
         if "NO_NUMBERS" in combined or "暂无号码" in combined:
             raise SmsNoNumbersError(f"H 暂无可用号码：{combined}")
+        if "auth" in combined.lower() or "token" in combined.lower() or "unauthorized" in combined.lower():
+            raise SmsConfigError(f"H 鉴权失败：{combined}")
         raise SmsProviderError(f"H 请求失败：{combined}")
     if not isinstance(data, dict):
         raise SmsProviderError(f"H 响应不是 JSON 对象：{text[:200]}")
@@ -408,9 +422,9 @@ def acquire_number(
             project_id = str(service or _cfg.SMS_SERVICE).strip()
             h_country = str(country or _cfg.SMS_COUNTRY).strip()
             if not project_id:
-                raise SmsProviderError("H projectId 不能为空：请填写 SMS_SERVICE")
+                raise SmsConfigError("H projectId 不能为空：请填写 SMS_SERVICE")
             if not h_country:
-                raise SmsProviderError("H country 不能为空：请填写 SMS_COUNTRY")
+                raise SmsConfigError("H country 不能为空：请填写 SMS_COUNTRY")
             payload = {
                 "projectId": project_id,
                 "country": h_country,

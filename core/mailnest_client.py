@@ -26,6 +26,7 @@ class MailNestClientError(RuntimeError):
 class MailNestAccount:
     email: str
     project_code: str = ""
+    sale_mode: str = "temporary"
 
 
 _CONTEXT_CACHE: dict[str, MailNestAccount] = {}
@@ -40,6 +41,11 @@ def _api_key() -> str:
     if not api_key:
         raise MailNestClientError("MailNest API Key 未配置，请填写 MailNest API Key（WebUI「配置 → 邮箱 / OTP」）。")
     return api_key
+
+
+def _mode() -> str:
+    mode = str(getattr(_email_cfg, "MAIL_NEST_MODE", "temporary") or "temporary").strip().lower()
+    return "exclusive" if mode == "exclusive" else "temporary"
 
 
 def _project_code() -> str:
@@ -77,21 +83,38 @@ def _request(method: str, path: str, *, params: dict | None = None, json: dict |
 
 
 def pick_account() -> MailNestAccount:
-    """购买/领取一个 MailNest 临时邮箱并缓存上下文。"""
-    project_code = _project_code()
-    data = _request(
-        "POST",
-        "/api/v1/email/temporary/buy",
-        json={"project_code": project_code, "count": 1},
-    )
+    """购买/领取一个 MailNest 邮箱并缓存上下文（支持 temporary 临时邮箱与 exclusive 独占邮箱）。"""
+    mode = _mode()
+    if mode == "exclusive":
+        data = _request(
+            "POST",
+            "/api/v1/email/exclusive/buy",
+            json={"count": 1},
+        )
+        project_code = ""
+    else:
+        project_code = _project_code()
+        data = _request(
+            "POST",
+            "/api/v1/email/temporary/buy",
+            json={"project_code": project_code, "count": 1},
+        )
     if not isinstance(data, list) or not data:
         raise MailNestClientError("MailNest 购买邮箱响应缺少 data[0]")
-    email = str((data[0] or {}).get("email") or "").strip()
+    item = data[0] or {}
+    email = str(item.get("email") or "").strip()
     if not email or "@" not in email:
         raise MailNestClientError("MailNest 购买邮箱响应缺少有效 email")
-    account = MailNestAccount(email=email, project_code=project_code)
+    sale_mode = str(item.get("sale_mode") or mode).strip()
+    account = MailNestAccount(email=email, project_code=project_code, sale_mode=sale_mode)
     _CONTEXT_CACHE[_cache_key(email)] = account
-    logger.info("[MailNest] 已获取临时邮箱: %s project_code=%s", email, project_code)
+    logger.info(
+        "[MailNest] 已获取%s邮箱: %s (mode=%s, project_code=%s)",
+        "独占" if mode == "exclusive" else "临时",
+        email,
+        sale_mode,
+        project_code or "none",
+    )
     return account
 
 
@@ -106,7 +129,14 @@ def get_account_context(email: str) -> MailNestAccount | None:
 
 def release_account(email: str, status: str = "available", note: str | None = None) -> None:
     _CONTEXT_CACHE.pop(_cache_key(email), None)
-    logger.info("[MailNest] 已释放临时邮箱: %s（status=%s, note=%s）", email, status, note or "")
+    # 如果未成功使用（如注册失败、取消或报错），主动向 MailNest 申请释放以解冻资金
+    if status != "used" and email:
+        try:
+            _request("POST", "/api/v1/email/release", json={"email": email})
+            logger.info("[MailNest] 已向平台释放未成功收件的邮箱以解冻余额: %s", email)
+        except Exception as exc:
+            logger.debug("[MailNest] 尝试释放邮箱解冻余额未生效（可能已自动释放或已扣费）: %s: %s", email, exc)
+    logger.info("[MailNest] 已释放本地邮箱上下文: %s（status=%s, note=%s）", email, status, note or "")
 
 
 def _get_mails(email: str):

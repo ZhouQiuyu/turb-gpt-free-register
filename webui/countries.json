@@ -1,0 +1,1172 @@
+[
+  {
+    "code": "4",
+    "iso": "PH",
+    "chn": "菲律宾",
+    "eng": "Philippines"
+  },
+  {
+    "code": "16",
+    "iso": "GB",
+    "chn": "英国",
+    "eng": "United Kingdom"
+  },
+  {
+    "code": "187",
+    "iso": "US",
+    "chn": "美国",
+    "eng": "USA"
+  },
+  {
+    "code": "6",
+    "iso": "ID",
+    "chn": "印度尼西亚",
+    "eng": "Indonesia"
+  },
+  {
+    "code": "73",
+    "iso": "BR",
+    "chn": "巴西",
+    "eng": "Brazil"
+  },
+  {
+    "code": "43",
+    "iso": "DE",
+    "chn": "德国",
+    "eng": "Germany"
+  },
+  {
+    "code": "7",
+    "iso": "MY",
+    "chn": "马来西亚",
+    "eng": "Malaysia"
+  },
+  {
+    "code": "10",
+    "iso": "VN",
+    "chn": "越南",
+    "eng": "Vietnam"
+  },
+  {
+    "code": "52",
+    "iso": "TH",
+    "chn": "泰国",
+    "eng": "Thailand"
+  },
+  {
+    "code": "182",
+    "iso": "JP",
+    "chn": "日本",
+    "eng": "Japan"
+  },
+  {
+    "code": "36",
+    "iso": "CA",
+    "chn": "加拿大",
+    "eng": "Canada"
+  },
+  {
+    "code": "14",
+    "iso": "HK",
+    "chn": "香港",
+    "eng": "Hong Kong"
+  },
+  {
+    "code": "55",
+    "iso": "TW",
+    "chn": "台湾",
+    "eng": "Taiwan"
+  },
+  {
+    "code": "2",
+    "iso": "KZ",
+    "chn": "哈萨克斯坦",
+    "eng": "Kazakhstan"
+  },
+  {
+    "code": "39",
+    "iso": "AR",
+    "chn": "阿根廷",
+    "eng": "Argentina"
+  },
+  {
+    "code": "66",
+    "iso": "PK",
+    "chn": "巴基斯坦",
+    "eng": "Pakistan"
+  },
+  {
+    "code": "15",
+    "iso": "PL",
+    "chn": "波兰",
+    "eng": "Poland"
+  },
+  {
+    "code": "117",
+    "iso": "PT",
+    "chn": "葡萄牙",
+    "eng": "Portugal"
+  },
+  {
+    "code": "78",
+    "iso": "FR",
+    "chn": "法国",
+    "eng": "France"
+  },
+  {
+    "code": "33",
+    "iso": "CO",
+    "chn": "哥伦比亚",
+    "eng": "Colombia"
+  },
+  {
+    "code": "158",
+    "iso": "BH",
+    "chn": "丁烷",
+    "eng": "Bhutan"
+  },
+  {
+    "code": "3",
+    "iso": "CN",
+    "chn": "中国",
+    "eng": "China"
+  },
+  {
+    "code": "125",
+    "iso": "CE",
+    "chn": "中非共和國",
+    "eng": "Central African Republic"
+  },
+  {
+    "code": "172",
+    "iso": "DK",
+    "chn": "丹麦",
+    "eng": "Denmark"
+  },
+  {
+    "code": "1",
+    "iso": "UA",
+    "chn": "乌克兰",
+    "eng": "Ukraine"
+  },
+  {
+    "code": "40",
+    "iso": "UZ",
+    "chn": "乌兹别克斯坦",
+    "eng": "Uzbekistan"
+  },
+  {
+    "code": "75",
+    "iso": "UG",
+    "chn": "乌干达",
+    "eng": "Uganda"
+  },
+  {
+    "code": "42",
+    "iso": "CH",
+    "chn": "乍得",
+    "eng": "Chad"
+  },
+  {
+    "code": "30",
+    "iso": "YE",
+    "chn": "也门",
+    "eng": "Yemen"
+  },
+  {
+    "code": "148",
+    "iso": "AM",
+    "chn": "亚美尼亚",
+    "eng": "Armenia"
+  },
+  {
+    "code": "13",
+    "iso": "IL",
+    "chn": "以色列",
+    "eng": "Israel"
+  },
+  {
+    "code": "47",
+    "iso": "IR",
+    "chn": "伊拉克",
+    "eng": "Iraq"
+  },
+  {
+    "code": "57",
+    "iso": "IR",
+    "chn": "伊朗",
+    "eng": "Iran"
+  },
+  {
+    "code": "124",
+    "iso": "BE",
+    "chn": "伯利茲",
+    "eng": "Belize"
+  },
+  {
+    "code": "128",
+    "iso": "GE",
+    "chn": "格鲁吉亚",
+    "eng": "Georgia"
+  },
+  {
+    "code": "186",
+    "iso": "CA",
+    "chn": "佛得角",
+    "eng": "Cape Verde"
+  },
+  {
+    "code": "83",
+    "iso": "BG",
+    "chn": "保加利亚",
+    "eng": "Bulgaria"
+  },
+  {
+    "code": "45",
+    "iso": "HR",
+    "chn": "克罗地亚",
+    "eng": "Croatia"
+  },
+  {
+    "code": "28",
+    "iso": "GA",
+    "chn": "冈比亚",
+    "eng": "Gambia"
+  },
+  {
+    "code": "132",
+    "iso": "IS",
+    "chn": "冰岛",
+    "eng": "Iceland"
+  },
+  {
+    "code": "68",
+    "iso": "GU",
+    "chn": "几内亚",
+    "eng": "Guinea"
+  },
+  {
+    "code": "200",
+    "iso": "LI",
+    "chn": "列支敦士登",
+    "eng": "Liechtenstein"
+  },
+  {
+    "code": "18",
+    "iso": "DR",
+    "chn": "刚果",
+    "eng": "DR Congo"
+  },
+  {
+    "code": "102",
+    "iso": "LY",
+    "chn": "利比亚",
+    "eng": "Libya"
+  },
+  {
+    "code": "135",
+    "iso": "LR",
+    "chn": "利比里亚",
+    "eng": "Liberia"
+  },
+  {
+    "code": "150",
+    "iso": "CO",
+    "chn": "剛果",
+    "eng": "Congo"
+  },
+  {
+    "code": "38",
+    "iso": "GH",
+    "chn": "加纳",
+    "eng": "Ghana"
+  },
+  {
+    "code": "154",
+    "iso": "GA",
+    "chn": "加蓬",
+    "eng": "Gabon"
+  },
+  {
+    "code": "84",
+    "iso": "HU",
+    "chn": "匈牙利",
+    "eng": "Hungary"
+  },
+  {
+    "code": "183",
+    "iso": "MK",
+    "chn": "北马其顿",
+    "eng": "North Macedonia"
+  },
+  {
+    "code": "177",
+    "iso": "SS",
+    "chn": "南苏丹",
+    "eng": "South Sudan"
+  },
+  {
+    "code": "31",
+    "iso": "ZA",
+    "chn": "南非",
+    "eng": "South Africa"
+  },
+  {
+    "code": "123",
+    "iso": "BW",
+    "chn": "博茨瓦纳",
+    "eng": "Botswana"
+  },
+  {
+    "code": "111",
+    "iso": "QA",
+    "chn": "卡塔尔",
+    "eng": "Qatar"
+  },
+  {
+    "code": "165",
+    "iso": "LU",
+    "chn": "卢森堡",
+    "eng": "Luxembourg"
+  },
+  {
+    "code": "22",
+    "iso": "IN",
+    "chn": "印度",
+    "eng": "India"
+  },
+  {
+    "code": "94",
+    "iso": "GT",
+    "chn": "危地马拉",
+    "eng": "Guatemala"
+  },
+  {
+    "code": "105",
+    "iso": "EC",
+    "chn": "厄瓜多尔",
+    "eng": "Ecuador"
+  },
+  {
+    "code": "176",
+    "iso": "ER",
+    "chn": "厄立特里亚",
+    "eng": "Eritrea"
+  },
+  {
+    "code": "113",
+    "iso": "CU",
+    "chn": "古巴",
+    "eng": "Cuba"
+  },
+  {
+    "code": "11",
+    "iso": "KY",
+    "chn": "吉尔吉斯斯坦",
+    "eng": "Kyrgyzstan"
+  },
+  {
+    "code": "168",
+    "iso": "DJ",
+    "chn": "吉布地",
+    "eng": "Djibouti"
+  },
+  {
+    "code": "93",
+    "iso": "CR",
+    "chn": "哥斯达黎加",
+    "eng": "Costa Rica"
+  },
+  {
+    "code": "41",
+    "iso": "CM",
+    "chn": "喀麦隆",
+    "eng": "Cameroon"
+  },
+  {
+    "code": "146",
+    "iso": "RE",
+    "chn": "留尼汪",
+    "eng": "Reunion"
+  },
+  {
+    "code": "161",
+    "iso": "TU",
+    "chn": "土库曼斯坦",
+    "eng": "Turkmenistan"
+  },
+  {
+    "code": "62",
+    "iso": "TR",
+    "chn": "土耳其",
+    "eng": "Turkey"
+  },
+  {
+    "code": "164",
+    "iso": "SA",
+    "chn": "圣卢西亚",
+    "eng": "Saint Lucia"
+  },
+  {
+    "code": "166",
+    "iso": "SA",
+    "chn": "圣文森特和格林纳丁斯",
+    "eng": "Saint Vincent and the Grenadines"
+  },
+  {
+    "code": "131",
+    "iso": "GY",
+    "chn": "圭亚那",
+    "eng": "Guyana"
+  },
+  {
+    "code": "9",
+    "iso": "TA",
+    "chn": "坦桑尼亚",
+    "eng": "Tanzania"
+  },
+  {
+    "code": "21",
+    "iso": "EG",
+    "chn": "埃及",
+    "eng": "Egypt"
+  },
+  {
+    "code": "71",
+    "iso": "ET",
+    "chn": "埃塞俄比亚",
+    "eng": "Ethiopia"
+  },
+  {
+    "code": "143",
+    "iso": "TA",
+    "chn": "塔吉克斯坦",
+    "eng": "Tajikistan"
+  },
+  {
+    "code": "61",
+    "iso": "SN",
+    "chn": "塞内加尔",
+    "eng": "Senegal"
+  },
+  {
+    "code": "29",
+    "iso": "RS",
+    "chn": "塞尔维亚",
+    "eng": "Serbia"
+  },
+  {
+    "code": "115",
+    "iso": "SI",
+    "chn": "塞拉利昂",
+    "eng": "Sierra Leone"
+  },
+  {
+    "code": "77",
+    "iso": "CY",
+    "chn": "塞浦路斯",
+    "eng": "Cyprus"
+  },
+  {
+    "code": "184",
+    "iso": "SC",
+    "chn": "塞舌尔",
+    "eng": "Seychelles"
+  },
+  {
+    "code": "54",
+    "iso": "MX",
+    "chn": "墨西哥",
+    "eng": "Mexico"
+  },
+  {
+    "code": "99",
+    "iso": "TO",
+    "chn": "多哥",
+    "eng": "Togo"
+  },
+  {
+    "code": "109",
+    "iso": "DO",
+    "chn": "多米尼加共和国",
+    "eng": "Dominican Republic"
+  },
+  {
+    "code": "126",
+    "iso": "DM",
+    "chn": "多米尼克",
+    "eng": "Dominica"
+  },
+  {
+    "code": "50",
+    "iso": "AT",
+    "chn": "奥地利",
+    "eng": "Austria"
+  },
+  {
+    "code": "70",
+    "iso": "VE",
+    "chn": "委内瑞拉",
+    "eng": "Venezuela"
+  },
+  {
+    "code": "60",
+    "iso": "BD",
+    "chn": "孟加拉国",
+    "eng": "Bangladesh"
+  },
+  {
+    "code": "76",
+    "iso": "AN",
+    "chn": "安哥拉",
+    "eng": "Angola"
+  },
+  {
+    "code": "181",
+    "iso": "AI",
+    "chn": "安圭拉",
+    "eng": "Anguilla"
+  },
+  {
+    "code": "169",
+    "iso": "AN",
+    "chn": "安提瓜和巴布达",
+    "eng": "Antigua and Barbuda"
+  },
+  {
+    "code": "90",
+    "iso": "NI",
+    "chn": "尼加拉瓜",
+    "eng": "Nicaragua"
+  },
+  {
+    "code": "19",
+    "iso": "NG",
+    "chn": "尼日利亚",
+    "eng": "Nigeria"
+  },
+  {
+    "code": "139",
+    "iso": "NE",
+    "chn": "尼日尔",
+    "eng": "Niger"
+  },
+  {
+    "code": "81",
+    "iso": "NP",
+    "chn": "尼泊尔",
+    "eng": "Nepal"
+  },
+  {
+    "code": "188",
+    "iso": "PA",
+    "chn": "巴勒斯坦",
+    "eng": "Palestine"
+  },
+  {
+    "code": "122",
+    "iso": "BS",
+    "chn": "巴哈马",
+    "eng": "Bahamas"
+  },
+  {
+    "code": "118",
+    "iso": "BA",
+    "chn": "巴巴多斯",
+    "eng": "Barbados"
+  },
+  {
+    "code": "79",
+    "iso": "PG",
+    "chn": "巴布亚新几内亚",
+    "eng": "Papua"
+  },
+  {
+    "code": "87",
+    "iso": "PY",
+    "chn": "巴拉圭",
+    "eng": "Paraguay"
+  },
+  {
+    "code": "112",
+    "iso": "PA",
+    "chn": "巴拿马",
+    "eng": "Panama"
+  },
+  {
+    "code": "145",
+    "iso": "BH",
+    "chn": "巴林",
+    "eng": "Bahrain"
+  },
+  {
+    "code": "152",
+    "iso": "BF",
+    "chn": "布基纳法索",
+    "eng": "Burkina Faso"
+  },
+  {
+    "code": "119",
+    "iso": "BU",
+    "chn": "布隆迪",
+    "eng": "Burundi"
+  },
+  {
+    "code": "129",
+    "iso": "GR",
+    "chn": "希腊",
+    "eng": "Greece"
+  },
+  {
+    "code": "130",
+    "iso": "GW",
+    "chn": "几内亚比绍",
+    "eng": "Guinea-Bissau"
+  },
+  {
+    "code": "170",
+    "iso": "CA",
+    "chn": "开曼群岛",
+    "eng": "Cayman Islands"
+  },
+  {
+    "code": "49",
+    "iso": "LV",
+    "chn": "拉脱维亚",
+    "eng": "Latvia"
+  },
+  {
+    "code": "174",
+    "iso": "NO",
+    "chn": "挪威",
+    "eng": "Norway"
+  },
+  {
+    "code": "63",
+    "iso": "CZ",
+    "chn": "捷克共和国",
+    "eng": "Czech"
+  },
+  {
+    "code": "37",
+    "iso": "MA",
+    "chn": "摩洛哥",
+    "eng": "Morocco"
+  },
+  {
+    "code": "85",
+    "iso": "MD",
+    "chn": "摩尔多瓦",
+    "eng": "Moldova"
+  },
+  {
+    "code": "144",
+    "iso": "MC",
+    "chn": "摩纳哥",
+    "eng": "Monaco"
+  },
+  {
+    "code": "110",
+    "iso": "SY",
+    "chn": "叙利亚",
+    "eng": "Syria"
+  },
+  {
+    "code": "121",
+    "iso": "BN",
+    "chn": "文莱",
+    "eng": "Brunei"
+  },
+  {
+    "code": "189",
+    "iso": "FJ",
+    "chn": "斐济",
+    "eng": "Fiji"
+  },
+  {
+    "code": "106",
+    "iso": "SZ",
+    "chn": "斯威士兰",
+    "eng": "Swaziland"
+  },
+  {
+    "code": "141",
+    "iso": "SK",
+    "chn": "斯洛伐克",
+    "eng": "Slovakia"
+  },
+  {
+    "code": "59",
+    "iso": "SI",
+    "chn": "斯洛文尼亚",
+    "eng": "Slovenia"
+  },
+  {
+    "code": "64",
+    "iso": "LK",
+    "chn": "斯里兰卡",
+    "eng": "Sri Lanka"
+  },
+  {
+    "code": "196",
+    "iso": "SG",
+    "chn": "新加坡",
+    "eng": "Singapore"
+  },
+  {
+    "code": "185",
+    "iso": "NC",
+    "chn": "新喀里多尼亚",
+    "eng": "New Caledonia"
+  },
+  {
+    "code": "67",
+    "iso": "NZ",
+    "chn": "新西兰",
+    "eng": "New Zealand"
+  },
+  {
+    "code": "151",
+    "iso": "CL",
+    "chn": "智利",
+    "eng": "Chile"
+  },
+  {
+    "code": "91",
+    "iso": "TL",
+    "chn": "东帝汶",
+    "eng": "Timor-Leste"
+  },
+  {
+    "code": "24",
+    "iso": "KH",
+    "chn": "柬埔寨",
+    "eng": "Cambodia"
+  },
+  {
+    "code": "127",
+    "iso": "GD",
+    "chn": "格林纳达",
+    "eng": "Grenada"
+  },
+  {
+    "code": "82",
+    "iso": "BE",
+    "chn": "比利时",
+    "eng": "Belgium"
+  },
+  {
+    "code": "114",
+    "iso": "MR",
+    "chn": "毛里塔尼亚",
+    "eng": "Mauritania"
+  },
+  {
+    "code": "157",
+    "iso": "MU",
+    "chn": "毛里求斯",
+    "eng": "Mauritius"
+  },
+  {
+    "code": "53",
+    "iso": "SA",
+    "chn": "沙特阿拉伯",
+    "eng": "Saudi Arabia"
+  },
+  {
+    "code": "162",
+    "iso": "FR",
+    "chn": "法属圭亚那",
+    "eng": "French Guiana"
+  },
+  {
+    "code": "97",
+    "iso": "PU",
+    "chn": "波多黎各",
+    "eng": "Puerto Rico"
+  },
+  {
+    "code": "108",
+    "iso": "BA",
+    "chn": "波黑",
+    "eng": "Bosnia"
+  },
+  {
+    "code": "96",
+    "iso": "ZW",
+    "chn": "津巴布韦",
+    "eng": "Zimbabwe"
+  },
+  {
+    "code": "88",
+    "iso": "HN",
+    "chn": "洪都拉斯",
+    "eng": "Honduras"
+  },
+  {
+    "code": "26",
+    "iso": "HA",
+    "chn": "海地",
+    "eng": "Haiti"
+  },
+  {
+    "code": "175",
+    "iso": "AU",
+    "chn": "澳大利亚",
+    "eng": "Australia"
+  },
+  {
+    "code": "20",
+    "iso": "MA",
+    "chn": "澳门",
+    "eng": "Macao"
+  },
+  {
+    "code": "156",
+    "iso": "UY",
+    "chn": "乌拉圭",
+    "eng": "Uruguay"
+  },
+  {
+    "code": "23",
+    "iso": "IE",
+    "chn": "爱尔兰",
+    "eng": "Ireland"
+  },
+  {
+    "code": "34",
+    "iso": "EE",
+    "chn": "爱沙尼亚",
+    "eng": "Estonia"
+  },
+  {
+    "code": "103",
+    "iso": "JM",
+    "chn": "牙买加",
+    "eng": "Jamaica"
+  },
+  {
+    "code": "104",
+    "iso": "TT",
+    "chn": "特立尼达和多巴哥",
+    "eng": "Trinidad and Tobago"
+  },
+  {
+    "code": "92",
+    "iso": "BO",
+    "chn": "玻利维亚",
+    "eng": "Bolivia"
+  },
+  {
+    "code": "46",
+    "iso": "SE",
+    "chn": "瑞典",
+    "eng": "Sweden"
+  },
+  {
+    "code": "173",
+    "iso": "CH",
+    "chn": "瑞士",
+    "eng": "Switzerland"
+  },
+  {
+    "code": "160",
+    "iso": "GU",
+    "chn": "瓜德罗普岛",
+    "eng": "Guadeloupe"
+  },
+  {
+    "code": "51",
+    "iso": "BY",
+    "chn": "白俄罗斯",
+    "eng": "Belarus"
+  },
+  {
+    "code": "140",
+    "iso": "RW",
+    "chn": "卢旺达",
+    "eng": "Rwanda"
+  },
+  {
+    "code": "201",
+    "iso": "GI",
+    "chn": "直布罗陀",
+    "eng": "Gibraltar"
+  },
+  {
+    "code": "100",
+    "iso": "KW",
+    "chn": "科威特",
+    "eng": "Kuwait"
+  },
+  {
+    "code": "133",
+    "iso": "CO",
+    "chn": "科摩羅",
+    "eng": "Comoros"
+  },
+  {
+    "code": "203",
+    "iso": "KO",
+    "chn": "科索沃",
+    "eng": "Kosovo"
+  },
+  {
+    "code": "65",
+    "iso": "PE",
+    "chn": "秘鲁",
+    "eng": "Peru"
+  },
+  {
+    "code": "89",
+    "iso": "TN",
+    "chn": "突尼斯",
+    "eng": "Tunisia"
+  },
+  {
+    "code": "44",
+    "iso": "LT",
+    "chn": "立陶宛",
+    "eng": "Lithuania"
+  },
+  {
+    "code": "116",
+    "iso": "JO",
+    "chn": "约旦",
+    "eng": "Jordan"
+  },
+  {
+    "code": "138",
+    "iso": "NA",
+    "chn": "纳米比亚",
+    "eng": "Namibia"
+  },
+  {
+    "code": "149",
+    "iso": "SO",
+    "chn": "索马里",
+    "eng": "Somalia"
+  },
+  {
+    "code": "204",
+    "iso": "NI",
+    "chn": "纽埃",
+    "eng": "Niue"
+  },
+  {
+    "code": "5",
+    "iso": "MM",
+    "chn": "缅甸",
+    "eng": "Myanmar"
+  },
+  {
+    "code": "32",
+    "iso": "RO",
+    "chn": "罗马尼亚",
+    "eng": "Romania"
+  },
+  {
+    "code": "86",
+    "iso": "IT",
+    "chn": "意大利",
+    "eng": "Italy"
+  },
+  {
+    "code": "25",
+    "iso": "LA",
+    "chn": "老挝",
+    "eng": "Laos"
+  },
+  {
+    "code": "134",
+    "iso": "KN",
+    "chn": "圣基茨和尼维斯",
+    "eng": "Saint Kitts and Nevis"
+  },
+  {
+    "code": "178",
+    "iso": "ST",
+    "chn": "圣多美和普林西比",
+    "eng": "Sao Tome and Principe"
+  },
+  {
+    "code": "8",
+    "iso": "KE",
+    "chn": "肯尼亚",
+    "eng": "Kenya"
+  },
+  {
+    "code": "163",
+    "iso": "FI",
+    "chn": "芬兰",
+    "eng": "Finland"
+  },
+  {
+    "code": "48",
+    "iso": "NL",
+    "chn": "荷兰",
+    "eng": "Netherlands"
+  },
+  {
+    "code": "80",
+    "iso": "MO",
+    "chn": "莫桑比克",
+    "eng": "Mozambique"
+  },
+  {
+    "code": "136",
+    "iso": "LS",
+    "chn": "莱索托",
+    "eng": "Lesotho"
+  },
+  {
+    "code": "198",
+    "iso": "SA",
+    "chn": "萨摩亚",
+    "eng": "Samoa"
+  },
+  {
+    "code": "72",
+    "iso": "MN",
+    "chn": "蒙古",
+    "eng": "Mongolia"
+  },
+  {
+    "code": "180",
+    "iso": "MS",
+    "chn": "蒙特塞拉特",
+    "eng": "Montserrat"
+  },
+  {
+    "code": "101",
+    "iso": "SV",
+    "chn": "萨尔瓦多",
+    "eng": "Salvador"
+  },
+  {
+    "code": "98",
+    "iso": "SD",
+    "chn": "苏丹",
+    "eng": "Sudan"
+  },
+  {
+    "code": "142",
+    "iso": "SR",
+    "chn": "苏里南",
+    "eng": "Suriname"
+  },
+  {
+    "code": "56",
+    "iso": "ES",
+    "chn": "西班牙",
+    "eng": "Spain"
+  },
+  {
+    "code": "27",
+    "iso": "CI",
+    "chn": "象牙海岸",
+    "eng": "Ivory Coast"
+  },
+  {
+    "code": "120",
+    "iso": "BJ",
+    "chn": "贝宁",
+    "eng": "Benin"
+  },
+  {
+    "code": "147",
+    "iso": "ZM",
+    "chn": "赞比亚",
+    "eng": "Zambia"
+  },
+  {
+    "code": "167",
+    "iso": "EQ",
+    "chn": "赤道几内亚",
+    "eng": "Equatorial Guinea"
+  },
+  {
+    "code": "35",
+    "iso": "AZ",
+    "chn": "阿塞拜疆",
+    "eng": "Azerbaijan"
+  },
+  {
+    "code": "74",
+    "iso": "AF",
+    "chn": "阿富汗",
+    "eng": "Afghanistan"
+  },
+  {
+    "code": "58",
+    "iso": "DZ",
+    "chn": "阿尔及利亚",
+    "eng": "Algeria"
+  },
+  {
+    "code": "95",
+    "iso": "AE",
+    "chn": "阿联酋",
+    "eng": "UAE"
+  },
+  {
+    "code": "107",
+    "iso": "OM",
+    "chn": "阿曼",
+    "eng": "Oman"
+  },
+  {
+    "code": "155",
+    "iso": "AL",
+    "chn": "阿尔巴尼亚",
+    "eng": "Albania"
+  },
+  {
+    "code": "179",
+    "iso": "AW",
+    "chn": "阿鲁巴",
+    "eng": "Aruba"
+  },
+  {
+    "code": "137",
+    "iso": "MW",
+    "chn": "马拉维",
+    "eng": "Malawi"
+  },
+  {
+    "code": "159",
+    "iso": "MA",
+    "chn": "马尔代夫",
+    "eng": "Maldives"
+  },
+  {
+    "code": "199",
+    "iso": "MA",
+    "chn": "马耳他",
+    "eng": "Malta"
+  },
+  {
+    "code": "17",
+    "iso": "MA",
+    "chn": "马达加斯加",
+    "eng": "Madagascar"
+  },
+  {
+    "code": "69",
+    "iso": "MA",
+    "chn": "马里",
+    "eng": "Mali"
+  },
+  {
+    "code": "153",
+    "iso": "LE",
+    "chn": "黎巴嫩",
+    "eng": "Lebanon"
+  },
+  {
+    "code": "171",
+    "iso": "MO",
+    "chn": "黑山共和国",
+    "eng": "Montenegro"
+  }
+]

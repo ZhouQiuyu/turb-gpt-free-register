@@ -693,6 +693,11 @@ def _fill_mfa_challenge_if_present(page, email: str, timeout: int = 15) -> bool:
                     'form[action*="/mfa-challenge" i] input[name="code"]',
                     'form[action*="/mfa-challenge" i] input[autocomplete="one-time-code"]',
                     'form[action*="/mfa-challenge" i] input[maxlength="6"]',
+                    'input[name="code"]',
+                    'input[autocomplete="one-time-code"]',
+                    'input[maxlength="6"]',
+                    'input[type="text"]',
+                    'input[type="tel"]',
                 ],
                 code,
                 timeout_ms=5000,
@@ -708,7 +713,9 @@ def _fill_mfa_challenge_if_present(page, email: str, timeout: int = 15) -> bool:
                     'button[data-dd-action-name="Continue"]',
                     'button:has-text("Continue")',
                     'button:has-text("続行")',
+                    'button[type="submit"]',
                     'form button',
+                    'button',
                 ],
                 timeout_ms=5000,
             ):
@@ -1413,6 +1420,14 @@ def _do_phone_verification_if_present(page) -> None:
                     sms_provider.cancel(activation_id, http)
                 except Exception:
                     pass
+            # 接码平台配置错误 / 余额不足 / 无可用号码：立即失败止损
+            if isinstance(exc, (sms_provider.SmsNoBalanceError, getattr(sms_provider, "SmsConfigError", tuple()))) or any(k in last_error for k in (
+                "NO_BALANCE", "NO_NUMBERS", "BALANCE", "余额不足",
+                "暂无可用号码", "没有可用号码", "insufficient", "not enough balance",
+                "不能为空", "未配置", "BAD_KEY", "ERROR_SQL", "BAD_ACTION",
+                "WRONG_SERVICE", "NOT_AUTHENTICATED", "Unauthorized", "invalid_api_key",
+            )):
+                raise RuntimeError(f"接码平台配置错误或无可用号码/余额，已停止换号止损：{last_error}") from exc
             if attempt >= max_retries:
                 break
             try:
