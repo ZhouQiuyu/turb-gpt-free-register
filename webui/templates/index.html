@@ -80,9 +80,12 @@
     .body { padding: 16px; }
     label.fld { display: block; margin-bottom: 14px; font-size: 13px; font-weight: 700; }
     label.fld .hint { display: block; margin-top: 3px; color: var(--muted); font-weight: 400; font-size: 12px; }
-    input, textarea, select {
+    input:not([type="checkbox"]):not([type="radio"]), textarea, select {
       width: 100%; min-height: 38px; border: 1px solid var(--line); border-radius: 6px;
       padding: 8px 12px; font: inherit; margin-top: 6px;
+    }
+    input[type="checkbox"], input[type="radio"] {
+      width: auto; min-height: auto; margin-top: 0; padding: 0;
     }
     textarea { min-height: 120px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; resize: vertical; }
     .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
@@ -1743,11 +1746,44 @@
     }
     .quick-stats-bar strong { font-size: 13px; }
     .quick-format-radios {
-      display: flex; gap: 14px; align-items: center; flex-wrap: wrap;
-      padding: 8px 12px; background: #fafbfc; border: 1px solid #ebeef5; border-radius: 6px;
+      display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+      padding: 6px 10px; background: #fafbfc; border: 1px solid #ebeef5; border-radius: 8px;
+      min-height: 40px; box-sizing: border-box;
     }
     .quick-format-radios label {
-      display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; color: #606266;
+      display: inline-flex; align-items: center; gap: 7px; font-size: 13px; cursor: pointer; color: #606266;
+      margin: 0; padding: 4px 10px; border-radius: 6px; transition: all .15s ease; user-select: none;
+    }
+    .quick-format-radios label:hover {
+      background: #f1f5f9; color: #1e293b;
+    }
+    .quick-format-radios label:has(input:checked) {
+      background: #eff6ff; color: #2563eb; font-weight: 500;
+    }
+    .quick-format-radios input[type="radio"] {
+      appearance: auto;
+      -webkit-appearance: auto;
+      width: 15px !important;
+      height: 15px !important;
+      min-width: 15px !important;
+      min-height: 15px !important;
+      max-width: 15px !important;
+      max-height: 15px !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      border: 1px solid #dcdfe6 !important;
+      border-radius: 50% !important;
+      background: #fff !important;
+      flex-shrink: 0;
+      accent-color: #377DFF;
+      cursor: pointer;
+      box-sizing: border-box !important;
+      outline: none;
+    }
+    .quick-format-radios label span {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12.5px;
+      letter-spacing: -0.2px;
     }
 
     /* ---- 新版配置布局（追加在概览下方） ---- */
@@ -2814,13 +2850,13 @@
           </div>
         </div>
 
-        <label class="outlook-import-field">
+        <div class="outlook-import-field">
           <span>格式解析模式</span>
           <div class="quick-format-radios">
             <label><input type="radio" name="quickFormatMode" value="host_port_user_pass" checked onchange="parseQuickAddPreview()"> <span>host:port:user:password</span></label>
             <label><input type="radio" name="quickFormatMode" value="user_pass_host_port" onchange="parseQuickAddPreview()"> <span>user:password@host:port</span></label>
           </div>
-        </label>
+        </div>
 
         <div class="quick-stats-bar">
           <span>总行数: <strong id="quickStatTotal">0</strong></span>

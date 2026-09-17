@@ -73,9 +73,12 @@
     .body { padding: 16px; }
     label.fld { display: block; margin-bottom: 14px; font-size: 13px; font-weight: 700; }
     label.fld .hint { display: block; margin-top: 3px; color: var(--muted); font-weight: 400; font-size: 12px; }
-    input, textarea, select {
+    input:not([type="checkbox"]):not([type="radio"]), textarea, select {
       width: 100%; min-height: 38px; border: 1px solid var(--line); border-radius: 6px;
       padding: 8px 12px; font: inherit; margin-top: 6px;
+    }
+    input[type="checkbox"], input[type="radio"] {
+      width: auto; min-height: auto; margin-top: 0; padding: 0;
     }
     textarea { min-height: 120px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; resize: vertical; }
     .row { display: flex; gap: 14px; flex-wrap: wrap; align-items: flex-end; }
