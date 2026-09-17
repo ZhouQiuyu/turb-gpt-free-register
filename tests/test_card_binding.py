@@ -318,4 +318,88 @@ def test_webui_bind_card_with_direct_stripe_url(monkeypatch):
     })
     assert resp.status_code == 200
     assert resp.get_json()["ok"] is True
+    import time
+    time.sleep(0.3)
+    assert captured.get("checkout_url") == "https://checkout.stripe.com/c/pay/cs_live_direct_999"
+
+
+def test_bind_card_fallback_to_cloak_when_protocol_fails(monkeypatch):
+    """测试当原生 HTTP 协议提链因风控被拦截时，自动降级调用 CloakBrowser 指纹浏览器提链。"""
+    acc_id = 7777
+    acc = {
+        "id": acc_id,
+        "email": "fallback@example.com",
+        "access_token": "token_xyz",
+        "country": "JP",
+    }
+    monkeypatch.setattr(db, "get_account", lambda id: acc)
+    monkeypatch.setattr(db, "pick_proxy_by_country", lambda c: "socks5://proxy.test:1080")
+
+    # 模拟原生 HTTP 协议被拦截 (HTTP 400 unusual activity)
+    def fail_protocol(*args, **kwargs):
+        raise RuntimeError("OpenAI 结账会话创建失败 HTTP 400: unusual activity")
+
+    cloak_called = {}
+    def mock_cloak_extract(account, proxy_url="", log_cb=None):
+        cloak_called["called"] = True
+        cloak_called["email"] = account.get("email")
+        if log_cb:
+            log_cb("测试指纹提链日志")
+        return {
+            "ok": True,
+            "url": "https://checkout.stripe.com/c/pay/cs_live_cloak_fallback_777",
+            "checkout_session_id": "cs_live_cloak_fallback_777",
+        }
+
+    stage2_target = {}
+    # 模拟 Stage 2 正常执行
+    def fake_cloak_driver_run(account_id, card_info, checkout_url=None, proxy_url=None, log_cb=None):
+        stage2_target["url"] = checkout_url
+        return {"ok": True, "status": "success"}
+
+    monkeypatch.setattr(card_binding_service, "extract_native_checkout_url", fail_protocol)
+    monkeypatch.setattr(card_binding_service, "extract_checkout_url_with_cloak", mock_cloak_extract)
+
+    # 1. 验证 bind_card_with_cloak 内部自动接力
+    logs = []
+    def log_cb(msg):
+        logs.append(msg)
+
+    # 包装 build_cloak_driver 避免真实打开无头浏览器
+    class DummyPage:
+        current_url = "https://chatgpt.com/"
+        frames = []
+        locator = lambda *args: DummyLocator()
+        def goto(self, *args, **kwargs): pass
+        def wait_for_load_state(self, *args, **kwargs): pass
+        def evaluate(self, *args, **kwargs): return {}
+    class DummyLocator:
+        first = property(lambda s: s)
+        count = lambda s: 0
+        is_visible = lambda s: False
+        def select_option(self, *args, **kwargs): pass
+        def fill(self, *args, **kwargs): pass
+        def click(self, *args, **kwargs): pass
+    class DummyDriver:
+        current_url = "https://chatgpt.com/verify"
+        page = DummyPage()
+        def get(self, *args): pass
+        def set_page_load_timeout(self, *args): pass
+        def quit(self): pass
+
+    from core import cloakbrowser_driver
+    monkeypatch.setattr(cloakbrowser_driver, "build_cloak_driver", lambda proxy=None: (DummyDriver(), None))
+
+    parsed_card = card_binding_service.parse_card_input("4000123456789010|12|28|123")
+    res = card_binding_service.bind_card_with_cloak(
+        acc_id,
+        parsed_card,
+        log_cb=log_cb,
+    )
+    assert cloak_called.get("called") is True
+    assert cloak_called.get("email") == "fallback@example.com"
+    assert any("降级启用 CloakBrowser" in l for l in logs)
+    assert any("指纹浏览器提链成功" in l for l in logs)
+    assert res.get("ok") is True
+
 

@@ -381,7 +381,7 @@ def extract_native_checkout_url(
     json_body: dict[str, Any] = {
         "entry_point": "all_plans_pricing_modal",
         "plan_name": "chatgptplusplan",
-        "checkout_ui_mode": "custom",
+        "checkout_ui_mode": "hosted",
         "billing_details": {
             "country": country,
             "currency": currency,
@@ -408,12 +408,30 @@ def extract_native_checkout_url(
     if account_claim_id:
         headers["chatgpt-account-id"] = str(account_claim_id)
 
+    # 预检 accounts/check 以刷新优惠活动与账户上下文
+    try:
+        check_headers = dict(headers)
+        check_headers["x-openai-target-path"] = "/backend-api/accounts/check/v4-2023-04-27"
+        check_headers["x-openai-target-route"] = "/backend-api/accounts/check/v4-2023-04-27"
+        session.get("https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27", headers=check_headers, timeout=12)
+    except Exception:
+        pass
+
     resp = session.post(
         "https://chatgpt.com/backend-api/payments/checkout",
         json=json_body,
         headers=headers,
         timeout=35,
     )
+    if resp.status_code >= 400:
+        # 尝试 custom 模式重试一次
+        json_body["checkout_ui_mode"] = "custom"
+        resp = session.post(
+            "https://chatgpt.com/backend-api/payments/checkout",
+            json=json_body,
+            headers=headers,
+            timeout=35,
+        )
 
     if resp.status_code >= 400:
         err_msg = resp.text[:300]
@@ -445,6 +463,180 @@ def extract_native_checkout_url(
         "stripe_publishable_key": data.get("stripe_publishable_key"),
         "error": None,
     }
+
+
+def extract_checkout_url_with_cloak(
+    account: dict,
+    proxy_url: str = "",
+    log_cb: Any = None,
+) -> dict[str, Any]:
+    """
+    使用 CloakBrowser 指纹浏览器真实环境自动化获取 Stripe 结账链接。
+    当 HTTP 协议提链因 OpenAI Sentinel 风控被拦截 (HTTP 400 unusual activity / Cloudflare) 时，
+    自动使用账号所属国（如日本）住宅代理启动真实 Chromium 环境，完成登录鉴权并从页面原生发起结账提取。
+    """
+    def _emit(msg: str):
+        if log_cb:
+            try:
+                log_cb(msg)
+            except Exception:
+                pass
+
+    email = str(account.get("email") or "").strip()
+    if not email:
+        raise ValueError("账号缺少邮箱信息，无法通过指纹浏览器登录提链")
+
+    totp_secret = str(account.get("totp_secret") or "").strip()
+
+    _emit("启动 CloakBrowser 原生指纹浏览器 (阶段 1 提链环境)…")
+    from core.cloakbrowser_driver import build_cloak_driver
+    from core.roxy_registration import (
+        _submit_email_and_wait_next,
+        _type_otp,
+        _clear_otp_inputs,
+        _click_continue,
+        _fetch_chatgpt_session,
+    )
+    from core.email_provider import wait_for_otp
+
+    driver = None
+    try:
+        driver, _ = build_cloak_driver(proxy=proxy_url)
+        driver.set_page_load_timeout(60)
+
+        _emit(f"正在打开 ChatGPT 登录页以建立会话 ({email})…")
+        driver.get("https://chatgpt.com/auth/login")
+        time.sleep(2.5)
+
+        otp_after_ts = time.time() - 2.0
+        _emit("正在提交账号邮箱…")
+        next_state = _submit_email_and_wait_next(driver, email, attempts=2)
+
+        cur_url = str(driver.current_url or "")
+        if "error" in cur_url and "rate_limit" in cur_url:
+            raise RuntimeError("OpenAI 登录验证码发送过于频繁 (rate_limit_exceeded)，请稍后重试或在本地浏览器登录后粘贴 Stripe 链接")
+
+        if next_state == "otp" or "email-verification" in cur_url:
+            _emit("等待接收邮箱验证码 (OTP)…")
+            otp_code = wait_for_otp(email, after_ts=otp_after_ts, max_wait=40)
+            _emit("收到邮箱验证码，正在模拟输入…")
+            _clear_otp_inputs(driver)
+            _type_otp(driver, otp_code)
+            time.sleep(1.0)
+            try:
+                _click_continue(driver)
+            except Exception:
+                pass
+
+        # 动态轮询页面流转：处理 MFA / TOTP 挑战，等待最终落地 ChatGPT 首页
+        _emit("等待登录流转与安全校验…")
+        t_end = time.time() + 60
+        mfa_handled = False
+        while time.time() < t_end:
+            cur_url = str(driver.current_url or "")
+            if "error" in cur_url and "rate_limit" in cur_url:
+                raise RuntimeError("OpenAI 登录验证码发送过于频繁 (rate_limit_exceeded)，请稍后重试")
+
+            if "mfa-challenge" in cur_url and not mfa_handled:
+                if not totp_secret:
+                    raise RuntimeError("账号触发了双因子 TOTP 验证，但系统内未存储 totp_secret")
+                _emit("检测到双因子 TOTP 验证，正在计算动态令牌并自动提交…")
+                import pyotp
+                code = pyotp.TOTP(totp_secret).now()
+                driver.execute_script("""
+                    const code = arguments[0];
+                    const input = document.querySelector('input[name="code"], input[autocomplete="one-time-code"], input[maxlength="6"]');
+                    if (input) {
+                        input.focus();
+                        input.value = code;
+                        input.dispatchEvent(new Event('input', {bubbles: true}));
+                        input.dispatchEvent(new Event('change', {bubbles: true}));
+                    }
+                    const btn = document.querySelector('button[type="submit"], form button');
+                    if (btn) btn.click();
+                """, code)
+                mfa_handled = True
+                time.sleep(3)
+
+            if "chatgpt.com" in cur_url and "auth." not in cur_url and "mfa" not in cur_url:
+                break
+            time.sleep(2)
+
+        _emit("正在读取 ChatGPT 真实登录会话凭证…")
+        session_info = _fetch_chatgpt_session(driver, timeout=35)
+        access_token = session_info.get("accessToken") or account.get("access_token")
+        account_id = (session_info.get("account") or {}).get("id") or account.get("account_id")
+
+        if not access_token:
+            raise RuntimeError("指纹浏览器未能获取到有效 accessToken")
+
+        _emit("指纹环境已鉴权，正在向 OpenAI 发起原生结账申请…")
+        js_checkout = """
+        const done = arguments[arguments.length - 1];
+        const token = arguments[0];
+        const accountId = arguments[1];
+
+        const body = {
+            entry_point: 'all_plans_pricing_modal',
+            plan_name: 'chatgptplusplan',
+            checkout_ui_mode: 'hosted',
+            billing_details: {
+                country: 'JP',
+                currency: 'JPY'
+            },
+            promo_campaign: {
+                promo_campaign_id: 'plus-1-month-free',
+                is_coupon_from_query_param: false
+            }
+        };
+
+        fetch('/backend-api/payments/checkout', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + token,
+                'chatgpt-account-id': accountId || '',
+                'x-openai-target-path': '/backend-api/payments/checkout',
+                'x-openai-target-route': '/backend-api/payments/checkout'
+            },
+            body: JSON.stringify(body)
+        })
+        .then(async r => {
+            let data = {};
+            try { data = await r.json(); } catch(e) {}
+            done({ status: r.status, ok: r.ok, data: data });
+        })
+        .catch(err => {
+            done({ ok: false, error: String(err) });
+        });
+        """
+        res = driver.execute_async_script(js_checkout, access_token, str(account_id or ""))
+        if not res or not res.get("ok"):
+            # 尝试 custom 模式兜底
+            js_custom = js_checkout.replace("'checkout_ui_mode': 'hosted'", "'checkout_ui_mode': 'custom'")
+            res = driver.execute_async_script(js_custom, access_token, str(account_id or ""))
+
+        checkout_data = res.get("data") if (res and isinstance(res, dict)) else {}
+        url = checkout_data.get("url")
+        cs_id = checkout_data.get("checkout_session_id") or checkout_data.get("session_id") or checkout_data.get("id")
+        if not url and cs_id:
+            url = f"https://checkout.stripe.com/c/pay/{cs_id}"
+
+        if not url:
+            raise RuntimeError(f"浏览器内结账申请返回异常: {str(res)[:200]}")
+
+        return {
+            "ok": True,
+            "url": url,
+            "checkout_session_id": cs_id,
+            "error": None,
+        }
+    finally:
+        if driver:
+            try:
+                driver.quit()
+            except Exception:
+                pass
 
 
 # ==============================================================================
@@ -504,7 +696,10 @@ def bind_card_with_cloak(
         _emit(f"[阶段 1/2] 正在通过账号属地代理 ({origin_country}) 申请 Stripe 试用会话…")
         _emit(f"提链代理路由: {stage1_proxy.split('@')[-1] if '@' in stage1_proxy else (stage1_proxy or '直连')}")
 
+        protocol_error = None
+        # 1A. 优先尝试速度最快的原生协议提链
         try:
+            _emit("尝试原生 HTTP 协议极速提链…")
             checkout_data = extract_native_checkout_url(
                 access_token=token,
                 proxy_url=stage1_proxy,
@@ -523,11 +718,36 @@ def bind_card_with_cloak(
                 return {"ok": True, "already_paid": True, "message": "账号已是 Plus 会员"}
 
             target_checkout_url = checkout_data.get("url")
-            _emit(f"[阶段 1/2] 提链成功，结账链接就绪: {target_checkout_url[:60]}…")
+            _emit(f"[阶段 1/2] 协议提链成功，结账链接就绪: {target_checkout_url[:60]}…")
         except Exception as exc:
-            err = f"获取支付会话失败: {exc}。（提示：若遇 OpenAI 临时风控，您可在日本 IP 浏览器中点击试用，并将生成的 Stripe 结账链接直接粘贴到本弹窗，系统将秒开美区指纹代绑！）"
-            _emit(err)
-            return {"ok": False, "error": err}
+            protocol_error = str(exc)
+            _emit(f"协议提链受风控拦截 ({protocol_error})，自动降级启用 CloakBrowser 指纹浏览器真实环境提链…")
+
+        # 1B. 协议被拦截时，自动降级启用 CloakBrowser 指纹浏览器真实环境提链
+        if not target_checkout_url:
+            try:
+                cloak_checkout_data = extract_checkout_url_with_cloak(
+                    account=acc,
+                    proxy_url=stage1_proxy,
+                    log_cb=_emit,
+                )
+                if cloak_checkout_data.get("already_paid"):
+                    _emit("检测到账号已经是 Plus 会员，自动校准状态")
+                    db.update_account_card_binding(account_id, {
+                        "ok": True,
+                        "status": "success",
+                        "message": "账号已是 Plus 会员",
+                        "card_brand": card_info.get("brand"),
+                        "card_last4": card_info.get("last4"),
+                    })
+                    return {"ok": True, "already_paid": True, "message": "账号已是 Plus 会员"}
+
+                target_checkout_url = cloak_checkout_data.get("url")
+                _emit(f"[阶段 1/2] 指纹浏览器提链成功，结账链接就绪: {target_checkout_url[:60]}…")
+            except Exception as cloak_exc:
+                err = f"获取支付会话失败 (协议: {protocol_error}; 指纹浏览器: {cloak_exc})。（提示：您也可在本地日本 IP 浏览器中点击试用，并将生成的 Stripe 结账链接直接粘贴到本弹窗，系统将秒开美区指纹代绑！）"
+                _emit(err)
+                return {"ok": False, "error": err}
 
     if not target_checkout_url:
         err = "未获得有效 Stripe 结账链接"
@@ -782,7 +1002,29 @@ def enqueue_card_binding(
                 "card_info": parsed,
             }
         except Exception as exc:
-            return {"accepted": False, "error": str(exc)}
+            # 协议失败，尝试指纹浏览器降级提链
+            try:
+                res_cloak = extract_checkout_url_with_cloak(account=acc, proxy_url=p)
+                if res_cloak.get("url"):
+                    db.update_account_extract(account_id, {
+                        "ok": True,
+                        "status": "success",
+                        "link_type": "card",
+                        "result": {
+                            "long_url": res_cloak["url"],
+                            "payment_method": "card",
+                            "expires_at": int(time.time()) + 86400,
+                        }
+                    })
+                return {
+                    "accepted": True,
+                    "mode": "link_only",
+                    "url": res_cloak.get("url"),
+                    "already_paid": res_cloak.get("already_paid"),
+                    "card_info": parsed,
+                }
+            except Exception as cloak_exc:
+                return {"accepted": False, "error": f"协议提链受阻: {exc}；指纹浏览器提链失败: {cloak_exc}"}
 
     # 自动绑卡模式
     db.mark_account_card_binding_running(account_id)
