@@ -3331,6 +3331,9 @@ function smsConfigSectionForKey(key) {
   if (['SMS_PROVIDER','SMS_COUNTRY','SMS_SERVICE','SMS_MAX_RETRIES','SMS_CODE_WAIT'].includes(key)) {
     return ['通用接码', '接码通道选择、国家/服务代码、等待和重试参数；H 通道可复用 SMS_SERVICE/SMS_COUNTRY 作为 projectId/country'];
   }
+  if (key.startsWith('HERO_') || key.startsWith('HERO_SMS_')) {
+    return ['Hero-SMS', 'Hero-SMS (hero-sms.com) 平台配置，基于标准 SMS-Activate 协议'];
+  }
   if (key === 'SMS_API_KEY') return ['GrizzlySMS', 'GrizzlySMS 平台 API Key 配置'];
   if (key.startsWith('H_')) return ['H 接码', 'H_API.md 本地 H 取号服务配置；项目ID/国家留空时复用通用字段'];
   if (key.startsWith('L_')) return ['L 接码', 'L_API.md 本地 L 取号服务配置'];
@@ -3401,7 +3404,7 @@ function renderConfigFields(fields) {
       CONFIG_SMS_ACTIVE_SECTION,
       v => { CONFIG_SMS_ACTIVE_SECTION = v; },
       smsConfigSectionForKey,
-      ['通用接码', 'GrizzlySMS', 'H 接码', 'L 接码', '其他接码配置'],
+      ['通用接码', 'Hero-SMS', 'GrizzlySMS', 'H 接码', 'L 接码', '其他接码配置'],
       'sms-config-section'
     );
   }

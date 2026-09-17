@@ -525,8 +525,15 @@ CODEX_OAUTH_DRIVER = "browser_use"  # 可选 protocol / roxy / cloak / browser_u
 接码配置在 `config/codex.py`：
 
 ```python
-SMS_PROVIDER = "l"        # 可选 grizzly / l / h
-SMS_API_KEY = "你的 GrizzlySMS key"  # 仅 GrizzlySMS 需要
+SMS_PROVIDER = "hero"     # 可选 hero / grizzly / l / h
+
+# 若使用 Hero-SMS：
+HERO_SMS_API_KEY = "你的 Hero-SMS key"
+HERO_SMS_SERVICE = "dr"   # Hero-SMS 上的 OpenAI 代码为 dr
+HERO_SMS_COUNTRY = "187"  # 国家代码（如 187=美国）
+
+# 若使用 GrizzlySMS：
+SMS_API_KEY = "你的 GrizzlySMS key"
 SMS_SERVICE = "openai"
 SMS_COUNTRY = "国家代码"
 SMS_MAX_RETRIES = 10

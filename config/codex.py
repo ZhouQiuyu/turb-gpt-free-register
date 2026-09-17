@@ -91,6 +91,7 @@ CPA_SAVE_CALLBACK_RECEIPT: bool = True
 # ============================================================
 # 接码平台（手机短信验证用）
 # SMS_PROVIDER:
+#   "hero"    = Hero-SMS，接口说明见 https://hero-sms.com/cn/api
 #   "grizzly" = GrizzlySMS，接口说明见 https://api.grizzlysms.com
 #   "l"       = 本地 L 取号服务，接口说明见 L_API.md
 #   "h"       = 本地 H 取号服务，接口说明见 H_API.md
@@ -128,6 +129,27 @@ SMS_REQUEST_TIMEOUT: int = 30
 
 
 # ============================================================
+# Hero-SMS 接码服务（SMS_PROVIDER="hero" 时使用）
+# 文档：https://hero-sms.com/cn/api
+# ============================================================
+
+# Hero-SMS API 基址（GET handler）
+HERO_SMS_API_BASE: str = "https://hero-sms.com/stubs/handler_api.php"
+
+# Hero-SMS API 密钥（在 hero-sms.com 个人中心获取）
+HERO_SMS_API_KEY: str = env_str("HERO_SMS_API_KEY", "")
+
+# Hero-SMS 服务代码：OpenAI 对应 "dr"；留空则回退使用通用的 SMS_SERVICE
+HERO_SMS_SERVICE: str = "dr"
+
+# Hero-SMS 国家代码：例如美国=187（或根据 hero-sms 国家列表填写）；留空则回退使用 SMS_COUNTRY
+HERO_SMS_COUNTRY: str = ""
+
+# Hero-SMS 单个号愿意支付的最高价格（留空=不限）。透传给 getNumber 的 maxPrice。
+HERO_SMS_MAX_PRICE: str = ""
+
+
+# ============================================================
 # H 取号服务（SMS_PROVIDER="h" 时使用）
 # ============================================================
 
@@ -161,4 +183,4 @@ L_ADMIN_AUTH_CODE: str = env_str("L_ADMIN_AUTH_CODE", "")
 L_PHONE_PREFIX: str = ""
 
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'ENABLE_CODEX_AUTO': 'bool', 'CODEX_OAUTH_DRIVER': 'str', 'CODEX_AUTH_URL_SOURCE': 'str', 'CPA_MANAGEMENT_URL': 'str', 'CPA_MANAGEMENT_KEY': 'str', 'CPA_REQUEST_TIMEOUT': 'int', 'CPA_CALLBACK_SUBMIT_RETRIES': 'int', 'CPA_CALLBACK_SUBMIT_RETRY_DELAY': 'int', 'CPA_SAVE_CALLBACK_RECEIPT': 'bool', 'SMS_PROVIDER': 'str', 'SMS_COUNTRY': 'str', 'SMS_SERVICE': 'str', 'SMS_MAX_RETRIES': 'int', 'SMS_CODE_WAIT': 'int', 'SMS_API_KEY': 'str', 'H_API_BASE': 'str', 'H_ADMIN_AUTH_CODE': 'str', 'H_PHONE_PREFIX': 'str', 'H_PHONE_ACQUIRE_MODE': 'str', 'L_API_BASE': 'str', 'L_ADMIN_AUTH_CODE': 'str', 'L_PHONE_PREFIX': 'str'})
+apply_env_overrides(globals(), {'ENABLE_CODEX_AUTO': 'bool', 'CODEX_OAUTH_DRIVER': 'str', 'CODEX_AUTH_URL_SOURCE': 'str', 'CPA_MANAGEMENT_URL': 'str', 'CPA_MANAGEMENT_KEY': 'str', 'CPA_REQUEST_TIMEOUT': 'int', 'CPA_CALLBACK_SUBMIT_RETRIES': 'int', 'CPA_CALLBACK_SUBMIT_RETRY_DELAY': 'int', 'CPA_SAVE_CALLBACK_RECEIPT': 'bool', 'SMS_PROVIDER': 'str', 'SMS_COUNTRY': 'str', 'SMS_SERVICE': 'str', 'SMS_MAX_RETRIES': 'int', 'SMS_CODE_WAIT': 'int', 'SMS_API_KEY': 'str', 'HERO_SMS_API_KEY': 'str', 'HERO_SMS_API_BASE': 'str', 'HERO_SMS_SERVICE': 'str', 'HERO_SMS_COUNTRY': 'str', 'HERO_SMS_MAX_PRICE': 'str', 'H_API_BASE': 'str', 'H_ADMIN_AUTH_CODE': 'str', 'H_PHONE_PREFIX': 'str', 'H_PHONE_ACQUIRE_MODE': 'str', 'L_API_BASE': 'str', 'L_ADMIN_AUTH_CODE': 'str', 'L_PHONE_PREFIX': 'str'})

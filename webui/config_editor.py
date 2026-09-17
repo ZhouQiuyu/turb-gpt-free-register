@@ -655,15 +655,15 @@ EDITABLE_FIELDS = [
 
     {
         "key": "SMS_PROVIDER", "file": "codex.py", "type": "str", "group": "接码平台",
-        "label": "接码通道", "help": "grizzly / l / h；l 使用 L_API.md，h 使用 H_API.md 定义的本地取号服务",
+        "label": "接码通道", "help": "hero / grizzly / l / h；hero 为 Hero-SMS，grizzly 为 GrizzlySMS，l 使用 L_API.md，h 使用 H_API.md",
     },
     {
         "key": "SMS_COUNTRY", "file": "codex.py", "type": "str", "group": "接码平台",
-        "label": "国家代码", "help": "传给接码平台的 country；GrizzlySMS 常用：美国=187；H 通道作为 H_API.md 的 country",
+        "label": "国家代码", "help": "传给接码平台的 country；Hero-SMS/GrizzlySMS 常用：美国=187；H 通道作为 H_API.md 的 country",
     },
     {
         "key": "SMS_SERVICE", "file": "codex.py", "type": "str", "group": "接码平台",
-        "label": "服务/项目代码", "help": "GrizzlySMS/L 作为 service；H 通道作为 H_API.md 的 projectId",
+        "label": "服务/项目代码", "help": "Hero-SMS/GrizzlySMS/L 作为 service（Hero-SMS OpenAI 常用 dr）；H 通道作为 H_API.md 的 projectId",
     },
     {
         "key": "SMS_MAX_RETRIES", "file": "codex.py", "type": "int", "group": "接码平台",
@@ -672,6 +672,27 @@ EDITABLE_FIELDS = [
     {
         "key": "SMS_CODE_WAIT", "file": "codex.py", "type": "int", "group": "接码平台",
         "label": "单号等短信(秒)", "help": "单个号等待短信到达的最长秒数，超时则换号",
+    },
+    {
+        "key": "HERO_SMS_API_KEY", "file": "codex.py", "type": "str", "group": "接码平台",
+        "label": "Hero-SMS API密钥", "help": "Hero-SMS 平台 API Key，保存在 .env（HERO_SMS_API_KEY），不写回 config/*.py",
+        "storage": "env", "secret": True,
+    },
+    {
+        "key": "HERO_SMS_API_BASE", "file": "codex.py", "type": "str", "group": "接码平台",
+        "label": "Hero-SMS API基址", "help": "Hero-SMS API handler 地址，默认 https://hero-sms.com/stubs/handler_api.php",
+    },
+    {
+        "key": "HERO_SMS_SERVICE", "file": "codex.py", "type": "str", "group": "接码平台",
+        "label": "Hero-SMS 服务代码", "help": "OpenAI 对应 'dr'；留空则复用通用服务代码",
+    },
+    {
+        "key": "HERO_SMS_COUNTRY", "file": "codex.py", "type": "str", "group": "接码平台",
+        "label": "Hero-SMS 国家代码", "help": "例如美国填 187；留空则复用通用国家代码",
+    },
+    {
+        "key": "HERO_SMS_MAX_PRICE", "file": "codex.py", "type": "str", "group": "接码平台",
+        "label": "Hero-SMS 最高限价", "help": "单号愿意支付的最高价格，留空=不限",
     },
     {
         "key": "SMS_API_KEY", "file": "codex.py", "type": "str", "group": "接码平台",

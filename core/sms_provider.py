@@ -8,6 +8,7 @@
     3. complete() / cancel()  setStatus 标记完成(6) / 取消(8)
 
 当前支持：
+    - Hero-SMS：GET 文本/JSON 接口（SMS-Activate 兼容），文档 https://hero-sms.com/cn/api
     - GrizzlySMS：GET 文本接口，文档 https://api.grizzlysms.com
     - L：本地 JSON 管理接口，文档 L_API.md
     - H：本地 JSON 管理接口，文档 H_API.md
@@ -95,6 +96,60 @@ def _request_grizzly(http: CurlSession, params: dict) -> str:
         raise SmsProviderError("激活 ID 不存在（NO_ACTIVATION）")
     if text.startswith("The service is prohibited"):
         raise SmsProviderError(f"该服务被平台禁售：{text}")
+
+    return text
+
+
+def _request_hero(http: CurlSession, params: dict) -> str:
+    """
+    发一个 Hero-SMS API 请求，返回去空白的响应文本。
+    Hero-SMS 遵循 SMS-Activate / handler_api.php 协议，统一识别错误码并抛出异常。
+    """
+    api_key = str(getattr(_cfg, "HERO_SMS_API_KEY", "") or getattr(_cfg, "SMS_API_KEY", "") or "").strip()
+    if not api_key:
+        raise SmsProviderError("Hero-SMS API key 不能为空，请在配置或 .env 中填写 HERO_SMS_API_KEY")
+
+    base_url = str(getattr(_cfg, "HERO_SMS_API_BASE", "") or "https://hero-sms.com/stubs/handler_api.php").strip()
+    base_params = {"api_key": api_key}
+    base_params.update(params)
+    resp = http.get(base_url, params=base_params)
+    text = (resp.text or "").strip()
+
+    if resp.status_code != 200:
+        try:
+            err_json = resp.json()
+            if isinstance(err_json, dict):
+                title = str(err_json.get("title") or err_json.get("error") or "").strip()
+                details = str(err_json.get("details") or err_json.get("message") or "").strip()
+                info = err_json.get("info")
+                info_msg = ""
+                if isinstance(info, dict):
+                    info_msg = str(info.get("message") or info.get("code") or "")
+                combined = f"{title} {details} {info_msg}".strip()
+                if title == "BAD_KEY" or "unauthorized" in combined.lower():
+                    raise SmsProviderError("Hero-SMS API key 无效（BAD_KEY）")
+                if title in ("NO_BALANCE", "EARLY_CANCEL_NO_BALANCE") or "balance" in combined.lower():
+                    raise SmsNoBalanceError("Hero-SMS 余额不足（NO_BALANCE），请充值")
+                if title == "NO_NUMBERS" or "numbers" in combined.lower():
+                    raise SmsNoNumbersError("Hero-SMS 暂无可用号码（NO_NUMBERS）")
+                raise SmsProviderError(f"Hero-SMS HTTP {resp.status_code}: {combined}")
+        except (SmsProviderError, SmsNoBalanceError, SmsNoNumbersError):
+            raise
+        except Exception:
+            pass
+        raise SmsProviderError(f"Hero-SMS HTTP {resp.status_code}: {text[:200]}")
+
+    # 识别标准文本错误码
+    if text == "BAD_KEY":
+        raise SmsProviderError("Hero-SMS API key 无效（BAD_KEY）")
+    if text in ("NO_BALANCE", "EARLY_CANCEL_NO_BALANCE"):
+        raise SmsNoBalanceError("Hero-SMS 余额不足（NO_BALANCE），请充值")
+    if text == "NO_NUMBERS":
+        raise SmsNoNumbersError("Hero-SMS 暂无可用号码（NO_NUMBERS）")
+    if text in ("BAD_ACTION", "BAD_SERVICE", "BAD_STATUS"):
+        raise SmsProviderError(f"Hero-SMS 请求参数错误：{text}")
+    if text == "NO_ACTIVATION":
+        raise SmsProviderError("Hero-SMS 激活 ID 不存在（NO_ACTIVATION）")
 
     return text
 
@@ -382,6 +437,32 @@ def acquire_number(
             )
             return activation_id, phone
 
+        if _provider() in ("hero", "hero-sms", "herosms"):
+            service_code = str(service or getattr(_cfg, "HERO_SMS_SERVICE", "") or _cfg.SMS_SERVICE or "dr").strip()
+            country_code = str(country or getattr(_cfg, "HERO_SMS_COUNTRY", "") or _cfg.SMS_COUNTRY or "").strip()
+            max_price = str(getattr(_cfg, "HERO_SMS_MAX_PRICE", "") or getattr(_cfg, "SMS_MAX_PRICE", "") or "").strip()
+            params = {
+                "action": "getNumber",
+                "service": service_code,
+            }
+            if country_code:
+                params["country"] = country_code
+            if max_price:
+                params["maxPrice"] = max_price
+
+            text = _request_hero(http, params)
+            if not text.startswith("ACCESS_NUMBER:"):
+                raise SmsProviderError(f"Hero-SMS getNumber 非预期响应：{text[:200]}")
+            parts = text.split(":")
+            if len(parts) < 3:
+                raise SmsProviderError(f"Hero-SMS getNumber 响应格式异常：{text[:200]}")
+            activation_id = parts[1].strip()
+            raw_phone = parts[2].strip()
+            phone = _normalize_phone_digits(raw_phone)
+            _ACQUIRED_AT[activation_id] = time.time()
+            logger.info(f"[SMS:Hero] 取号成功：id={activation_id}, phone=+{phone}")
+            return activation_id, phone
+
         params = {
             "action": "getNumber",
             "service": service or _cfg.SMS_SERVICE,
@@ -429,8 +510,8 @@ def wait_for_sms_code(
     """
     own_http = http is None
     http = http or _http()
-    deadline = time.time() + (max_wait or _cfg.SMS_CODE_WAIT)
-    interval = poll_interval or _cfg.SMS_POLL_INTERVAL
+    deadline = time.time() + (_cfg.SMS_CODE_WAIT if max_wait is None else max_wait)
+    interval = _cfg.SMS_POLL_INTERVAL if poll_interval is None else poll_interval
     try:
         provider = _provider()
         total_wait = max_wait or _cfg.SMS_CODE_WAIT
@@ -481,6 +562,23 @@ def wait_for_sms_code(
                 time.sleep(interval)
                 continue
 
+            if provider in ("hero", "hero-sms", "herosms"):
+                text = _request_hero(http, {"action": "getStatus", "id": activation_id})
+                if text.startswith("STATUS_OK:"):
+                    code = text.split(":", 1)[1].strip()
+                    logger.info(f"[SMS:Hero] 第 {round_no} 轮收到验证码：{code}")
+                    return code
+                if text == "STATUS_CANCEL":
+                    raise SmsProviderError("Hero-SMS 激活已被取消（STATUS_CANCEL）")
+                # STATUS_WAIT_CODE / STATUS_WAIT_RETRY:* / STATUS_WAIT_RESEND → 继续等
+                remaining = max(0, int(deadline - time.time()))
+                logger.info(
+                    f"[SMS:Hero] 第 {round_no} 轮未收到验证码，状态={text}，"
+                    f"{interval}s 后重试（剩余 {remaining}s）"
+                )
+                time.sleep(interval)
+                continue
+
             text = _request_grizzly(http, {"action": "getStatus", "id": activation_id})
 
             if text.startswith("STATUS_OK:"):
@@ -515,6 +613,8 @@ def set_status(activation_id: str, status: int, http: CurlSession | None = None)
     own_http = http is None
     http = http or _http()
     try:
+        if _provider() in ("hero", "hero-sms", "herosms"):
+            return _request_hero(http, {"action": "setStatus", "status": str(status), "id": activation_id})
         if _provider() == "l":
             logger.debug(f"[SMS:L] 忽略状态设置 id={activation_id}, status={status}")
             return "OK"
@@ -526,6 +626,14 @@ def set_status(activation_id: str, status: int, http: CurlSession | None = None)
 
 def complete(activation_id: str, http: CurlSession | None = None) -> None:
     """标记激活完成（status=6）。失败只告警不抛，避免影响主流程。"""
+    if _provider() in ("hero", "hero-sms", "herosms"):
+        try:
+            set_status(activation_id, 6, http=http)
+            logger.info(f"[SMS:Hero] 已完成 activation_id={activation_id}")
+            _ACQUIRED_AT.pop(activation_id, None)
+        except Exception as exc:
+            logger.warning(f"[SMS:Hero] 标记完成失败（不影响结果）：{exc}")
+        return
     if _provider() == "l":
         logger.info(f"[SMS:L] 已完成 id={activation_id}")
         _ACQUIRED_AT.pop(activation_id, None)
@@ -592,6 +700,16 @@ def cancel(activation_id: str, http: CurlSession | None = None, background: bool
 
     失败只告警不抛，不影响主流程。
     """
+    if _provider() in ("hero", "hero-sms", "herosms"):
+        # Hero-SMS 遵循标准 SMS-Activate，未收到短信时可立即取消释放，无需等待 125s
+        try:
+            set_status(activation_id, 8, http=http)
+            logger.info(f"[SMS:Hero] 已取消释放号码 activation_id={activation_id}")
+        except Exception as exc:
+            logger.warning(f"[SMS:Hero] 释放号码失败（不影响主流程）：id={activation_id}, {type(exc).__name__}: {exc}")
+        finally:
+            _ACQUIRED_AT.pop(activation_id, None)
+        return
     if _provider() == "l":
         try:
             _release_l_number(activation_id, http=http)
