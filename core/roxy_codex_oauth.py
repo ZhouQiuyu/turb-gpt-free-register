@@ -292,6 +292,10 @@ def _fill_mfa_challenge_if_present(driver, email: str, timeout: int = 15) -> boo
             if not _is_mfa_challenge_page(driver):
                 time.sleep(0.4)
                 continue
+            fresh_code = _account_totp_code_for_email(email) or code
+            typed = False
+
+            # 1. 优先通过 DOM 脚本匹配精准的 input 与 button
             result = driver.execute_script(r"""
             const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
               && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'
@@ -309,29 +313,119 @@ def _fill_mfa_challenge_if_present(driver, email: str, timeout: int = 15) -> boo
             if (!button) return {ok:false, reason:'missing_submit'};
             return {ok:true, input, button};
             """) or {}
-            if not result.get("ok"):
-                reason = result.get("reason", "unknown")
+
+            target_input = result.get("input")
+            target_button = result.get("button")
+
+            if target_input and hasattr(target_input, "send_keys"):
+                try:
+                    _human_type_text(driver, target_input, fresh_code, clear=True)
+                    typed = True
+                except Exception as exc:
+                    logger.debug("[Codex][Browser] _human_type_text 写入 TOTP 失败，尝试备用方式：%s", exc)
+
+            # 2. 备用方式：直接通过 CSS 选择器查找输入框
+            if not typed:
+                from selenium.webdriver.common.by import By
+                for sel in [
+                    "form[action*='/mfa-challenge' i] input[name='code']",
+                    "form[action*='/mfa-challenge' i] input[autocomplete='one-time-code']",
+                    "form[action*='/mfa-challenge' i] input[maxlength='6']",
+                    "input[name='code']",
+                    "input[autocomplete='one-time-code']",
+                    "input[maxlength='6']",
+                    "input[type='tel']",
+                    "input[inputmode='numeric']",
+                    "input[type='text']",
+                ]:
+                    try:
+                        els = [e for e in driver.find_elements(By.CSS_SELECTOR, sel) if hasattr(e, "send_keys")]
+                        if els:
+                            _human_type_text(driver, els[0], fresh_code, clear=True)
+                            target_input = els[0]
+                            typed = True
+                            break
+                    except Exception:
+                        pass
+
+            # 3. 兜底方式：JS 原生 setter 注入 (兼容 React 合成事件)
+            if not typed:
+                js_fill = driver.execute_script(r"""
+                const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+                  && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'
+                  && !el.disabled && !el.readOnly;
+                let form = [...document.querySelectorAll('form')].find(f => /\/mfa-challenge/i.test(f.getAttribute('action') || ''));
+                const root = form || document;
+                const input = [...root.querySelectorAll('input[name="code"], input[autocomplete="one-time-code"], input[maxlength="6"], input[type="text"], input[type="tel"]')].find(visible);
+                if (!input) return false;
+                input.focus();
+                try {
+                    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                    nativeSetter.call(input, arguments[0]);
+                } catch(e) {
+                    input.value = arguments[0];
+                }
+                input.dispatchEvent(new Event('input', {bubbles: true}));
+                input.dispatchEvent(new Event('change', {bubbles: true}));
+                return true;
+                """, fresh_code)
+                if js_fill:
+                    typed = True
+
+            if not typed:
+                reason = result.get("reason", "missing_code_input")
                 if reason != last_reason:
-                    logger.debug("[Codex][Browser] 等待 MFA 输入元素：%s", reason)
+                    logger.info("[Codex][Browser] 等待 MFA 输入元素：%s", reason)
                     last_reason = reason
                 time.sleep(0.4)
                 continue
-            fresh_code = _account_totp_code_for_email(email) or code
-            _human_type_text(driver, result.get("input"), fresh_code, clear=True)
+
             human_delay("otp_input")
             clicked = False
-            if result.get("button"):
+            if target_button and hasattr(target_button, "click"):
                 try:
-                    _human_click(driver, result.get("button"), label="codex_mfa_submit")
+                    _human_click(driver, target_button, label="codex_mfa_submit")
                     clicked = True
                 except Exception:
                     pass
+
+            if not clicked:
+                from selenium.webdriver.common.by import By
+                for b_sel in [
+                    "form[action*='/mfa-challenge' i] button[type='submit']",
+                    "button[data-dd-action-name='Continue']",
+                    "button[type='submit']",
+                    "form button",
+                ]:
+                    try:
+                        btns = driver.find_elements(By.CSS_SELECTOR, b_sel)
+                        if btns:
+                            _human_click(driver, btns[0], label="codex_mfa_submit")
+                            clicked = True
+                            break
+                    except Exception:
+                        pass
+
             if not clicked:
                 try:
-                    from selenium.webdriver.common.keys import Keys
-                    result.get("input").send_keys(Keys.ENTER)
+                    driver.execute_script(r"""
+                    let form = [...document.querySelectorAll('form')].find(f => /\/mfa-challenge/i.test(f.getAttribute('action') || ''));
+                    const root = form || document;
+                    const button = [...root.querySelectorAll('button[type="submit"], button[data-dd-action-name="Continue"], button')].find(el => el.offsetWidth > 0 || el.offsetHeight > 0);
+                    if (button) button.click();
+                    """)
+                    clicked = True
                 except Exception:
                     pass
+
+            if not clicked and target_input and hasattr(target_input, "send_keys"):
+                try:
+                    from selenium.webdriver.common.keys import Keys
+                    target_input.send_keys(Keys.ENTER)
+                    clicked = True
+                except Exception:
+                    pass
+
             logger.info("[Codex][Browser] 已填写并提交 MFA 验证码：%s", email)
             wait_end = time.time() + 12
             while time.time() < wait_end:
@@ -340,7 +434,7 @@ def _fill_mfa_challenge_if_present(driver, email: str, timeout: int = 15) -> boo
                 time.sleep(0.4)
             return True
         except Exception as exc:
-            logger.debug("[Codex][Browser] MFA challenge 处理失败：%s", str(exc)[:160])
+            logger.warning("[Codex][Browser] MFA challenge 处理异常：%s", exc)
             time.sleep(0.5)
     logger.warning("[Codex][Browser] 等待并填写 MFA challenge 超时（%ss）：%s", timeout, email)
     return False

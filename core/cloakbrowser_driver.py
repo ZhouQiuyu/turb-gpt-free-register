@@ -407,7 +407,36 @@ class CloakSeleniumDriver:
         if element is not None:
             return CloakElement(page, handle=element)
         try:
-            return handle.json_value()
+            val = handle.json_value()
+            if isinstance(val, dict) and any(str(v).startswith("ref: <") for v in val.values()):
+                try:
+                    props = handle.get_properties()
+                    out = {}
+                    for k, prop_handle in props.items():
+                        el = prop_handle.as_element()
+                        if el is not None:
+                            out[k] = CloakElement(page, handle=el)
+                        else:
+                            out[k] = prop_handle.json_value()
+                    return out
+                except Exception:
+                    pass
+            elif isinstance(val, list) and any(str(v).startswith("ref: <") for v in val):
+                try:
+                    props = handle.get_properties()
+                    out = []
+                    for idx in range(len(val)):
+                        prop_handle = props.get(str(idx))
+                        if prop_handle is not None:
+                            el = prop_handle.as_element()
+                            if el is not None:
+                                out.append(CloakElement(page, handle=el))
+                                continue
+                            out.append(prop_handle.json_value())
+                    return out
+                except Exception:
+                    pass
+            return val
         except Exception as exc:
             msg = str(exc)
             if "Execution context was destroyed" in msg or "navigation" in msg.lower():
