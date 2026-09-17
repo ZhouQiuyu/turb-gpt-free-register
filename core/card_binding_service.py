@@ -85,10 +85,12 @@ def parse_card_input(raw_text: str) -> dict[str, Any]:
     """
     智能解析任意常见卡密输入格式。
     支持格式：
+      - 4859540179366553----2030/6----383----NIKKI BRYANT----2182 E 78th St,Chicago 60649,US (卡商常用格式)
       - 4000123456789010|12|28|123
       - 4000123456789010 12/28 123
       - 4000123456789010/12/2028/123/97201
-      - 带描述文本：Card: 4000... Exp: 12/28 CVV: 123
+      - 4859540179366553----2030----06----383
+      - 带描述文本：Card: 4000... Exp: 12/28 CVV: 123 Name: John Doe
     返回归一化字典：
       {
         "card_number": "4000123456789010",
@@ -98,6 +100,9 @@ def parse_card_input(raw_text: str) -> dict[str, Any]:
         "cvc": "123",
         "brand": "Visa",
         "country": "US",
+        "country_name": "United States",
+        "cardholder_name": "NIKKI BRYANT" (若提供),
+        "raw_address": "..." (若提供),
         "postal_code": "97201" (若输入附带),
         "valid": True/False,
         "error": None | str
@@ -107,10 +112,11 @@ def parse_card_input(raw_text: str) -> dict[str, Any]:
     if not text:
         return {"valid": False, "error": "卡密内容为空"}
 
-    lines = [l.strip() for l in text.splitlines() if l.strip()]
-    first_line = lines[0] if lines else text
+    # 1. 规范化连字符分隔符: 将 ---- 或 --- 或 -- 替换为标准 |
+    normalized = re.sub(r"\s*--+\s*", "|", text)
+    first_line = normalized.splitlines()[0].strip() if normalized.splitlines() else normalized
 
-    card_match = re.search(r"\b([3-6]\d{12,18})\b", text)
+    card_match = re.search(r"\b([3-6]\d{12,18})\b", normalized)
     if not card_match:
         no_space = re.sub(r"[\s-]", "", first_line)
         card_match = re.search(r"([3-6]\d{12,18})", no_space)
@@ -123,54 +129,126 @@ def parse_card_input(raw_text: str) -> dict[str, Any]:
     brand = identify_card_brand(card_number)
     country_code, country_name = identify_card_country(card_number)
 
-    remaining = text.replace(card_number, " ", 1)
+    def parse_exp(val: str) -> tuple[str | None, str | None]:
+        val = val.strip()
+        m = re.match(r"^(\d{1,4})\s*[/|-]\s*(\d{1,4})$", val)
+        if m:
+            a, b = m.group(1), m.group(2)
+            # a 是 4 位年份 (如 2030/6)
+            if len(a) == 4 and 2020 <= int(a) <= 2050:
+                if 1 <= int(b) <= 12:
+                    return f"{int(b):02d}", a
+            # b 是 4 位年份 (如 06/2030)
+            if len(b) == 4 and 2020 <= int(b) <= 2050:
+                if 1 <= int(a) <= 12:
+                    return f"{int(a):02d}", b
+            ia, ib = int(a), int(b)
+            # 两位数年份/月份组合 (如 30/06 或 06/30)
+            if ia > 12 and 1 <= ib <= 12:
+                return f"{ib:02d}", f"20{ia:02d}" if ia < 100 else str(ia)
+            if 1 <= ia <= 12:
+                return f"{ia:02d}", f"20{ib:02d}" if ib < 100 else str(ib)
+        return None, None
 
     exp_month = ""
     exp_year = ""
     cvc = ""
+    cardholder_name = ""
+    raw_address = ""
     hint_zip = ""
 
-    # 1. 查找 MM/YY 或 MM/YYYY 格式
-    exp_match = re.search(r"\b(0[1-9]|1[0-2])\s*[/|-]\s*(20\d{2}|\d{2})\b", remaining)
-    if exp_match:
-        exp_month = exp_match.group(1)
-        raw_year = exp_match.group(2)
-        exp_year = f"20{raw_year}" if len(raw_year) == 2 else raw_year
-        remaining = remaining.replace(exp_match.group(0), " ", 1)
-    else:
-        parts = [p.strip() for p in re.split(r"[|/,\s]+", first_line) if p.strip()]
+    # 优先根据 | 分隔符（原生 | 或 ---- 替换而来）切分提取结构化字段
+    if "|" in first_line:
+        parts = [p.strip() for p in first_line.split("|") if p.strip()]
         token_parts = [p for p in parts if p != card_number]
-        if len(token_parts) >= 3:
-            p0, p1, p2 = token_parts[0], token_parts[1], token_parts[2]
-            if p0.isdigit() and 1 <= int(p0) <= 12 and p1.isdigit():
-                exp_month = f"{int(p0):02d}"
-                exp_year = f"20{p1}" if len(p1) == 2 else p1
-                cvc = p2
-                remaining = ""
-                if len(token_parts) >= 4 and token_parts[3].isdigit() and len(token_parts[3]) == 5:
-                    hint_zip = token_parts[3]
+        idx = 0
+        while idx < len(token_parts):
+            p = token_parts[idx]
+            # 1. 尝试解析为日期 (如 2030/6, 06/2030, 06/30)
+            if not exp_month:
+                m_mo, m_yr = parse_exp(p)
+                if m_mo and m_yr:
+                    exp_month, exp_year = m_mo, m_yr
+                    idx += 1
+                    continue
+                # 独立年月 token (如 '2030' 紧邻 '06' 或 '06' 紧邻 '2030')
+                if idx + 1 < len(token_parts):
+                    p_next = token_parts[idx + 1]
+                    if len(p) == 4 and 2020 <= int(p) <= 2050 and p_next.isdigit() and 1 <= int(p_next) <= 12:
+                        exp_year = p
+                        exp_month = f"{int(p_next):02d}"
+                        idx += 2
+                        continue
+                    if p.isdigit() and 1 <= int(p) <= 12 and (len(p_next) == 4 or (len(p_next) == 2 and int(p_next) >= 24)):
+                        exp_month = f"{int(p):02d}"
+                        exp_year = f"20{p_next}" if len(p_next) == 2 else p_next
+                        idx += 2
+                        continue
 
-    # 2. 提取 CVC
+            # 2. 尝试解析 CVC (3~4 位纯数字)
+            if not cvc and re.match(r"^\d{3,4}$", p):
+                cvc = p
+                idx += 1
+                continue
+
+            # 3. 尝试解析持卡人姓名 (纯英文字母+空格，2~4个单词)
+            if not cardholder_name and re.match(r"^[A-Za-z]+(?:\s+[A-Za-z]+){1,3}$", p):
+                cardholder_name = p
+                idx += 1
+                continue
+
+            # 4. 尝试解析可能附带的地址
+            if not raw_address and ("," in p or re.search(r"\b\d{5}\b", p) or any(w in p.lower() for w in ["st", "ave", "rd", "blvd", "chicago", "box"])):
+                raw_address = p
+                zip_m = re.search(r"\b(\d{5}(?:-\d{4})?)\b", p)
+                if zip_m:
+                    hint_zip = zip_m.group(1)[:5]
+                idx += 1
+                continue
+
+            idx += 1
+
+    # 通用正则提取兜底
+    remaining = normalized.replace(card_number, " ", 1)
+    if not (exp_month and exp_year):
+        # 匹配 YYYY/MM 或 YYYY/M
+        y_m = re.search(r"\b(20[2-3]\d)\s*[/|-]\s*(0?[1-9]|1[0-2])\b", remaining)
+        if y_m:
+            exp_year = y_m.group(1)
+            exp_month = f"{int(y_m.group(2)):02d}"
+            remaining = remaining.replace(y_m.group(0), " ", 1)
+        else:
+            # 匹配 MM/YY 或 MM/YYYY 或 M/YY 或 M/YYYY
+            m_y = re.search(r"\b(0?[1-9]|1[0-2])\s*[/|-]\s*(20\d{2}|\d{2})\b", remaining)
+            if m_y:
+                exp_month = f"{int(m_y.group(1)):02d}"
+                raw_yr = m_y.group(2)
+                exp_year = f"20{raw_yr}" if len(raw_yr) == 2 else raw_yr
+                remaining = remaining.replace(m_y.group(0), " ", 1)
+
     if not cvc:
         cvc_match = re.search(r"\b(\d{3,4})\b", remaining)
         if cvc_match:
             cvc = cvc_match.group(1)
             remaining = remaining.replace(cvc_match.group(0), " ", 1)
 
-    # 3. 如果还没提取月份年份
     if not (exp_month and exp_year):
-        month_match = re.search(r"\b(0[1-9]|1[0-2])\b", remaining)
+        month_match = re.search(r"\b(0?[1-9]|1[0-2])\b", remaining)
         year_match = re.search(r"\b(20[2-3]\d|[2-3]\d)\b", remaining)
         if month_match and year_match:
             exp_month = f"{int(month_match.group(1)):02d}"
             raw_y = year_match.group(1)
             exp_year = f"20{raw_y}" if len(raw_y) == 2 else raw_y
 
-    # 4. 查找可能附带的 5 位美国邮编
-    if not hint_zip and remaining:
+    if not hint_zip:
         zip_match = re.search(r"\b([0-9]{5}(?:-[0-9]{4})?)\b", remaining)
         if zip_match:
             hint_zip = zip_match.group(1)[:5]
+
+    if not cardholder_name:
+        name_match = re.search(r"\b([A-Z]{2,}\s+[A-Z]{2,}(?:\s+[A-Z]{2,})?)\b", remaining)
+        if name_match:
+            cardholder_name = name_match.group(1)
 
     if not (exp_month and exp_year):
         return {"valid": False, "error": "未识别到有效的有效期限 (月/年)"}
@@ -187,6 +265,8 @@ def parse_card_input(raw_text: str) -> dict[str, Any]:
         "brand": brand,
         "country": country_code,
         "country_name": country_name,
+        "cardholder_name": cardholder_name or None,
+        "raw_address": raw_address or None,
         "postal_code": hint_zip or None,
         "error": None,
     }
@@ -217,11 +297,18 @@ COMMON_US_FIRST_NAMES = ["James", "John", "Robert", "Michael", "William", "David
 COMMON_US_LAST_NAMES = ["Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez"]
 
 
-def generate_tax_free_billing(country: str = "US", hint_zip: str | None = None) -> dict[str, str]:
+def generate_tax_free_billing(
+    country: str = "US",
+    hint_zip: str | None = None,
+    name: str | None = None,
+) -> dict[str, str]:
     """生成合规且税费为 $0.00 的真实账单地址。"""
-    first_name = random.choice(COMMON_US_FIRST_NAMES)
-    last_name = random.choice(COMMON_US_LAST_NAMES)
-    full_name = f"{first_name} {last_name}"
+    if name and str(name).strip():
+        full_name = str(name).strip()
+    else:
+        first_name = random.choice(COMMON_US_FIRST_NAMES)
+        last_name = random.choice(COMMON_US_LAST_NAMES)
+        full_name = f"{first_name} {last_name}"
 
     chosen = None
     if hint_zip:
@@ -386,8 +473,12 @@ def bind_card_with_cloak(
     _emit(f"代理路由: 分配住宅代理 {selected_proxy.split('@')[-1] if '@' in selected_proxy else (selected_proxy or '直连')}")
 
     # 2. 生成账单地址
-    billing = generate_tax_free_billing(country=country, hint_zip=card_info.get("postal_code"))
-    _emit(f"账单地址: 免税州 {billing['state_name']} ({billing['city']}, {billing['postal_code']}) 消费税: $0.00")
+    billing = generate_tax_free_billing(
+        country=country,
+        hint_zip=card_info.get("postal_code"),
+        name=card_info.get("cardholder_name"),
+    )
+    _emit(f"账单地址: 免税州 {billing['state_name']} ({billing['city']}, {billing['postal_code']}) 姓名: {billing['name']} 消费税: $0.00")
 
     # 3. 获取原生 Stripe Checkout URL
     _emit("正在向 OpenAI 申请 Checkout 支付会话…")

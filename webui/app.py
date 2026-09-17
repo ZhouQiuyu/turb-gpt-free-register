@@ -1115,6 +1115,7 @@ def create_app(auth_code: str | None = None) -> Flask:
         billing = card_binding_service.generate_tax_free_billing(
             country=parsed.get("country", "US"),
             hint_zip=parsed.get("postal_code"),
+            name=parsed.get("cardholder_name"),
         )
         return jsonify({"ok": True, "card": parsed, "billing": billing})
 

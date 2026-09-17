@@ -5601,13 +5601,19 @@ async function parseCardInputPreview() {
     if (res.ok && res.card) {
       errorEl.style.display = 'none';
       previewEl.style.display = 'block';
-      $('#previewCardBrand').textContent = res.card.brand || 'Card';
+      $('#previewCardBrand').textContent = res.card.cardholder_name
+        ? `${res.card.brand || 'Card'} · ${res.card.cardholder_name}`
+        : (res.card.brand || 'Card');
       $('#previewCardNumber').textContent = `**** **** **** ${res.card.last4}`;
       $('#previewCardExp').textContent = `到期: ${res.card.exp_month}/${res.card.exp_year.slice(-2)}`;
       $('#previewCardCvc').textContent = `CVC: ${res.card.cvc.replace(/./g, '*')}`;
       $('#previewCardCountry').textContent = `🇺🇸 ${res.card.country} (${res.card.country_name || 'US'})`;
       const b = res.billing || {};
-      $('#previewBilling').innerHTML = `免税账单: <strong>${esc(b.state_name || b.state)} (${esc(b.city)}, ${esc(b.postal_code)})</strong> · 消费税: <strong>$0.00</strong>`;
+      let billingHtml = `免税账单: <strong>${esc(b.state_name || b.state)} (${esc(b.city)}, ${esc(b.postal_code)})</strong> · 姓名: <strong>${esc(b.name || 'Random')}</strong> · 消费税: <strong style="color:var(--success-color,#10b981)">$0.00</strong>`;
+      if (res.card.raw_address) {
+        billingHtml += `<div style="font-size:11px;color:var(--text-muted);margin-top:3px;">(已智能将卡商附带地址规整至免税州以保障 $0.00 零税率扣款通过)</div>`;
+      }
+      $('#previewBilling').innerHTML = billingHtml;
     }
   } catch (err) {
     previewEl.style.display = 'none';

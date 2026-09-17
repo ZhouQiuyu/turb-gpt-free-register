@@ -60,6 +60,41 @@ def test_parse_card_input_text_format():
     assert res["brand"] == "Mastercard"
 
 
+def test_parse_card_input_merchant_hyphen_and_full_profile():
+    raw = "4859540179366553----2030/6----383----NIKKI BRYANT----2182 E 78th St,Chicago 60649,US"
+    res = card_binding_service.parse_card_input(raw)
+    assert res["valid"] is True
+    assert res["card_number"] == "4859540179366553"
+    assert res["last4"] == "6553"
+    assert res["exp_month"] == "06"
+    assert res["exp_year"] == "2030"
+    assert res["cvc"] == "383"
+    assert res["brand"] == "Visa"
+    assert res["cardholder_name"] == "NIKKI BRYANT"
+    assert res["postal_code"] == "60649"
+    assert "Chicago" in res["raw_address"]
+
+    # When generating billing with this card info and name
+    billing = card_binding_service.generate_tax_free_billing(
+        country="US",
+        hint_zip=res["postal_code"],
+        name=res["cardholder_name"],
+    )
+    assert billing["name"] == "NIKKI BRYANT"
+    # Chicago 60649 is not tax-free, so it automatically fell back to a real tax-free state
+    assert billing["state"] in ("OR", "DE", "MT", "NH", "AK")
+
+
+def test_parse_card_input_separated_year_month():
+    raw = "4859540179366553----2030----06----383"
+    res = card_binding_service.parse_card_input(raw)
+    assert res["valid"] is True
+    assert res["card_number"] == "4859540179366553"
+    assert res["exp_month"] == "06"
+    assert res["exp_year"] == "2030"
+    assert res["cvc"] == "383"
+
+
 def test_parse_card_input_invalid():
     res = card_binding_service.parse_card_input("invalid string")
     assert res["valid"] is False
