@@ -2842,8 +2842,16 @@
       </div>
 
       <label class="outlook-import-field">
-        <span>卡密内容 (支持直接粘贴多种格式)</span>
-        <textarea id="bindCardInput" rows="3" class="mono" style="width:100%; border:1px solid #dcdfe6; border-radius:6px; padding:8px 12px; font-size:13px; resize:vertical; box-sizing:border-box;" placeholder="例如: 4000123456789010|12|28|123 或 4000123456789010 12/28 123 或整段卡密"></textarea>
+        <span>卡密内容 (支持直接粘贴多种格式，可包含 Stripe 链接)</span>
+        <textarea id="bindCardInput" rows="3" class="mono" style="width:100%; border:1px solid #dcdfe6; border-radius:6px; padding:8px 12px; font-size:13px; resize:vertical; box-sizing:border-box;" placeholder="例如: 4000123456789010|12|28|123 或 4000123456789010 12/28 123 或整段卡密/卡商文本"></textarea>
+      </label>
+
+      <label class="outlook-import-field" style="margin-top:8px;">
+        <span style="display:flex; justify-content:space-between; align-items:center;">
+          <span>Stripe 结账链接 (可选，直接填入可 0 秒跳过提链直达美区绑卡)</span>
+          <span style="font-size:11px; color:#64748b; font-weight:normal;">留空则由系统两阶段自动接力提链</span>
+        </span>
+        <input type="text" id="bindCardCheckoutUrl" class="mono" style="width:100%; border:1px solid #dcdfe6; border-radius:6px; padding:7px 12px; font-size:12px; box-sizing:border-box;" placeholder="https://checkout.stripe.com/c/pay/cs_live_... (可选)" />
       </label>
 
       <!-- 实时解析与免税账单卡片 -->
@@ -5560,6 +5568,8 @@ function openBindCardModal(id) {
 
   const inputEl = $('#bindCardInput');
   if (inputEl) inputEl.value = '';
+  const checkoutUrlEl = $('#bindCardCheckoutUrl');
+  if (checkoutUrlEl) checkoutUrlEl.value = '';
   $('#bindCardPreview').style.display = 'none';
   $('#bindCardParseError').style.display = 'none';
   $('#bindCardConsoleWrap').style.display = 'none';
@@ -5601,6 +5611,9 @@ async function parseCardInputPreview() {
     if (res.ok && res.card) {
       errorEl.style.display = 'none';
       previewEl.style.display = 'block';
+      if (res.card.checkout_url && $('#bindCardCheckoutUrl') && !$('#bindCardCheckoutUrl').value) {
+        $('#bindCardCheckoutUrl').value = res.card.checkout_url;
+      }
       $('#previewCardBrand').textContent = res.card.cardholder_name
         ? `${res.card.brand || 'Card'} · ${res.card.cardholder_name}`
         : (res.card.brand || 'Card');
@@ -5630,6 +5643,7 @@ async function submitBindCard() {
     return;
   }
 
+  const checkoutUrl = $('#bindCardCheckoutUrl')?.value?.trim() || '';
   const mode = document.querySelector('input[name="bindCardMode"]:checked')?.value || 'auto';
   const submitBtn = $('#btnSubmitBindCard');
   submitBtn.disabled = true;
@@ -5653,6 +5667,7 @@ async function submitBindCard() {
       body: JSON.stringify({
         account_id: BIND_CARD_ACCOUNT_ID,
         card_text: rawCard,
+        checkout_url: checkoutUrl || undefined,
         mode: mode,
       }),
     });

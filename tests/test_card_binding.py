@@ -260,7 +260,7 @@ def test_webui_bind_card_endpoints(tmp_path, monkeypatch):
     monkeypatch.setattr(
         card_binding_service,
         "bind_card_with_cloak",
-        lambda acc_id, card_info, proxy_url=None, log_cb=None: {
+        lambda acc_id, card_info, checkout_url=None, proxy_url=None, log_cb=None: {
             "ok": True,
             "status": "success",
             "message": "开通 Plus 成功",
@@ -286,4 +286,36 @@ def test_webui_bind_card_endpoints(tmp_path, monkeypatch):
     status_data = resp_status.get_json()
     assert status_data["ok"] is True
     assert status_data["job"]["status"] in ("running", "success")
+
+
+def test_parse_card_input_with_embedded_stripe_url():
+    raw = "https://checkout.stripe.com/c/pay/cs_live_123456 4859540179366553----2030/6----383----NIKKI BRYANT"
+    res = card_binding_service.parse_card_input(raw)
+    assert res["valid"] is True
+    assert res["card_number"] == "4859540179366553"
+    assert res["checkout_url"] == "https://checkout.stripe.com/c/pay/cs_live_123456"
+    assert res["cardholder_name"] == "NIKKI BRYANT"
+
+
+def test_webui_bind_card_with_direct_stripe_url(monkeypatch):
+    app = create_app(auth_code="test-auth")
+    client = app.test_client()
+    client.environ_base["HTTP_X_AUTH_CODE"] = "test-auth"
+
+    captured = {}
+    def fake_bind(acc_id, card_info, checkout_url=None, proxy_url=None, log_cb=None):
+        captured["checkout_url"] = checkout_url
+        return {"ok": True, "status": "success"}
+
+    monkeypatch.setattr(card_binding_service, "bind_card_with_cloak", fake_bind)
+    monkeypatch.setattr(db, "get_account", lambda id: {"id": id, "access_token": "valid-token"})
+
+    resp = client.post("/api/accounts/bind-card", json={
+        "account_id": 9999,
+        "card_text": "4000123456789010|12|28|123",
+        "checkout_url": "https://checkout.stripe.com/c/pay/cs_live_direct_999",
+        "mode": "auto",
+    })
+    assert resp.status_code == 200
+    assert resp.get_json()["ok"] is True
 

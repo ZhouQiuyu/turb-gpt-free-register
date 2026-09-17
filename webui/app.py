@@ -1141,9 +1141,12 @@ def create_app(auth_code: str | None = None) -> Flask:
         if not token:
             return jsonify({"ok": False, "error": "该账号没有 access_token"}), 400
 
+        checkout_url = data.get("checkout_url") or data.get("stripe_url") or None
+
         res = card_binding_service.enqueue_card_binding(
             account_id=int(acc_id),
             raw_card_input=raw_card,
+            checkout_url=checkout_url,
             mode=mode,
             proxy_url=proxy_url,
         )

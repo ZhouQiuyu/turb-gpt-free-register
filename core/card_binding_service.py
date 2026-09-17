@@ -112,6 +112,13 @@ def parse_card_input(raw_text: str) -> dict[str, Any]:
     if not text:
         return {"valid": False, "error": "卡密内容为空"}
 
+    # 提取可能直接包含的 Stripe Checkout URL
+    checkout_url = ""
+    stripe_m = re.search(r"https?://(?:checkout\.stripe\.com|buy\.stripe\.com)/(?:c/)?pay/[a-zA-Z0-9_\-]+[^\s]*", text)
+    if stripe_m:
+        checkout_url = stripe_m.group(0).rstrip(".,;\"'")
+        text = text.replace(stripe_m.group(0), " ")
+
     # 1. 规范化连字符分隔符: 将 ---- 或 --- 或 -- 替换为标准 |
     normalized = re.sub(r"\s*--+\s*", "|", text)
     first_line = normalized.splitlines()[0].strip() if normalized.splitlines() else normalized
@@ -268,6 +275,7 @@ def parse_card_input(raw_text: str) -> dict[str, Any]:
         "cardholder_name": cardholder_name or None,
         "raw_address": raw_address or None,
         "postal_code": hint_zip or None,
+        "checkout_url": checkout_url or None,
         "error": None,
     }
 
@@ -361,7 +369,14 @@ def extract_native_checkout_url(
     session = BrowserSession(proxy=proxy_url or None, detect_exit_geo=False)
 
     country = country.upper()
-    currency = "USD" if country == "US" else "EUR"
+    if country == "JP":
+        currency = "JPY"
+    elif country in ("GB", "UK"):
+        currency = "GBP"
+    elif country in ("DE", "FR", "IT", "ES", "NL"):
+        currency = "EUR"
+    else:
+        currency = "USD"
 
     json_body: dict[str, Any] = {
         "entry_point": "all_plans_pricing_modal",
@@ -378,12 +393,20 @@ def extract_native_checkout_url(
             "is_coupon_from_query_param": False,
         }
 
+    from core.chatgpt_plan import token_claims
+    claims = token_claims(token)
+    account_claim_id = claims.get("account_id")
+
     headers = session.get_chatgpt_headers(referer="https://chatgpt.com/")
     headers.update({
         "authorization": f"Bearer {token}",
         "x-openai-target-path": "/backend-api/payments/checkout",
         "x-openai-target-route": "/backend-api/payments/checkout",
+        "oai-device-id": session.device_id,
+        "oai-session-id": session.oai_session_id,
     })
+    if account_claim_id:
+        headers["chatgpt-account-id"] = str(account_claim_id)
 
     resp = session.post(
         "https://chatgpt.com/backend-api/payments/checkout",
@@ -444,11 +467,14 @@ def _pick_best_proxy_for_card(country: str = "US") -> str:
 def bind_card_with_cloak(
     account_id: int,
     card_info: dict[str, Any],
+    checkout_url: str | None = None,
     proxy_url: str | None = None,
     log_cb: Any = None,
 ) -> dict[str, Any]:
     """
-    使用 CloakBrowser 指纹浏览器全自动完成绑卡。
+    使用 CloakBrowser 指纹浏览器完成两阶段安全绑卡。
+    阶段 1：使用账号所属地代理（如日本 JP 住宅代理）提取/校验 Stripe 结账会话，或直接使用传入的 Stripe 链接。
+    阶段 2：使用卡片所属国代理（如美国 US 住宅代理）挂载指纹浏览器进入 Stripe 结账并填卡，确保 IP==卡==账单，避开跨国风控。
     """
     def _emit(msg: str):
         logger.info("[自动绑卡 #%s] %s", account_id, msg)
@@ -466,59 +492,73 @@ def bind_card_with_cloak(
     if not token:
         return {"ok": False, "error": "账号缺少 access_token"}
 
-    # 1. 自动选择匹配卡片发行国的美区住宅代理
-    country = card_info.get("country", "US")
-    selected_proxy = proxy_url or _pick_best_proxy_for_card(country)
-    _emit(f"卡片识别: {card_info.get('brand')} *{card_info.get('last4')} 归属国: {country}")
-    _emit(f"代理路由: 分配住宅代理 {selected_proxy.split('@')[-1] if '@' in selected_proxy else (selected_proxy or '直连')}")
+    # 1. 目标结账链接确认 (阶段 1)
+    target_checkout_url = (checkout_url or card_info.get("checkout_url") or "").strip()
+    if target_checkout_url:
+        _emit(f"[阶段 1/2] 检测到已提供原生 Stripe 结账链接，直接跳过提链阶段：{target_checkout_url[:60]}…")
+    else:
+        # 两阶段接力：使用账号属地（如日本 JP）网络环境向 OpenAI 申请试用会话
+        origin_country = (acc.get("country") or "JP").upper()
+        from core.db import pick_proxy_by_country
+        stage1_proxy = pick_proxy_by_country(origin_country) or acc.get("proxy_used") or proxy_url or ""
+        _emit(f"[阶段 1/2] 正在通过账号属地代理 ({origin_country}) 申请 Stripe 试用会话…")
+        _emit(f"提链代理路由: {stage1_proxy.split('@')[-1] if '@' in stage1_proxy else (stage1_proxy or '直连')}")
 
-    # 2. 生成账单地址
+        try:
+            checkout_data = extract_native_checkout_url(
+                access_token=token,
+                proxy_url=stage1_proxy,
+                with_promo=True,
+                country=origin_country,
+            )
+            if checkout_data.get("already_paid"):
+                _emit("检测到账号已经是 Plus 会员，自动校准状态")
+                db.update_account_card_binding(account_id, {
+                    "ok": True,
+                    "status": "success",
+                    "message": "账号已是 Plus 会员",
+                    "card_brand": card_info.get("brand"),
+                    "card_last4": card_info.get("last4"),
+                })
+                return {"ok": True, "already_paid": True, "message": "账号已是 Plus 会员"}
+
+            target_checkout_url = checkout_data.get("url")
+            _emit(f"[阶段 1/2] 提链成功，结账链接就绪: {target_checkout_url[:60]}…")
+        except Exception as exc:
+            err = f"获取支付会话失败: {exc}。（提示：若遇 OpenAI 临时风控，您可在日本 IP 浏览器中点击试用，并将生成的 Stripe 结账链接直接粘贴到本弹窗，系统将秒开美区指纹代绑！）"
+            _emit(err)
+            return {"ok": False, "error": err}
+
+    if not target_checkout_url:
+        err = "未获得有效 Stripe 结账链接"
+        _emit(err)
+        return {"ok": False, "error": err}
+
+    # 2. 阶段 2：切换至卡片发行国（美国 US）高信誉住宅代理
+    card_country = card_info.get("country", "US")
+    from core.db import pick_proxy_by_country
+    stage2_proxy = proxy_url or pick_proxy_by_country(card_country) or _pick_best_proxy_for_card(card_country)
+    _emit(f"[阶段 2/2] 切换至美区高信誉住宅代理: {stage2_proxy.split('@')[-1] if '@' in stage2_proxy else (stage2_proxy or '直连')}")
+
+    # 生成免税真实账单
     billing = generate_tax_free_billing(
-        country=country,
+        country=card_country,
         hint_zip=card_info.get("postal_code"),
         name=card_info.get("cardholder_name"),
     )
     _emit(f"账单地址: 免税州 {billing['state_name']} ({billing['city']}, {billing['postal_code']}) 姓名: {billing['name']} 消费税: $0.00")
 
-    # 3. 获取原生 Stripe Checkout URL
-    _emit("正在向 OpenAI 申请 Checkout 支付会话…")
-    try:
-        checkout_data = extract_native_checkout_url(
-            access_token=token,
-            proxy_url=selected_proxy,
-            with_promo=True,
-            country=country,
-        )
-    except Exception as exc:
-        err = f"获取支付会话失败: {exc}"
-        _emit(err)
-        return {"ok": False, "error": err}
-
-    if checkout_data.get("already_paid"):
-        _emit("检测到账号已经是 Plus 会员，自动校准状态")
-        db.update_account_card_binding(account_id, {
-            "ok": True,
-            "status": "success",
-            "message": "账号已是 Plus 会员",
-            "card_brand": card_info.get("brand"),
-            "card_last4": card_info.get("last4"),
-        })
-        return {"ok": True, "already_paid": True, "message": "账号已是 Plus 会员"}
-
-    checkout_url = checkout_data.get("url")
-    _emit(f"支付直链已就绪: {checkout_url[:60]}…")
-
-    # 4. 启动 CloakBrowser 挂载住宅代理
-    _emit("启动 CloakBrowser 原生抗封指纹浏览器…")
+    # 3. 启动 CloakBrowser 挂载美区住宅代理
+    _emit("启动 CloakBrowser 原生抗封指纹浏览器 (Chromium 146)…")
     from core.cloakbrowser_driver import build_cloak_driver
 
     driver = None
     try:
-        driver, _ = build_cloak_driver(proxy=selected_proxy)
+        driver, _ = build_cloak_driver(proxy=stage2_proxy)
         driver.set_page_load_timeout(60)
 
-        _emit("指纹环境就绪，正在加载 Stripe 收银台…")
-        driver.get(checkout_url)
+        _emit("指纹环境就绪，正在以美国住宅身份访问 Stripe 收银台…")
+        driver.get(target_checkout_url)
         time.sleep(3.5)
 
         cur_url = driver.current_url or ""
@@ -538,6 +578,16 @@ def bind_card_with_cloak(
 
         if raw_page:
             try:
+                # 检查国家下拉框，确保账单国家与美卡一致
+                for frame in raw_page.frames:
+                    try:
+                        c_loc = frame.locator('select[name="billingCountry"], select[name="country"], #billingCountry')
+                        if c_loc.count() > 0 and c_loc.first.is_visible():
+                            c_loc.first.select_option(value="US")
+                            time.sleep(0.3)
+                    except Exception:
+                        pass
+
                 # 等待卡号输入框加载（通过多层 frame 探测）
                 start_wait = time.time()
                 card_input = None
@@ -588,6 +638,11 @@ def bind_card_with_cloak(
                         if name_loc.count() > 0 and name_loc.first.is_visible():
                             name_loc.first.fill("")
                             name_loc.first.type(billing["name"], delay=random.randint(30, 70))
+
+                        line1_loc = frame.locator('input[name="billingAddressLine1"], input[name="addressLine1"], #billingAddressLine1')
+                        if line1_loc.count() > 0 and line1_loc.first.is_visible():
+                            line1_loc.first.fill("")
+                            line1_loc.first.type(billing.get("line1", ""), delay=random.randint(30, 70))
                     except Exception:
                         pass
 
@@ -679,6 +734,7 @@ def bind_card_with_cloak(
 def enqueue_card_binding(
     account_id: int,
     raw_card_input: str,
+    checkout_url: str | None = None,
     mode: str = "auto",
     proxy_url: str | None = None,
 ) -> dict[str, Any]:
@@ -687,14 +743,24 @@ def enqueue_card_binding(
     if not parsed.get("valid"):
         return {"accepted": False, "error": parsed.get("error")}
 
+    effective_checkout_url = (checkout_url or parsed.get("checkout_url") or "").strip()
+
     acc = db.get_account(account_id)
     if not acc:
         return {"accepted": False, "error": "账号不存在"}
 
     if mode == "link_only":
+        if effective_checkout_url:
+            return {
+                "accepted": True,
+                "mode": "link_only",
+                "url": effective_checkout_url,
+                "card_info": parsed,
+            }
         token = (acc.get("access_token") or "").strip()
-        country = parsed.get("country", "US")
-        p = proxy_url or _pick_best_proxy_for_card(country)
+        country = (acc.get("country") or "JP").upper()
+        from core.db import pick_proxy_by_country
+        p = proxy_url or pick_proxy_by_country(country) or acc.get("proxy_used") or _pick_best_proxy_for_card(country)
         try:
             res = extract_native_checkout_url(access_token=token, proxy_url=p, with_promo=True, country=country)
             if res.get("url"):
@@ -740,7 +806,13 @@ def enqueue_card_binding(
                     if len(job["logs"]) > 50:
                         job["logs"] = job["logs"][-50:]
 
-        res = bind_card_with_cloak(account_id, parsed, proxy_url=proxy_url, log_cb=_log_cb)
+        res = bind_card_with_cloak(
+            account_id,
+            parsed,
+            checkout_url=effective_checkout_url,
+            proxy_url=proxy_url,
+            log_cb=_log_cb,
+        )
         with _BINDING_JOBS_LOCK:
             job = _BINDING_JOBS.get(job_id)
             if job:
