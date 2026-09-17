@@ -491,9 +491,11 @@ def extract_checkout_url_with_cloak(
     _emit("启动 CloakBrowser 原生指纹浏览器 (阶段 1 提链环境)…")
     from core.cloakbrowser_driver import build_cloak_driver
     from core.roxy_registration import (
-        _submit_email_and_wait_next,
-        _type_otp,
+        _find_visible_email_input_js,
+        _type_email_address,
+        _submit_nearest_form_for_active_input,
         _clear_otp_inputs,
+        _type_otp,
         _click_continue,
         _fetch_chatgpt_session,
     )
@@ -508,49 +510,96 @@ def extract_checkout_url_with_cloak(
         driver.get("https://chatgpt.com/auth/login")
         time.sleep(2.5)
 
+        _emit("进入登录认证流转与安全校验…")
         otp_after_ts = time.time() - 2.0
-        _emit("正在提交账号邮箱…")
-        next_state = _submit_email_and_wait_next(driver, email, attempts=2)
-
-        cur_url = str(driver.current_url or "")
-        if "error" in cur_url and "rate_limit" in cur_url:
-            raise RuntimeError("OpenAI 登录验证码发送过于频繁 (rate_limit_exceeded)，请稍后重试或在本地浏览器登录后粘贴 Stripe 链接")
-
-        if next_state == "otp" or "email-verification" in cur_url:
-            _emit("等待接收邮箱验证码 (OTP)…")
-            otp_code = wait_for_otp(email, after_ts=otp_after_ts, max_wait=40)
-            _emit("收到邮箱验证码，正在模拟输入…")
-            _clear_otp_inputs(driver)
-            _type_otp(driver, otp_code)
-            time.sleep(1.0)
-            try:
-                _click_continue(driver)
-            except Exception:
-                pass
-
-        # 动态轮询页面流转：处理 MFA / TOTP 挑战，等待最终落地 ChatGPT 首页
-        _emit("等待登录流转与安全校验…")
-        t_end = time.time() + 90
+        email_submitted = False
+        otp_submitted = False
         totp_attempts = 0
         max_totp_attempts = 3
         last_logged_url = ""
         last_totp_submit_time = 0.0
+        cf_challenge_logged = False
 
+        t_end = time.time() + 120
         while time.time() < t_end:
             cur_url = str(driver.current_url or "")
-            if cur_url and cur_url != last_logged_url:
-                last_logged_url = cur_url
-                _emit(f"页面流转: {cur_url.split('?')[0]}")
+            title = str(driver.title or "")
+            base_url = cur_url.split("?")[0] if cur_url else ""
+
+            if base_url and base_url != last_logged_url:
+                last_logged_url = base_url
+                _emit(f"页面流转: {base_url}")
 
             if "error" in cur_url and "rate_limit" in cur_url:
-                raise RuntimeError("OpenAI 登录验证码发送过于频繁 (rate_limit_exceeded)，请稍后重试")
+                raise RuntimeError("OpenAI 登录验证码发送过于频繁 (rate_limit_exceeded)，请稍后重试或在本地浏览器登录后粘贴 Stripe 链接")
 
-            # 成功落地 ChatGPT
-            if "chatgpt.com" in cur_url and "auth." not in cur_url and "mfa" not in cur_url:
+            # 1. 成功落地 ChatGPT 首页
+            if "chatgpt.com" in cur_url and "auth." not in cur_url and "mfa" not in cur_url and not cur_url.endswith("/auth/login"):
                 _emit("已成功登录并进入 ChatGPT！")
                 break
 
-            # 智能检测是否处于 MFA / TOTP 挑战页 (URL 或 DOM 文本特征)
+            # 2. 检查 Cloudflare 质询（"しばらくお待ちください", "Just a moment", 包含 Cloudflare 链接）
+            is_cf_challenge = False
+            if any(w in title for w in ["しばらくお待ちください", "Just a moment", "Attention Required"]):
+                is_cf_challenge = True
+            elif "cloudflare" in cur_url.lower():
+                is_cf_challenge = True
+
+            if is_cf_challenge:
+                if not cf_challenge_logged:
+                    cf_challenge_logged = True
+                    _emit("检测到 Cloudflare 人机安全质询，正在自动尝试穿透/等待放行…")
+                # 尝试穿透 Turnstile iframe checkbox
+                try:
+                    for frame in getattr(driver.page, "frames", []):
+                        f_url = str(getattr(frame, "url", "") or "").lower()
+                        if "challenges.cloudflare.com" in f_url or "cloudflare" in f_url:
+                            box = frame.locator("input[type='checkbox'], .ctp-checkbox-label, #cf-stage").first
+                            if box.is_visible():
+                                _emit("发现 Cloudflare 人机复选框，正在模拟点击…")
+                                box.click()
+                                time.sleep(2.0)
+                                break
+                except Exception:
+                    pass
+                time.sleep(2.0)
+                continue
+            else:
+                cf_challenge_logged = False
+
+            # 3. 处于邮箱输入页面（如 chatgpt.com/auth/login 或未提交邮箱）
+            if not email_submitted:
+                el = _find_visible_email_input_js(driver)
+                if el:
+                    _emit("正在提交账号邮箱…")
+                    _type_email_address(driver, email, timeout=10)
+                    time.sleep(0.8)
+                    _submit_nearest_form_for_active_input(driver)
+                    email_submitted = True
+                    otp_after_ts = time.time() - 2.0
+                    time.sleep(2.0)
+                    continue
+                elif "auth.openai.com" in cur_url:
+                    # 已经跳转到了 auth.openai.com，说明邮箱已由前端提交
+                    email_submitted = True
+
+            # 4. 处于邮箱验证码 (OTP) 页面
+            if not otp_submitted and ("email-verification" in cur_url or "auth.openai.com/u/email-verification" in cur_url):
+                _emit("等待接收邮箱验证码 (OTP)…")
+                otp_code = wait_for_otp(email, after_ts=otp_after_ts, max_wait=40)
+                _emit("收到邮箱验证码，正在模拟输入…")
+                _clear_otp_inputs(driver)
+                _type_otp(driver, otp_code)
+                time.sleep(1.0)
+                try:
+                    _click_continue(driver)
+                except Exception:
+                    pass
+                otp_submitted = True
+                time.sleep(3.0)
+                continue
+
+            # 5. 处于 TOTP 2FA 双因子验证挑战页面
             is_mfa_page = False
             if any(k in cur_url.lower() for k in ["mfa", "challenge", "authenticator"]):
                 is_mfa_page = True
