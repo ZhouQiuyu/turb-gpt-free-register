@@ -530,40 +530,98 @@ def extract_checkout_url_with_cloak(
 
         # 动态轮询页面流转：处理 MFA / TOTP 挑战，等待最终落地 ChatGPT 首页
         _emit("等待登录流转与安全校验…")
-        t_end = time.time() + 60
-        mfa_handled = False
+        t_end = time.time() + 90
+        totp_attempts = 0
+        max_totp_attempts = 3
+        last_logged_url = ""
+        last_totp_submit_time = 0.0
+
         while time.time() < t_end:
             cur_url = str(driver.current_url or "")
+            if cur_url and cur_url != last_logged_url:
+                last_logged_url = cur_url
+                _emit(f"页面流转: {cur_url.split('?')[0]}")
+
             if "error" in cur_url and "rate_limit" in cur_url:
                 raise RuntimeError("OpenAI 登录验证码发送过于频繁 (rate_limit_exceeded)，请稍后重试")
 
-            if "mfa-challenge" in cur_url and not mfa_handled:
+            # 成功落地 ChatGPT
+            if "chatgpt.com" in cur_url and "auth." not in cur_url and "mfa" not in cur_url:
+                _emit("已成功登录并进入 ChatGPT！")
+                break
+
+            # 智能检测是否处于 MFA / TOTP 挑战页 (URL 或 DOM 文本特征)
+            is_mfa_page = False
+            if any(k in cur_url.lower() for k in ["mfa", "challenge", "authenticator"]):
+                is_mfa_page = True
+            else:
+                try:
+                    body_text = driver.execute_script("return (document.body ? document.body.innerText : '').slice(0, 500);") or ""
+                    if any(w in body_text for w in ["認証アプリ", "authenticator", "ワンタイム", "security code", "two-factor", "Two-factor"]):
+                        is_mfa_page = True
+                except Exception:
+                    pass
+
+            # 触发 TOTP 动态码计算并模拟键盘输入提交（重试间隔至少 5 秒，最多 3 次）
+            if is_mfa_page and (time.time() - last_totp_submit_time >= 5.0) and totp_attempts < max_totp_attempts:
                 if not totp_secret:
                     raise RuntimeError("账号触发了双因子 TOTP 验证，但系统内未存储 totp_secret")
-                _emit("检测到双因子 TOTP 验证，正在计算动态令牌并自动提交…")
+                totp_attempts += 1
+                last_totp_submit_time = time.time()
                 import pyotp
                 code = pyotp.TOTP(totp_secret).now()
-                driver.execute_script("""
-                    const code = arguments[0];
-                    const input = document.querySelector('input[name="code"], input[autocomplete="one-time-code"], input[maxlength="6"]');
-                    if (input) {
-                        input.focus();
-                        input.value = code;
-                        input.dispatchEvent(new Event('input', {bubbles: true}));
-                        input.dispatchEvent(new Event('change', {bubbles: true}));
-                    }
-                    const btn = document.querySelector('button[type="submit"], form button');
-                    if (btn) btn.click();
-                """, code)
-                mfa_handled = True
-                time.sleep(3)
+                _emit(f"检测到双因子 TOTP 挑战 (第 {totp_attempts} 次)，正在计算动态令牌并自动提交…")
+                try:
+                    from selenium.webdriver.common.by import By
+                    inputs = [
+                        e for e in driver.find_elements(
+                            By.CSS_SELECTOR,
+                            "input[name='code'], input[autocomplete='one-time-code'], input[inputmode='numeric'], input[type='text'], input[type='tel']"
+                        ) if e.is_displayed()
+                    ]
+                    if inputs:
+                        inp = inputs[0]
+                        # 1. 使用 React 原型链 Setter 注入值并派发事件
+                        driver.execute_script("""
+                            const el = arguments[0];
+                            const val = arguments[1];
+                            el.focus();
+                            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                            if (setter) setter.call(el, val); else el.value = val;
+                            el.dispatchEvent(new Event('input', {bubbles: true}));
+                            el.dispatchEvent(new Event('change', {bubbles: true}));
+                        """, inp, code)
+                        # 2. 模拟物理按键确保触发底层事件
+                        try:
+                            inp.send_keys(code)
+                        except Exception:
+                            pass
+                        time.sleep(1.0)
 
-            if "chatgpt.com" in cur_url and "auth." not in cur_url and "mfa" not in cur_url:
-                break
-            time.sleep(2)
+                        # 3. 提交表单：查找并点击提交按钮（如 "続行" / "Continue"）
+                        submit_btns = [
+                            b for b in driver.find_elements(
+                                By.CSS_SELECTOR,
+                                "button[type='submit'], form button, button[data-dd-action-name='Continue']"
+                            ) if b.is_displayed()
+                        ]
+                        if submit_btns:
+                            submit_btns[0].click()
+                        else:
+                            driver.execute_script("""
+                                const btn = document.querySelector("button[type='submit'], form button");
+                                if (btn) btn.click();
+                            """)
+                        time.sleep(3.0)
+                except Exception as exc:
+                    _emit(f"TOTP 提交尝试异常: {exc}")
+                    time.sleep(2.0)
+                continue
+
+            time.sleep(1.5)
 
         _emit("正在读取 ChatGPT 真实登录会话凭证…")
-        session_info = _fetch_chatgpt_session(driver, timeout=35)
+        session_info = _fetch_chatgpt_session(driver, timeout=40, auto_jump_wait=30)
         access_token = session_info.get("accessToken") or account.get("access_token")
         account_id = (session_info.get("account") or {}).get("id") or account.get("account_id")
 
@@ -590,12 +648,12 @@ def extract_checkout_url_with_cloak(
             }
         };
 
-        fetch('/backend-api/payments/checkout', {
+        fetch('https://chatgpt.com/backend-api/payments/checkout', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'Authorization': 'Bearer ' + token,
-                'chatgpt-account-id': accountId || '',
+                'chatgpt-account-id': accountId,
                 'x-openai-target-path': '/backend-api/payments/checkout',
                 'x-openai-target-route': '/backend-api/payments/checkout'
             },
@@ -623,6 +681,14 @@ def extract_checkout_url_with_cloak(
             url = f"https://checkout.stripe.com/c/pay/{cs_id}"
 
         if not url:
+            err_msg = str(res.get("data") or res.get("error") or "")
+            if "already" in err_msg.lower() or "active_subscription" in err_msg.lower():
+                return {
+                    "ok": True,
+                    "already_paid": True,
+                    "url": None,
+                    "message": "账号已是 Plus 会员",
+                }
             raise RuntimeError(f"浏览器内结账申请返回异常: {str(res)[:200]}")
 
         return {

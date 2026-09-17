@@ -287,6 +287,14 @@ class CloakSeleniumDriver:
     def title(self) -> str:
         return self.page.title()
 
+    def save_screenshot(self, filename: str) -> bool:
+        try:
+            self.page.screenshot(path=filename)
+            return True
+        except Exception as exc:
+            logger.warning("[Cloak] save_screenshot 失败: %s", exc)
+            return False
+
     def back(self) -> None:
         self.page.go_back(wait_until="domcontentloaded", timeout=self._page_load_timeout_ms)
 
