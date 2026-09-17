@@ -1418,6 +1418,77 @@ def recover_interrupted_extract_links() -> int:
         return recovered
 
 
+def mark_account_card_binding_running(acc_id: int) -> bool:
+    """把绑卡任务标记为运行中。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        row["card_binding_status"] = "running"
+        row["card_binding_started_at"] = _now()
+        row["card_binding_error"] = None
+        row["card_binding_message"] = "绑卡任务运行中"
+        row["updated_at"] = _now()
+        _save_accounts(accounts)
+        return True
+
+
+def update_account_card_binding(acc_id: int, result: dict | None = None) -> bool:
+    """更新账号绑卡结果/进度，成功时同步升级账号为 Plus。"""
+    result = result or {}
+    with _LOCK:
+        accounts = _load_accounts()
+        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        status = str(result.get("status") or ("success" if result.get("ok") else "failed"))
+        ok = bool(result.get("ok")) and status == "success"
+        row["card_binding_status"] = status
+        row["card_binding_ok"] = ok
+        row["card_binding_checked_at"] = result.get("checked_at") or _now()
+        if status in {"success", "failed", "stopped"}:
+            row["card_binding_completed_at"] = _now()
+        row["card_binding_error"] = None if ok or status == "running" else result.get("error")
+        if result.get("message") is not None:
+            row["card_binding_message"] = result.get("message")
+        if result.get("card_brand") is not None:
+            row["card_brand"] = result.get("card_brand")
+        if result.get("card_last4") is not None:
+            row["card_last4"] = result.get("card_last4")
+        if result.get("card_bound_at") is not None:
+            row["card_bound_at"] = result.get("card_bound_at")
+        elif ok:
+            row["card_bound_at"] = _now()
+        if ok:
+            row["plan_type"] = "plus"
+            row["current_plan_type"] = "plus"
+            row["plus_trial_eligible"] = False
+        row["updated_at"] = _now()
+        _save_accounts(accounts)
+        return True
+
+
+def recover_interrupted_card_bindings() -> int:
+    """服务启动时恢复上次进程中断的绑卡任务。"""
+    with _LOCK:
+        accounts = _load_accounts()
+        recovered = 0
+        now = _now()
+        for row in accounts:
+            if row.get("card_binding_status") not in {"queued", "running"}:
+                continue
+            row["card_binding_status"] = "failed"
+            row["card_binding_ok"] = False
+            row["card_binding_error"] = "WebUI 重启导致绑卡任务中断，请重新尝试"
+            row["card_binding_completed_at"] = now
+            row["updated_at"] = now
+            recovered += 1
+        if recovered:
+            _save_accounts(accounts)
+        return recovered
+
+
 def _account_matches_query(row: dict, q: str | None) -> bool:
     q = str(q or "").strip().lower()
     if not q:
@@ -1549,6 +1620,8 @@ def list_account_plan_check_statuses(
         "extract_link_long_url", "extract_link_copy_paste",
         "extract_link_image_url_png", "extract_link_image_url_svg",
         "extract_link_expires_at",
+        "card_binding_status", "card_binding_ok", "card_binding_message", "card_binding_error",
+        "card_brand", "card_last4", "card_bound_at",
         "codex_status", "codex_error",
         "codex_agent_status", "codex_agent_message",
         "codex_agent_runtime_id", "codex_agent_sub2api_url",
@@ -1612,6 +1685,10 @@ def list_account_plan_check_statuses(
                     "plus_trial_eligible": row.get("plus_trial_eligible"),
                     "plus_trial_discount_percentage": row.get("plus_trial_discount_percentage"),
                     "extract_link_status": row.get("extract_link_status"),
+                    "card_binding_status": row.get("card_binding_status"),
+                    "card_binding_ok": row.get("card_binding_ok"),
+                    "card_binding_error": row.get("card_binding_error"),
+                    "card_bound_at": row.get("card_bound_at"),
                     "codex_status": row.get("codex_status"),
                     "codex_agent_status": row.get("codex_agent_status"),
                     "totp_setup_status": row.get("totp_setup_status"),
@@ -3855,4 +3932,36 @@ def get_active_proxies() -> list[dict]:
             d["url"] = proxy_to_url(d)
             items.append(d)
         return items
+
+
+def get_active_proxies_by_country(country_code: str = "US") -> list[dict]:
+    """获取指定国家代码处于启用状态的代理列表。"""
+    _ensure_sqlite()
+    code = (country_code or "US").strip().upper()
+    with _LOCK, closing(_sqlite_conn()) as conn:
+        rows = conn.execute(
+            "SELECT * FROM proxy_pool WHERE status='active' AND (UPPER(country_code)=? OR UPPER(country)=?) ORDER BY id ASC",
+            (code, code),
+        ).fetchall()
+        items = []
+        for r in rows:
+            d = dict(r)
+            d["url"] = proxy_to_url(d)
+            items.append(d)
+        return items
+
+
+def pick_proxy_by_country(country_code: str = "US") -> str:
+    """按国家代码从启用代理池随机抽取一个代理 URL，若无匹配则回退到任一活跃代理。"""
+    import random
+    proxies = get_active_proxies_by_country(country_code)
+    if proxies:
+        chosen = random.choice(proxies)
+        return chosen.get("url") or ""
+    all_proxies = get_active_proxies()
+    if all_proxies:
+        chosen = random.choice(all_proxies)
+        return chosen.get("url") or ""
+    return ""
+
 

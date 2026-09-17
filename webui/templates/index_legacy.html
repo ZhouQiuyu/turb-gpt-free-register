@@ -1369,9 +1369,12 @@ async function pollAccountPlanStatuses() {
         const isExtracting = ['queued', 'running'].includes(item.extract_link_status);
         const wasAgenting = ['queued', 'running'].includes(account?.codex_agent_status);
         const isAgenting = ['queued', 'running'].includes(item.codex_agent_status);
+        const wasBinding = ['queued', 'running'].includes(account?.card_binding_status);
+        const isBinding = ['queued', 'running'].includes(item.card_binding_status);
         if (wasChecking && !isChecking) needsFullReload = true;
         if (wasExtracting && !isExtracting) needsFullReload = true;
         if (wasAgenting && !isAgenting) needsFullReload = true;
+        if (wasBinding && !isBinding) needsFullReload = true;
         Object.assign(account, item);
       });
       planStatusRevision = snapshot.revision || '';
@@ -1570,6 +1573,23 @@ function _extractLinkCell(r) {
   }
   return '';
 }
+function _cardBindingCell(r) {
+  const s = r.card_binding_status || '';
+  if (['queued', 'running'].includes(s)) {
+    return `<div style="margin-top:2px;"><span class="pill status-running" title="${esc(r.card_binding_message || '自动绑卡中')}">💳 绑卡中…</span></div>`;
+  }
+  if (s === 'success') {
+    const brand = r.card_brand || '';
+    const last4 = r.card_last4 || '';
+    const info = [brand, last4 ? '*' + last4 : ''].filter(Boolean).join(' ');
+    return `<div style="margin-top:2px;"><span class="pill status-success" title="${esc(r.card_binding_message || '已绑卡')}">💳 ${esc(info || '已绑卡')}</span></div>`;
+  }
+  if (s === 'failed') {
+    const reason = r.card_binding_error || r.card_binding_message || '绑卡失败';
+    return `<div style="margin-top:2px;"><span class="pill status-failed" title="${esc(reason)}">💳 绑卡失败</span></div>`;
+  }
+  return '';
+}
 function _extractLinkAction(r) {
   const s = r.extract_link_status || '';
   if (['queued','running'].includes(s)) return `<button disabled title="${esc(r.extract_link_message || '提链任务执行中')}">提链中…</button>`;
@@ -1630,7 +1650,7 @@ function renderAccounts() {
       <td>${esc(r.email_source || '-')}</td>
       <td><span class="mono" title="列表仅显示预览，完整 Token 请点复制">${r.has_access_token ? '有Token' : '<span class="muted">无Token</span>'}</span>${_liveStatusSub(r)}</td>
       <td>${r.password ? `<span class="mono" title="${esc(r.password)}">${esc(short(r.password, 18))}</span>` : '<span class="muted">-</span>'}</td>
-      <td>${_planCell(r)}<div class="sub-cell">${_extractLinkCell(r)}</div></td>
+      <td>${_planCell(r)}<div class="sub-cell">${_extractLinkCell(r)}${_cardBindingCell(r)}</div></td>
       <td class="wrap" title="${esc(r.note || '')}">${r.note ? esc(short(r.note, 80)) : '<span class="muted">-</span>'}</td>
       <td>${_totpAction(r)}</td>
       <td>${_codexCell(r)}</td>
@@ -1638,7 +1658,7 @@ function renderAccounts() {
       <td class="actions actions-cell">
         <div class="account-row-actions">
           <div class="account-action-group"><button class="primary" data-account-copy-secret="access_token" data-account-id="${esc(r.id)}" ${r.has_access_token ? '' : 'disabled'}>复制Token</button> <button class="good" data-account-copy-secret="copy_line" data-account-id="${esc(r.id)}">复制整行</button></div>
-          <div class="account-action-group"><button data-account-note="${esc(r.id)}" title="设置/清空该账号备注">备注</button> <button data-account-change-email="${esc(r.id)}">换绑邮箱</button> <button data-account-change-email-log="${esc(r.id)}">换绑日志</button> <button data-account-live-check="${esc(r.id)}" title="重新登录该账号，成功则刷新最新 AT/accessToken">查活</button> <button data-account-live-log="${esc(r.email)}" title="查看该账号最近一次查活日志">查活日志</button> <button data-account-totp-log="${esc(r.email)}" title="查看该账号最近一次 2FA 设置日志">2FA日志</button> ${_planAction(r)} ${_extractLinkAction(r)}</div>
+          <div class="account-action-group"><button data-account-note="${esc(r.id)}" title="设置/清空该账号备注">备注</button> <button data-account-change-email="${esc(r.id)}">换绑邮箱</button> <button data-account-change-email-log="${esc(r.id)}">换绑日志</button> <button data-account-live-check="${esc(r.id)}" title="重新登录该账号，成功则刷新最新 AT/accessToken">查活</button> <button data-account-live-log="${esc(r.email)}" title="查看该账号最近一次查活日志">查活日志</button> <button data-account-totp-log="${esc(r.email)}" title="查看该账号最近一次 2FA 设置日志">2FA日志</button> ${_planAction(r)} ${_extractLinkAction(r)} <button class="good" data-account-bind-card="${esc(r.id)}" title="一键自动绑卡开通Plus / 原生提链">💳 绑卡</button></div>
           <div class="account-action-group">${_codexAction(r)} <button data-codex-log="${esc(r.email)}" title="查看该账号最近一次 Codex 补跑日志">补跑日志</button></div>
           <div class="account-action-group danger-zone"><button data-account-archive="${esc(r.id)}" data-archived="${r.archived ? '0' : '1'}" title="${r.archived ? '恢复到默认账号列表' : '归档后默认账号列表不再显示'}">${r.archived ? '恢复' : '归档'}</button> <button class="danger" data-account-delete="${esc(r.id)}" data-email="${esc(r.email)}">删除</button></div>
         </div>

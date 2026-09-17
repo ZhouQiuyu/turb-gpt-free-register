@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 from flask import Flask, Response, jsonify, make_response, render_template, request
 import pyotp
 
-from core import codex_retry_service, db, plan_check_service, extract_link_service, codex_agent_service, live_check_service, proxy_service
+from core import codex_retry_service, db, plan_check_service, extract_link_service, codex_agent_service, live_check_service, proxy_service, card_binding_service
 from webui.auth import init_auth, register_auth_routes
 from core import registration_service as svc
 from webui import config_editor
@@ -329,6 +329,9 @@ def create_app(auth_code: str | None = None) -> Flask:
     recovered_extract_links = db.recover_interrupted_extract_links()
     if recovered_extract_links:
         logger.warning("已恢复 %s 个因 WebUI 重启中断的提链状态", recovered_extract_links)
+    recovered_card_bindings = db.recover_interrupted_card_bindings()
+    if recovered_card_bindings:
+        logger.warning("已恢复 %s 个因 WebUI 重启中断的绑卡任务状态", recovered_card_bindings)
     recovered_live_checks = db.recover_interrupted_live_checks()
     if recovered_live_checks:
         logger.warning("已恢复 %s 个因 WebUI 重启中断的查活状态", recovered_live_checks)
@@ -1100,6 +1103,60 @@ def create_app(auth_code: str | None = None) -> Flask:
             "skipped": skipped,
             "skipped_count": len(skipped),
         }), 202
+
+    @app.post("/api/accounts/parse-card")
+    def api_accounts_parse_card():
+        """智能解析剪贴板卡密文本并返回发卡国/品牌与免税账单预览。"""
+        data = request.get_json(silent=True) or {}
+        raw = data.get("raw_card") or data.get("card_text") or data.get("text") or ""
+        parsed = card_binding_service.parse_card_input(raw)
+        if not parsed.get("valid"):
+            return jsonify({"ok": False, "error": parsed.get("error") or "无效卡密"}), 400
+        billing = card_binding_service.generate_tax_free_billing(
+            country=parsed.get("country", "US"),
+            hint_zip=parsed.get("postal_code"),
+        )
+        return jsonify({"ok": True, "card": parsed, "billing": billing})
+
+    @app.post("/api/accounts/bind-card")
+    def api_account_bind_card():
+        """一键全自动绑卡或原生提链。Body {account_id, card_text, mode: 'auto'|'link_only', proxy_url?}。"""
+        data = request.get_json(silent=True) or {}
+        acc_id = data.get("account_id") or data.get("id")
+        raw_card = data.get("card_text") or data.get("raw_card") or ""
+        mode = data.get("mode") or "auto"
+        proxy_url = data.get("proxy_url") or None
+
+        if not acc_id:
+            return jsonify({"ok": False, "error": "缺少 account_id"}), 400
+        try:
+            acc = db.get_account(int(acc_id))
+        except Exception:
+            acc = None
+        if not acc:
+            return jsonify({"ok": False, "error": "账号不存在"}), 404
+
+        token = (acc.get("access_token") or "").strip()
+        if not token:
+            return jsonify({"ok": False, "error": "该账号没有 access_token"}), 400
+
+        res = card_binding_service.enqueue_card_binding(
+            account_id=int(acc_id),
+            raw_card_input=raw_card,
+            mode=mode,
+            proxy_url=proxy_url,
+        )
+        if not res.get("accepted"):
+            return jsonify({"ok": False, "error": res.get("error") or "任务创建失败"}), 400
+        return jsonify({"ok": True, **res})
+
+    @app.get("/api/accounts/bind-card/status/<job_id>")
+    def api_account_bind_card_status(job_id: str):
+        """轮询后台 CloakBrowser 绑卡进度与实时日志。"""
+        job = card_binding_service.get_binding_job_status(job_id)
+        if not job:
+            return jsonify({"ok": False, "error": "未找到指定绑卡任务"}), 404
+        return jsonify({"ok": True, "job": job})
 
     @app.post("/api/accounts/codex-agent")
     def api_account_codex_agent():
