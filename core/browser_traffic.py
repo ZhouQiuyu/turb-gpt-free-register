@@ -1106,31 +1106,22 @@ class PlaywrightTrafficTracker(_TrafficAccumulator):
                 )
                 continue
 
-            values = None
-            impl = getattr(request, "_impl_obj", None)
-            if impl and getattr(impl, "_response", None) is not None:
-                try:
-                    values = self._request_size_values(request)
-                except Exception:
-                    values = None
-            values = values or {}
-            if values:
-                upload = (values.get("requestBodySize") or 0) + (values.get("requestHeadersSize") or 0)
-                download = (values.get("responseBodySize") or 0) + (values.get("responseHeadersSize") or 0)
-                include_response = True
-            else:
-                upload = self._request_fallback_upload(request)
-                download = 0
-                include_response = False
+            # 未完成请求在语义上绝无完整下载尺寸；绝不能调用 request.sizes() 或 request.response()。
+            # Playwright 的 request.sizes() 会跨进程向 Node 发送指令并阻塞等待请求完成或页面关闭；
+            # 对 SSE 流式长连接或未完成请求调用会导致工作线程与 Node 驱动发生永久死锁。
+            # 此处统一采用纯 Python 内存解析估算上传字节，下载字节记为 0，耗时 < 0.1ms。
+            upload = self._request_fallback_upload(request)
+            if upload:
+                self._add_http(upload, 0)
             self._record_playwright_detail(
                 request,
                 request_id=key,
                 upload_bytes=upload,
-                download_bytes=download,
-                response_body_bytes=values.get("responseBodySize") or 0,
-                response_header_bytes=values.get("responseHeadersSize") or 0,
+                download_bytes=0,
+                response_body_bytes=0,
+                response_header_bytes=0,
                 unfinished=True,
-                include_response=include_response,
+                include_response=False,
             )
             unfinished += 1
         return unfinished

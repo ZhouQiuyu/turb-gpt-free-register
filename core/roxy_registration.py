@@ -2335,10 +2335,17 @@ def run_roxy_registration(
         # 统计注册浏览器关闭前的完整会话；注册后停留期间的网络请求也计入。
         post_register_dwell(email, label="Roxy注册")
         _traffic_checkpoint()
+        network_traffic = None
         if traffic_tracker is not None:
-            network_traffic = traffic_tracker.stop()
+            try:
+                network_traffic = traffic_tracker.stop()
+            except Exception as exc:
+                logger.warning("[Roxy注册] 停止流量统计异常（不影响账号落库）：%s: %s", type(exc).__name__, exc)
         if data_saver is not None:
-            data_saver.stop()
+            try:
+                data_saver.stop()
+            except Exception:
+                pass
         account_id = save_account_data(
             email=email,
             access_token=access_token,

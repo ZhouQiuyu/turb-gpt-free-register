@@ -732,18 +732,30 @@ def cleanup_interrupted_jobs() -> int:
             _append_job_log(job_id, "服务重启：检测到异常中断任务，已自动重置为 failed。")
             cleaned += 1
         elif status == "pending":
-            db.update_job(
-                job_id,
-                status="cancelled",
-                completed_at=now_iso,
-                error="服务重启，未执行的排队任务已自动取消",
-            )
-            _release_unconsumed_job_email(
-                str(job.get("email") or "").strip() or None,
-                "服务重启清理排队任务",
-            )
-            _append_job_log(job_id, "服务重启：排队任务未执行，已自动取消。")
-            cleaned += 1
+            try:
+                executor = get_executor()
+                if str(job.get("job_type") or "").strip() == "codex_retry":
+                    email = str(job.get("email") or "").strip()
+                    account_id = job.get("account_id")
+                    if email and account_id:
+                        executor.submit(_run_codex_retry_job, job_id, job["log_file"], email, int(account_id))
+                        _append_job_log(job_id, "服务启动：已自动恢复待执行的 Codex 补跑排队任务。")
+                        continue
+                executor.submit(_run_one_job, job_id, job["log_file"])
+                _append_job_log(job_id, "服务启动：已自动恢复待执行的排队注册任务。")
+            except Exception as exc:
+                db.update_job(
+                    job_id,
+                    status="cancelled",
+                    completed_at=now_iso,
+                    error=f"服务启动恢复排队任务失败：{exc}",
+                )
+                _release_unconsumed_job_email(
+                    str(job.get("email") or "").strip() or None,
+                    "服务启动清理排队任务",
+                )
+                _append_job_log(job_id, f"服务启动恢复失败：{exc}")
+                cleaned += 1
     if cleaned:
         logger.warning(f"[Service] 已自动清理 {cleaned} 个前序中断/排队任务")
     return cleaned

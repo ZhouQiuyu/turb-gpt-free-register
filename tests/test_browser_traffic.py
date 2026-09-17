@@ -326,6 +326,27 @@ class BrowserTrafficTests(unittest.TestCase):
         self.assertGreater(result["http_upload_bytes"], 0)
         self.assertEqual(result["detail_recorded_count"], 1)
 
+    def test_playwright_unfinished_requests_do_not_call_sizes_or_response(self):
+        context = _Emitter()
+        context.pages = []
+        with patch("core.browser_traffic._browser_cfg.BROWSER_TRAFFIC_DETAIL_LOG", True):
+            tracker = PlaywrightTrafficTracker(context, label="unfinished")
+            request = _FailedRequest()
+            # 模拟底层对象挂载了 _response，但请求处于未完成长连接/流式状态
+            request._impl_obj = type("Impl", (), {"_response": object()})()
+            context.emit("request", request)
+            # 故意不触发 requestfinished 与 requestfailed，直接停止流量统计
+            result = tracker.stop()
+
+        self.assertEqual(request.sizes_called, 0)
+        self.assertEqual(request.response_called, 0)
+        self.assertEqual(result["request_count"], 1)
+        self.assertEqual(result["unfinished_request_count"], 1)
+        self.assertEqual(result["completed_request_count"], 0)
+        self.assertEqual(result["http_download_bytes"], 0)
+        self.assertGreater(result["http_upload_bytes"], 0)
+        self.assertEqual(result["detail_recorded_count"], 1)
+
     def test_selenium_logs_status_cache_failure_and_unfinished_details(self):
         entries = [
             _performance_event(
