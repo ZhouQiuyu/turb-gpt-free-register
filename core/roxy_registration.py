@@ -2444,6 +2444,12 @@ def run_roxy_registration(
             data_saver.stop()
         logger.error("[Roxy注册] 失败：%s: %s", type(exc).__name__, exc)
         logger.debug("[Roxy注册] 失败详情", exc_info=True)
+        if proxy and ("cloudflare" in str(exc).lower() or "403" in str(exc)):
+            try:
+                from core.proxy_dispatcher import record_proxy_cooldown
+                record_proxy_cooldown(proxy, duration=180.0, reason="Cloudflare拦截/403")
+            except Exception:
+                pass
         # 未确认创建前回收邮箱；确认后避免重复使用。
         try:
             if email:

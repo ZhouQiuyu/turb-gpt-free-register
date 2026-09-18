@@ -13,6 +13,8 @@ from core.proxy_dispatcher import (
     is_proxy_connection_error,
     get_consecutive_failures,
     get_active_lease_count,
+    record_proxy_cooldown,
+    is_proxy_cooling,
 )
 
 
@@ -191,3 +193,35 @@ def test_webui_auto_ban_api():
         assert r_post.status_code == 200
         assert r_post.get_json()["enabled"] is True
         assert is_auto_ban_enabled() is True
+
+
+def test_proxy_403_cooldown():
+    fake_proxies = [
+        {"id": 1, "url": "socks5h://1.1.1.1:1080"},
+        {"id": 2, "url": "socks5h://2.2.2.2:1080"},
+    ]
+    with patch("core.db.get_active_proxies", return_value=fake_proxies):
+        with proxy_dispatcher._lock:
+            proxy_dispatcher._active_leases.clear()
+            proxy_dispatcher._last_used_ts.clear()
+            proxy_dispatcher._proxy_cooldown_until.clear()
+
+        # 初始两者都未冷却
+        assert not is_proxy_cooling("socks5h://1.1.1.1:1080")
+        assert not is_proxy_cooling("socks5h://2.2.2.2:1080")
+
+        # 标记 1.1.1.1 冷却 60 秒
+        record_proxy_cooldown("socks5h://1.1.1.1:1080", duration=60.0, reason="HTTP 403")
+        assert is_proxy_cooling("socks5h://1.1.1.1:1080")
+
+        # 此时申请代理，虽然两者并发都为 0，但必须优先分配未冷却的 2.2.2.2！
+        lease = acquire_proxy_lease()
+        assert lease is not None
+        assert lease.proxy_url == "socks5h://2.2.2.2:1080"
+        lease.release()
+
+        # 如果两个代理都冷却了，也能分配（不卡死任务），但仍可正常释放
+        record_proxy_cooldown("socks5h://2.2.2.2:1080", duration=60.0, reason="HTTP 403")
+        lease2 = acquire_proxy_lease()
+        assert lease2 is not None
+        lease2.release()

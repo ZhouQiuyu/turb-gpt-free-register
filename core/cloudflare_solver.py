@@ -154,6 +154,27 @@ def is_cloudflare_challenge(driver: Any) -> bool:
     return False
 
 
+def _save_cf_snapshot(driver: Any, label: str) -> None:
+    """在 Cloudflare 质询关键节点抓取屏幕快照，供运维与调试审计。"""
+    try:
+        import os
+        from datetime import datetime
+        log_dir = "/app/注册日志/screenshots" if os.path.exists("/app") else "注册日志/screenshots"
+        os.makedirs(log_dir, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = os.path.join(log_dir, f"cf_{label}_{ts}.png")
+        saved = False
+        if hasattr(driver, "save_screenshot") and callable(driver.save_screenshot):
+            saved = bool(driver.save_screenshot(filename))
+        elif hasattr(driver, "page") and driver.page and hasattr(driver.page, "screenshot"):
+            driver.page.screenshot(path=filename)
+            saved = True
+        if saved:
+            logger.info("[Cloudflare] 已保存现场快照: %s", filename)
+    except Exception as exc:
+        logger.debug("[Cloudflare] 保存现场快照失败: %s", exc)
+
+
 def human_curve_move(
     page: Any,
     start_x: float,
@@ -199,6 +220,7 @@ def solve_cloudflare_challenge_if_present(
     title = str(getattr(driver, "title", "") or "")
     url = str(getattr(driver, "current_url", "") or "")
     logger.info("%s 检测到 Cloudflare 人机安全质询：title=%r url=%s", prefix, title, url[:120])
+    _save_cf_snapshot(driver, "detected")
     if emit_fn:
         try:
             emit_fn("检测到 Cloudflare 人机安全质询，正在自动尝试穿透/等待放行…")
@@ -207,6 +229,7 @@ def solve_cloudflare_challenge_if_present(
 
     end = time.time() + max_wait
     clicked = False
+    coord_click_count = 0
     last_coord_click_at = 0.0
     _CB_SELECTORS = (
         "input[type='checkbox']",
@@ -223,6 +246,7 @@ def solve_cloudflare_challenge_if_present(
         # 每轮优先检查是否已脱离质询页面（例如算力盾已自主放行或重定向）
         if not is_cloudflare_challenge(driver):
             logger.info("%s Cloudflare 人机安全质询已成功穿透放行！", prefix)
+            _save_cf_snapshot(driver, "solved")
             if emit_fn:
                 try:
                     emit_fn("Cloudflare 人机验证已成功通过！")
@@ -236,25 +260,35 @@ def solve_cloudflare_challenge_if_present(
 
         # 尝试通过 Playwright Page 穿透
         if page is not None:
-            # 层级 0：自适应几何容器定位与拟真贝塞尔曲线周期性点击（核心突破层）
-            # Turnstile 容器通常为 300x65，由于内嵌 Shadow DOM，使用原生视口坐标点击能直接命中复选框
+            # 层级 0：自适应几何容器定位与拟真贝塞尔曲线周期性点击（带强制居中滚动保障）
+            # Turnstile 容器通常为 300x65，先执行 scrollIntoView 居中，避免贴近底端（如 y=688）导致的点击盲区
             if (now - last_coord_click_at) >= 4.0:
                 try:
                     widget = page.evaluate(r"""() => {
                         try {
                             const candidates = [...document.querySelectorAll('.main-wrapper, .main-content, .data, div[style*="grid"], [id*="widget"], iframe')];
+                            let targetEl = null;
                             for (const el of candidates) {
                                 const r = el.getBoundingClientRect();
                                 if (r.width >= 250 && r.width <= 350 && r.height >= 45 && r.height <= 110) {
-                                    return {x: r.x, y: r.y, w: r.width, h: r.height};
+                                    targetEl = el;
+                                    break;
                                 }
                             }
-                            const allDivs = [...document.querySelectorAll('div')];
-                            for (const el of allDivs) {
-                                const r = el.getBoundingClientRect();
-                                if (Math.abs(r.width - 300) < 35 && Math.abs(r.height - 65) < 35) {
-                                    return {x: r.x, y: r.y, w: r.width, h: r.height};
+                            if (!targetEl) {
+                                const allDivs = [...document.querySelectorAll('div')];
+                                for (const el of allDivs) {
+                                    const r = el.getBoundingClientRect();
+                                    if (Math.abs(r.width - 300) < 35 && Math.abs(r.height - 65) < 35) {
+                                        targetEl = el;
+                                        break;
+                                    }
                                 }
+                            }
+                            if (targetEl) {
+                                targetEl.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
+                                const r2 = targetEl.getBoundingClientRect();
+                                return {x: r2.x, y: r2.y, w: r2.width, h: r2.height};
                             }
                         } catch (_) {}
                         return null;
@@ -281,9 +315,24 @@ def solve_cloudflare_challenge_if_present(
                             elif hasattr(mouse, "click"):
                                 mouse.click(cx, cy)
                         last_coord_click_at = now
+                        coord_click_count += 1
                         clicked = True
                         round_clicked = True
                         time.sleep(1.8)
+
+                        # 若连续坐标点击 >= 2 次仍未放行，交替补充 frame_locator 事件穿透
+                        if coord_click_count >= 2:
+                            for if_sel in ("iframe[src*='challenge-platform']", "iframe[src*='challenges.cloudflare.com']", "iframe"):
+                                try:
+                                    fl = page.frame_locator(if_sel)
+                                    for cb_sel in _CB_SELECTORS:
+                                        box = fl.locator(cb_sel).first
+                                        if box.is_visible():
+                                            box.click(delay=random.randint(80, 150))
+                                            logger.info("%s [Cloudflare] 交叉尝试 frame_locator(%s) 协同点击复选框", prefix, if_sel)
+                                            break
+                                except Exception:
+                                    pass
                 except Exception as exc:
                     logger.debug("%s [Cloudflare] 几何容器坐标点击异常: %s", prefix, exc)
 
@@ -451,7 +500,9 @@ def solve_cloudflare_challenge_if_present(
     # 结束后的最终判断
     if not is_cloudflare_challenge(driver):
         logger.info("%s Cloudflare 人机安全质询已通过！", prefix)
+        _save_cf_snapshot(driver, "solved")
         return True
 
+    _save_cf_snapshot(driver, "timeout")
     logger.warning("%s Cloudflare 质询等待超时 (%.1fs)，未能完成穿透", prefix, max_wait)
     return False

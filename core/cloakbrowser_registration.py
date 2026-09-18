@@ -285,6 +285,12 @@ def run_cloak_registration(
             data_saver.stop()
         logger.error("[Cloak注册] 失败：%s: %s", type(exc).__name__, exc)
         logger.debug("[Cloak注册] 失败详情", exc_info=True)
+        if effective_proxy and ("cloudflare" in str(exc).lower() or "403" in str(exc)):
+            try:
+                from core.proxy_dispatcher import record_proxy_cooldown
+                record_proxy_cooldown(effective_proxy, duration=180.0, reason="Cloudflare拦截/403")
+            except Exception:
+                pass
         try:
             if email:
                 from core.email_provider import release_email

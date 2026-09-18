@@ -41,6 +41,9 @@ _consecutive_failures: dict[int, int] = {}
 # 动态禁用开关内存缓存（None 时从数据库加载）
 _auto_ban_enabled: bool | None = None
 
+# 记录代理临时冷却截止时间戳（遭遇 403 / Cloudflare 强风控时临时降权避让）
+_proxy_cooldown_until: dict[str, float] = {}
+
 # 底层网络断开错误子串列表（区分于业务层人机验证挑战）
 _PROXY_CONNECTION_ERROR_SUBSTRINGS = (
     "err_connection_closed",
@@ -184,11 +187,12 @@ def acquire_proxy_lease(
     with _lock:
         now = time.time()
 
-        def _sort_key(item: dict) -> tuple[int, float]:
+        def _sort_key(item: dict) -> tuple[int, int, float]:
             norm = normalize_proxy_url(item.get("url") or "")
+            is_cooling = 1 if now < _proxy_cooldown_until.get(norm, 0.0) else 0
             concurrency = _active_leases.get(norm, 0)
             last_ts = _last_used_ts.get(norm, 0.0)
-            return (concurrency, last_ts)
+            return (is_cooling, concurrency, last_ts)
 
         chosen = min(filtered, key=_sort_key)
         norm_url = normalize_proxy_url(chosen.get("url") or "")
@@ -301,3 +305,30 @@ def get_consecutive_failures(proxy_id: int) -> int:
     """获取指定代理当前的连续失败次数。"""
     with _lock:
         return _consecutive_failures.get(proxy_id, 0)
+
+
+def record_proxy_cooldown(
+    proxy_url: str,
+    duration: float = 180.0,
+    reason: str = "Cloudflare 403 / 质询阻断",
+) -> None:
+    """当代理触发 Cloudflare 403 或风控阻断时，进入指定时长的临时静默冷却期（优先调度其他可用代理）。"""
+    if not proxy_url:
+        return
+    norm = normalize_proxy_url(proxy_url)
+    with _lock:
+        until = time.time() + max(float(duration or 0), 10.0)
+        _proxy_cooldown_until[norm] = until
+        logger.warning(
+            "[ProxyDispatcher] 代理 %s 触发 %s，进入临时冷却 %.0f 秒 (至 %s)",
+            norm, reason, duration, time.strftime("%H:%M:%S", time.localtime(until)),
+        )
+
+
+def is_proxy_cooling(proxy_url: str) -> bool:
+    """判断代理当前是否处于 403 / 风控冷却期内。"""
+    if not proxy_url:
+        return False
+    norm = normalize_proxy_url(proxy_url)
+    with _lock:
+        return time.time() < _proxy_cooldown_until.get(norm, 0.0)

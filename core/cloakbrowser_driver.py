@@ -509,8 +509,25 @@ def _normalize_proxy(proxy: str | None) -> str | None:
     return proxy.replace("socks5h://", "socks5://")
 
 
+_PROXY_GEO_CACHE: dict[str, tuple[dict, float]] = {}
+_PROXY_GEO_CACHE_LOCK = threading.Lock()
+_PROXY_GEO_CACHE_TTL = 7200.0  # 2 小时缓存有效期
+
+
 def _detect_cloak_exit_geo(proxy_url: str | None = None) -> dict:
-    """按当前/代理出口检测地理信息，供 Cloak 显式 locale/timezone 使用。"""
+    """按当前/代理出口检测地理信息，带线程安全的长效内存缓存。"""
+    norm_proxy = str(proxy_url or "").strip()
+    now = time.time()
+    if norm_proxy:
+        with _PROXY_GEO_CACHE_LOCK:
+            cached = _PROXY_GEO_CACHE.get(norm_proxy)
+            if cached and (now - cached[1] < _PROXY_GEO_CACHE_TTL):
+                logger.info(
+                    "[Cloak] 命中代理出口地理缓存: ip=%s country=%s timezone=%s (缓存年龄: %.1fs)",
+                    cached[0].get("ip") or "?", cached[0].get("country") or "?", cached[0].get("timezone") or "?", now - cached[1],
+                )
+                return dict(cached[0])
+
     try:
         import requests
         from config import browser as _browser_cfg
@@ -541,9 +558,12 @@ def _detect_cloak_exit_geo(proxy_url: str | None = None) -> dict:
             }
             if geo.get("country") or geo.get("timezone"):
                 logger.info(
-                    "[Cloak] 出口IP地理信息：ip=%s country=%s city=%s timezone=%s",
+                    "[Cloak] 出口IP地理信息探测成功：ip=%s country=%s city=%s timezone=%s",
                     geo.get("ip") or "?", geo.get("country") or "?", geo.get("city") or "?", geo.get("timezone") or "?",
                 )
+                if norm_proxy:
+                    with _PROXY_GEO_CACHE_LOCK:
+                        _PROXY_GEO_CACHE[norm_proxy] = (geo, now)
                 return geo
         except Exception as exc:
             logger.debug("[Cloak] 出口 IP 地理检测失败 endpoint=%s: %s: %s", url, type(exc).__name__, exc)
@@ -551,7 +571,7 @@ def _detect_cloak_exit_geo(proxy_url: str | None = None) -> dict:
 
 
 def _build_cloak_locale_options(proxy_url: str | None = None) -> dict:
-    """生成 Cloak/Playwright 双层语言时区配置。"""
+    """生成 Cloak/Playwright 双层语言时区配置。若探测失败则采用中性画像兜底，禁止回退特定小语种。"""
     explicit_locale = str(getattr(_cfg, "CLOAK_LOCALE", "") or "").strip()
     explicit_timezone = str(getattr(_cfg, "CLOAK_TIMEZONE", "") or "").strip()
     out = {}
@@ -568,10 +588,18 @@ def _build_cloak_locale_options(proxy_url: str | None = None) -> dict:
     try:
         from config.browser import build_browser_environment
         geo = _detect_cloak_exit_geo(proxy_url)
+        if not geo:
+            # 探测失败且无缓存时，采用通用英文画像，禁止回退到特定小语种/时区（如日区），避免跨国指纹冲突
+            logger.warning("[Cloak] 未能探测到出口地理信息，降级使用中性通用画像 (en-US / America/New_York)")
+            geo = {
+                "ip": "?",
+                "country": "US",
+                "timezone": "America/New_York",
+            }
         profile = build_browser_environment(geo)
-        out.setdefault("locale", str(profile.get("navigator_language") or ""))
-        out.setdefault("timezone", str(profile.get("timezone_iana") or ""))
-        out.setdefault("accept_language", str(profile.get("accept_language") or ""))
+        out.setdefault("locale", str(profile.get("navigator_language") or "en-US"))
+        out.setdefault("timezone", str(profile.get("timezone_iana") or "America/New_York"))
+        out.setdefault("accept_language", str(profile.get("accept_language") or "en-US,en;q=0.9"))
         out["geo"] = geo
     except Exception as exc:
         logger.debug("[Cloak] 构建自动语言/时区失败：%s: %s", type(exc).__name__, exc)
@@ -652,7 +680,9 @@ def build_cloak_driver(proxy: str | None = None) -> tuple[CloakSeleniumDriver, C
         proxy_url or "无", opts.get("locale") or "自动/默认", opts.get("timezone") or "自动/默认",
         locale_opts.get("accept_language") or "自动/默认", bool(user_data_dir),
     )
-    context_kwargs = {}
+    context_kwargs = {
+        "viewport": {"width": 1440, "height": 900},
+    }
     if locale_opts.get("locale"):
         context_kwargs["locale"] = locale_opts["locale"]
     if locale_opts.get("timezone"):
@@ -661,7 +691,9 @@ def build_cloak_driver(proxy: str | None = None) -> tuple[CloakSeleniumDriver, C
         context_kwargs["extra_http_headers"] = {"Accept-Language": locale_opts["accept_language"]}
 
     if user_data_dir:
-        context = launch_persistent_context(user_data_dir, **opts)
+        persistent_opts = dict(opts)
+        persistent_opts.setdefault("viewport", {"width": 1440, "height": 900})
+        context = launch_persistent_context(user_data_dir, **persistent_opts)
         page = context.new_page()
         browser = getattr(context, "browser", None) or context
         # persistent context 的 locale/timezone 已通过 launch_persistent_context 参数传入。
