@@ -33,6 +33,25 @@ class PlusPromoFieldsTests(unittest.TestCase):
         self.assertEqual(cleaned.get("plus_trial_title"), "Get a 50% discount on Plus for 3 months")
         self.assertEqual(cleaned.get("plus_trial_campaign_id"), "promo-123")
 
+    def test_compact_account_for_list_preserves_country_fields(self):
+        row = {
+            "id": 102,
+            "email": "jp_user@example.com",
+            "country_code": "JP",
+            "country": "Japan",
+            "country_badge": "🇯🇵 日本 (JP)",
+            "country_flag": "🇯🇵",
+            "country_name_cn": "日本",
+            "city": "Tokyo",
+        }
+        cleaned = _compact_account_for_list(row)
+        self.assertEqual(cleaned.get("country_code"), "JP")
+        self.assertEqual(cleaned.get("country"), "Japan")
+        self.assertEqual(cleaned.get("country_badge"), "🇯🇵 日本 (JP)")
+        self.assertEqual(cleaned.get("country_flag"), "🇯🇵")
+        self.assertEqual(cleaned.get("country_name_cn"), "日本")
+        self.assertEqual(cleaned.get("city"), "Tokyo")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -117,6 +117,7 @@ def _compact_account_for_list(row: dict) -> dict:
         "plan_type", "current_plan_type", "plus_trial_eligible",
         "plan_check_status", "codex_status", "codex_agent_status",
         "totp_setup_status",
+        "country_code", "country", "country_badge", "country_flag", "country_name_cn", "city",
     ):
         if key in row:
             out[key] = row.get(key)
