@@ -124,7 +124,7 @@ def run_cloak_registration(
 
         human_delay("navigate")
         _maybe_accept(driver)
-        solve_cloudflare_challenge_if_present(driver, max_wait=20.0)
+        solve_cloudflare_challenge_if_present(driver, max_wait=45.0)
         _check_manual_stop()
 
         def _email_supplier_after_input() -> str:
@@ -154,7 +154,7 @@ def run_cloak_registration(
             _check_manual_stop()
 
         # 进入 OTP 验证前，穿透可能存在的验证码页 Cloudflare 二次质询，触发验证码邮件下发
-        solve_cloudflare_challenge_if_present(driver, max_wait=15.0)
+        solve_cloudflare_challenge_if_present(driver, max_wait=30.0)
 
         current_otp = otp_code
         max_otp_attempts = 3

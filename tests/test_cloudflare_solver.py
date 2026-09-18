@@ -4,7 +4,11 @@ import unittest
 from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from core.cloudflare_solver import is_cloudflare_challenge, solve_cloudflare_challenge_if_present
+from core.cloudflare_solver import (
+    is_cloudflare_challenge,
+    solve_cloudflare_challenge_if_present,
+    human_curve_move,
+)
 
 
 class TestCloudflareSolver(unittest.TestCase):
@@ -63,6 +67,39 @@ class TestCloudflareSolver(unittest.TestCase):
         res = solve_cloudflare_challenge_if_present(driver, max_wait=2.0)
         self.assertFalse(res)
 
+    def test_human_curve_move(self):
+        mock_page = MagicMock()
+        human_curve_move(mock_page, 100, 100, 300, 300, steps=5)
+        self.assertTrue(mock_page.mouse.move.called)
+        self.assertGreaterEqual(mock_page.mouse.move.call_count, 5)
+
+    def test_solve_turnstile_container_coordinate_click(self):
+        # 模拟 300x65 几何容器定位与拟真坐标点击
+        mock_page = MagicMock()
+        # evaluate 返回识别到的 300x65 widget rect
+        mock_page.evaluate.return_value = {"x": 120.0, "y": 250.0, "w": 300.0, "h": 65.0}
+        mock_page.frames = []
+
+        driver = MagicMock()
+        driver.page = mock_page
+        driver.title = "Just a moment..."
+        driver.current_url = "https://chatgpt.com/auth/login"
+        driver.execute_script.return_value = False
+
+        # 模拟点击后第二次检查时标题恢复正常
+        def mock_title_effect():
+            if mock_page.mouse.down.called or mock_page.mouse.click.called:
+                return "ChatGPT"
+            return "Just a moment..."
+
+        type(driver).title = property(lambda self: mock_title_effect())
+
+        emit_messages = []
+        res = solve_cloudflare_challenge_if_present(driver, max_wait=5.0, emit_fn=emit_messages.append)
+        self.assertTrue(res)
+        self.assertTrue(mock_page.mouse.down.called or mock_page.mouse.click.called)
+        self.assertTrue(any("拟真轨迹" in m or "质询" in m for m in emit_messages))
+
     def test_solve_click_turnstile_box(self):
         # 初始处于质询状态
         mock_box = MagicMock()
@@ -75,6 +112,8 @@ class TestCloudflareSolver(unittest.TestCase):
         mock_frame.locator.return_value.first = mock_box
 
         mock_page = MagicMock()
+        # evaluate 返回非字典，触发向下层级 Frame 搜索
+        mock_page.evaluate.return_value = None
         mock_page.frames = [mock_frame]
 
         driver = MagicMock()

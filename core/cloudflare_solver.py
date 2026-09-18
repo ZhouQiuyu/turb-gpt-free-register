@@ -9,6 +9,7 @@ Turnstile IFrame 复选框识别与模拟点击、以及等待质询通过放行
 from __future__ import annotations
 
 import logging
+import math
 import random
 import time
 from typing import Any, Callable
@@ -153,16 +154,41 @@ def is_cloudflare_challenge(driver: Any) -> bool:
     return False
 
 
+def human_curve_move(
+    page: Any,
+    start_x: float,
+    start_y: float,
+    end_x: float,
+    end_y: float,
+    steps: int = 12,
+) -> None:
+    """模拟人类带微颤的平滑缓动贝塞尔鼠标轨迹。"""
+    try:
+        mouse = getattr(page, "mouse", None)
+        if mouse is None or not hasattr(mouse, "move"):
+            return
+        for i in range(1, steps + 1):
+            t = i / steps
+            ease = 0.5 - 0.5 * math.cos(t * math.pi)
+            cur_x = start_x + (end_x - start_x) * ease + random.uniform(-1.0, 1.0)
+            cur_y = start_y + (end_y - start_y) * ease + random.uniform(-1.0, 1.0)
+            mouse.move(cur_x, cur_y)
+            time.sleep(random.uniform(0.01, 0.025))
+        mouse.move(end_x, end_y)
+    except Exception:
+        pass
+
+
 def solve_cloudflare_challenge_if_present(
     driver: Any,
-    max_wait: float = 35.0,
+    max_wait: float = 45.0,
     emit_fn: Callable[[str], None] | None = None,
 ) -> bool:
     """
     若当前页面处于 Cloudflare 质询状态，尝试自动寻找 Turnstile 复选框穿透并等待放行。
 
     :param driver: CloakSeleniumDriver 或 Selenium WebDriver
-    :param max_wait: 最大等待放行时间（秒）
+    :param max_wait: 最大等待放行时间（秒，针对 Turnstile 渲染特点默认 45 秒）
     :param emit_fn: 进度回调输出函数（可选）
     :return: 若存在质询且成功穿透返回 True，若不存在质询返回 False，若质询超时未解返回 False。
     """
@@ -181,6 +207,7 @@ def solve_cloudflare_challenge_if_present(
 
     end = time.time() + max_wait
     clicked = False
+    last_coord_click_at = 0.0
     _CB_SELECTORS = (
         "input[type='checkbox']",
         ".ctp-checkbox-label",
@@ -203,61 +230,118 @@ def solve_cloudflare_challenge_if_present(
                     pass
             return True
 
-        # 尝试通过 Playwright Page 定位 frame 并点击
+        now = time.time()
         page = getattr(driver, "page", None)
+        round_clicked = False
+
+        # 尝试通过 Playwright Page 穿透
         if page is not None:
-            try:
-                frames = list(getattr(page, "frames", []) or [])
-                for frame in frames:
-                    f_url = str(getattr(frame, "url", "") or "").lower()
-                    # 识别候选 Frame：非主框架，或包含 challenge / turnstile / cdn-cgi / about 等
-                    is_candidate = (
-                        frame != getattr(page, "main_frame", None)
-                        or any(k in f_url for k in ("challenges.cloudflare.com", "challenge-platform", "turnstile", "cdn-cgi", "about:"))
-                    )
-                    if not is_candidate:
-                        continue
+            # 层级 0：自适应几何容器定位与拟真贝塞尔曲线周期性点击（核心突破层）
+            # Turnstile 容器通常为 300x65，由于内嵌 Shadow DOM，使用原生视口坐标点击能直接命中复选框
+            if (now - last_coord_click_at) >= 4.0:
+                try:
+                    widget = page.evaluate(r"""() => {
+                        try {
+                            const candidates = [...document.querySelectorAll('.main-wrapper, .main-content, .data, div[style*="grid"], [id*="widget"], iframe')];
+                            for (const el of candidates) {
+                                const r = el.getBoundingClientRect();
+                                if (r.width >= 250 && r.width <= 350 && r.height >= 45 && r.height <= 110) {
+                                    return {x: r.x, y: r.y, w: r.width, h: r.height};
+                                }
+                            }
+                            const allDivs = [...document.querySelectorAll('div')];
+                            for (const el of allDivs) {
+                                const r = el.getBoundingClientRect();
+                                if (Math.abs(r.width - 300) < 35 && Math.abs(r.height - 65) < 35) {
+                                    return {x: r.x, y: r.y, w: r.width, h: r.height};
+                                }
+                            }
+                        } catch (_) {}
+                        return null;
+                    }""")
+                    if isinstance(widget, dict) and widget.get("w", 0) >= 200:
+                        cx = widget["x"] + 28.0 + random.uniform(-2.0, 2.0)
+                        cy = widget["y"] + min(42.0, widget.get("h", 65.0) * 0.5) + random.uniform(-2.0, 2.0)
+                        logger.info("%s [Cloudflare] 触发人类拟真轨迹坐标点击 Turnstile 容器: (%.1f, %.1f)", prefix, cx, cy)
+                        if emit_fn and not clicked:
+                            try:
+                                emit_fn("发现 Cloudflare Turnstile 验证框，正在模拟拟真轨迹点击…")
+                            except Exception:
+                                pass
+                        start_x = random.uniform(150, 350)
+                        start_y = random.uniform(150, 350)
+                        human_curve_move(page, start_x, start_y, cx, cy, steps=10)
+                        time.sleep(random.uniform(0.12, 0.25))
+                        mouse = getattr(page, "mouse", None)
+                        if mouse is not None:
+                            if hasattr(mouse, "down") and hasattr(mouse, "up"):
+                                mouse.down()
+                                time.sleep(random.uniform(0.08, 0.15))
+                                mouse.up()
+                            elif hasattr(mouse, "click"):
+                                mouse.click(cx, cy)
+                        last_coord_click_at = now
+                        clicked = True
+                        round_clicked = True
+                        time.sleep(1.8)
+                except Exception as exc:
+                    logger.debug("%s [Cloudflare] 几何容器坐标点击异常: %s", prefix, exc)
 
-                    # 检查是否已勾选（正在提交或已放行）
-                    try:
-                        if frame.locator("input[type='checkbox']:checked, .ctp-checkbox-checked, #success").count() > 0:
-                            time.sleep(1.0)
+            # 层级 1：若未通过坐标点击，遍历 Playwright Page 的 frames 寻找可见复选框
+            if not round_clicked:
+                try:
+                    frames = list(getattr(page, "frames", []) or [])
+                    for frame in frames:
+                        f_url = str(getattr(frame, "url", "") or "").lower()
+                        # 识别候选 Frame：非主框架，或包含 challenge / turnstile / cdn-cgi / about 等
+                        is_candidate = (
+                            frame != getattr(page, "main_frame", None)
+                            or any(k in f_url for k in ("challenges.cloudflare.com", "challenge-platform", "turnstile", "cdn-cgi", "about:"))
+                        )
+                        if not is_candidate:
                             continue
-                    except Exception:
-                        pass
 
-                    for cb_sel in _CB_SELECTORS:
+                        # 检查是否已勾选（正在提交或已放行）
                         try:
-                            box = frame.locator(cb_sel).first
-                            if box.is_visible():
-                                logger.info("%s [Cloudflare] 发现 Turnstile 复选框 (%s, frame=%s)，正在模拟点击…", prefix, cb_sel, f_url[:60])
-                                if emit_fn and not clicked:
-                                    try:
-                                        emit_fn("发现 Cloudflare Turnstile 复选框，正在模拟点击…")
-                                    except Exception:
-                                        pass
-                                try:
-                                    box.scroll_into_view_if_needed(timeout=1500)
-                                except Exception:
-                                    pass
-                                try:
-                                    box.hover(timeout=1500)
-                                    time.sleep(random.uniform(0.1, 0.25))
-                                except Exception:
-                                    pass
-                                box.click(delay=random.randint(80, 160))
-                                clicked = True
-                                time.sleep(2.0)
-                                break
+                            if frame.locator("input[type='checkbox']:checked, .ctp-checkbox-checked, #success").count() > 0:
+                                time.sleep(1.0)
+                                continue
                         except Exception:
                             pass
-                    if clicked:
-                        break
-            except Exception as exc:
-                logger.debug("%s [Cloudflare] Playwright Frame 遍历异常：%s", prefix, exc)
+
+                        for cb_sel in _CB_SELECTORS:
+                            try:
+                                box = frame.locator(cb_sel).first
+                                if box.is_visible():
+                                    logger.info("%s [Cloudflare] 发现 Turnstile 复选框 (%s, frame=%s)，正在模拟点击…", prefix, cb_sel, f_url[:60])
+                                    if emit_fn and not clicked:
+                                        try:
+                                            emit_fn("发现 Cloudflare Turnstile 复选框，正在模拟点击…")
+                                        except Exception:
+                                            pass
+                                    try:
+                                        box.scroll_into_view_if_needed(timeout=1500)
+                                    except Exception:
+                                        pass
+                                    try:
+                                        box.hover(timeout=1500)
+                                        time.sleep(random.uniform(0.1, 0.25))
+                                    except Exception:
+                                        pass
+                                    box.click(delay=random.randint(80, 160))
+                                    clicked = True
+                                    round_clicked = True
+                                    time.sleep(2.0)
+                                    break
+                            except Exception:
+                                pass
+                        if round_clicked:
+                            break
+                except Exception as exc:
+                    logger.debug("%s [Cloudflare] Playwright Frame 遍历异常：%s", prefix, exc)
 
             # 层级 2：使用 frame_locator 强穿透
-            if not clicked:
+            if not round_clicked:
                 for if_sel in (
                     "iframe[src*='challenge-platform']",
                     "iframe[src*='challenges.cloudflare.com']",
@@ -276,15 +360,16 @@ def solve_cloudflare_challenge_if_present(
                                 logger.info("%s [Cloudflare] 通过 frame_locator(%s) 发现复选框，执行点击…", prefix, if_sel)
                                 box.click(delay=random.randint(80, 160))
                                 clicked = True
+                                round_clicked = True
                                 time.sleep(2.0)
                                 break
-                        if clicked:
+                        if round_clicked:
                             break
                     except Exception:
                         pass
 
             # 层级 3：模拟绝对屏幕坐标点击（穿透跨域/隔离 iframe）
-            if not clicked:
+            if not round_clicked:
                 for if_sel in (
                     "iframe[src*='challenge-platform']",
                     "iframe[src*='challenges.cloudflare.com']",
@@ -303,23 +388,34 @@ def solve_cloudflare_challenge_if_present(
                                 cx = bbox["x"] + min(30.0, bbox["width"] * 0.15)
                                 cy = bbox["y"] + (bbox["height"] / 2.0)
                                 logger.info("%s [Cloudflare] 触发坐标点击穿透 Turnstile：x=%.1f y=%.1f", prefix, cx, cy)
-                                page.mouse.move(cx, cy, steps=4)
+                                start_x = random.uniform(100, 300)
+                                start_y = random.uniform(100, 300)
+                                human_curve_move(page, start_x, start_y, cx, cy, steps=8)
                                 time.sleep(random.uniform(0.1, 0.2))
-                                page.mouse.click(cx, cy, delay=random.randint(80, 150))
+                                mouse = getattr(page, "mouse", None)
+                                if mouse is not None:
+                                    if hasattr(mouse, "down") and hasattr(mouse, "up"):
+                                        mouse.down()
+                                        time.sleep(random.uniform(0.08, 0.15))
+                                        mouse.up()
+                                    elif hasattr(mouse, "click"):
+                                        mouse.click(cx, cy, delay=random.randint(80, 150))
                                 clicked = True
+                                round_clicked = True
                                 time.sleep(2.5)
                                 break
                     except Exception:
                         pass
 
             # 层级 4：主框架备用兜底定位
-            if not clicked:
+            if not round_clicked:
                 try:
                     main_box = page.locator("#challenge-stage input[type='checkbox'], #cf-stage, .ctp-checkbox-label").first
                     if main_box.is_visible():
                         logger.info("%s [Cloudflare] 发现主页面复选框，执行点击…", prefix)
                         main_box.click(delay=random.randint(80, 160))
                         clicked = True
+                        round_clicked = True
                         time.sleep(2.0)
                 except Exception:
                     pass

@@ -533,7 +533,7 @@ def _wait_for_email_input(driver, timeout: int | None = None):
     last_state = None
     clicked_email_option = False
     while time.time() < end:
-        if solve_cloudflare_challenge_if_present(driver, max_wait=20.0):
+        if solve_cloudflare_challenge_if_present(driver, max_wait=45.0):
             time.sleep(1.0)
             continue
         el = _find_visible_email_input_js(driver)
@@ -980,7 +980,7 @@ def _wait_email_submit_next_state(driver, email: str, timeout: int = 35) -> str:
     cleared_recover_done = False
     expected_email = str(email or "").strip().lower()
     while time.time() < end:
-        if solve_cloudflare_challenge_if_present(driver, max_wait=30.0):
+        if solve_cloudflare_challenge_if_present(driver, max_wait=45.0):
             logger.info("%s Cloudflare 质询已尝试穿透/放行，延长下一步等待窗口", _log_prefix(driver))
             end = max(end, time.time() + 15.0)
             time.sleep(1.0)
