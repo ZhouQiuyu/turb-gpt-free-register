@@ -21,6 +21,7 @@ from core.roxy_registration import (  # noqa: F401
     _maybe_accept, _submit_email_and_wait_next, _fill_password_page_if_present,
     _clear_otp_inputs, _type_otp, _click_continue, _wait_after_email_otp_submit,
     _click_resend_email_otp, _complete_profile_page, _fetch_chatgpt_session, _check_manual_stop,
+    _is_signup_password_page,
 )
 
 logger = logging.getLogger(__name__)
@@ -83,6 +84,11 @@ def run_cloak_registration(
         # _fill_password_page_if_present 会在设置成功后返回本次 OpenAI 注册密码。
         openai_password = _fill_password_page_if_present(driver, email, timeout=25)
         _check_manual_stop()
+
+        # 防御兜底：如果此时页面处于密码设置页且尚未设置密码，补充设密以进入 OTP 页
+        if _is_signup_password_page(driver) and not openai_password:
+            openai_password = _fill_password_page_if_present(driver, email, timeout=20)
+            _check_manual_stop()
 
         current_otp = otp_code
         max_otp_attempts = 3

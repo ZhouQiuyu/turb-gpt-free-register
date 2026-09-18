@@ -1104,6 +1104,17 @@ def _type_otp(driver, code: str, timeout: int = 15) -> None:
         except Exception as exc:
             last_err = exc
 
+        # 防御自愈：若当前意外停留在密码设置页，尝试点击“Sign up with a one-time code”切回 OTP 输入框
+        try:
+            if _is_signup_password_page(driver):
+                res = _click_passwordless_signup_if_present(driver)
+                if res.get("ok"):
+                    logger.info("%s [OTP自愈] 检测到当前处于密码页，已点击一次性验证码入口切回 OTP 输入框", _log_prefix(driver))
+                    time.sleep(1.5)
+                    continue
+        except Exception:
+            pass
+
         time.sleep(0.5)
 
     raise RuntimeError(f"找不到 OTP 输入框 (last_err={last_err}, state={_email_otp_page_state(driver)})")
@@ -1137,7 +1148,7 @@ def _is_email_verification_page(driver) -> bool:
         url = str(driver.current_url or '').lower()
     except Exception:
         url = ''
-    if '/log-in/password' in url:
+    if any(x in url for x in ('/log-in/password', '/create-account/password', '/signup/password', '/u/signup/password')):
         return False
     if 'email-verification' in url:
         return True
@@ -1739,12 +1750,22 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25) -> str
     """邮箱提交后兼容 create-account/password。返回本次设置的 OpenAI 账号密码；未遇到密码页返回 None。"""
     end = time.time() + timeout
     last = {}
+    clicked_continue_password = False
     while time.time() < end:
         if _is_email_verification_page(driver):
+            if clicked_continue_password:
+                # 已点击过“使用密码继续”，处于页面跳转过渡期，等待跳转至密码设置页
+                time.sleep(0.5)
+                continue
             result = _click_continue_with_password_if_present(driver)
             if result.get("ok"):
-                logger.info("%s 邮箱验证码页已点击“使用密码继续”：email=%s detail=%s", _log_prefix(driver), email, result)
-                time.sleep(0.8)
+                clicked_continue_password = True
+                logger.info("%s 邮箱验证码页已点击“使用密码继续”，等待进入密码设置页：email=%s detail=%s", _log_prefix(driver), email, result)
+                nav_end = time.time() + 15
+                while time.time() < nav_end:
+                    if _is_signup_password_page(driver):
+                        break
+                    time.sleep(0.5)
                 continue
             logger.info("%s 已在邮箱验证码页，但未找到“使用密码继续”按钮：detail=%s", _log_prefix(driver), result)
             return None
@@ -2220,6 +2241,12 @@ def run_roxy_registration(
         openai_password = _fill_password_page_if_present(driver, email, timeout=25)
         _traffic_checkpoint()
         _check_manual_stop()
+
+        # 防御兜底：如果此时页面处于密码设置页且尚未设置密码，补充设密以进入 OTP 页
+        if _is_signup_password_page(driver) and not openai_password:
+            openai_password = _fill_password_page_if_present(driver, email, timeout=20)
+            _traffic_checkpoint()
+            _check_manual_stop()
 
         current_otp = otp_code
         max_otp_attempts = 3
