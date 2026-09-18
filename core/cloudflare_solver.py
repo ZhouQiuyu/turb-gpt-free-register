@@ -87,54 +87,65 @@ def is_cloudflare_challenge(driver: Any) -> bool:
     if driver is None:
         return False
 
+    # 真实浏览器中 title 或 current_url 必为字符串；若皆非字符串则说明为未配置属性的 Mock 测试对象
+    if not (isinstance(getattr(driver, "title", None), str) or isinstance(getattr(driver, "current_url", None), str)):
+        return False
+
     # 1. 检查标题
     try:
-        title = str(getattr(driver, "title", "") or "").strip().lower()
-        if title:
+        title = getattr(driver, "title", None)
+        if isinstance(title, str) and title.strip():
+            t = title.strip().lower()
             for kw in _CF_TITLE_KEYWORDS:
-                if kw in title:
+                if kw in t:
                     return True
     except Exception:
-        title = ""
+        pass
 
     # 2. 检查 URL
     try:
-        url = str(getattr(driver, "current_url", "") or "").strip().lower()
-        if url:
-            for pattern in ("challenges.cloudflare.com", "__cf_chl", "cf-challenge"):
-                if pattern in url:
+        url = getattr(driver, "current_url", None)
+        if isinstance(url, str) and url.strip():
+            u = url.strip().lower()
+            for pattern in ("challenges.cloudflare.com", "challenge-platform", "__cf_chl", "cf-challenge", "/cdn-cgi/"):
+                if pattern in u:
                     return True
     except Exception:
-        url = ""
+        pass
 
     # 3. 检查 Playwright Page 的 Frames
     page = getattr(driver, "page", None)
     if page is not None:
         try:
-            frames = list(getattr(page, "frames", []) or [])
-            for f in frames:
-                f_url = str(getattr(f, "url", "") or "").lower()
-                if "challenges.cloudflare.com" in f_url or ("cloudflare" in f_url and "turnstile" in f_url):
-                    return True
+            frames = getattr(page, "frames", None)
+            if callable(frames):
+                frames = frames()
+            if isinstance(frames, (list, tuple)):
+                for f in frames:
+                    f_url = getattr(f, "url", None)
+                    if isinstance(f_url, str):
+                        u = f_url.lower()
+                        if any(p in u for p in ("challenges.cloudflare.com", "challenge-platform", "turnstile", "cdn-cgi")):
+                            return True
         except Exception:
             pass
 
     # 4. 检查 DOM 中是否存在质询特征容器或关键文本
     try:
-        if hasattr(driver, "execute_script"):
+        if hasattr(driver, "execute_script") and callable(getattr(driver, "execute_script", None)):
             res = driver.execute_script(r"""
             try {
               const text = (document.body ? document.body.innerText || '' : '').toLowerCase();
               if (text.includes('ray id') && text.includes('cloudflare')) return true;
               if (text.includes('กำลังทำการตรวจสอบความปลอดภัย')) return true;
               if (text.includes('trang web này sử dụng dịch vụ bảo mật')) return true;
-              if (document.querySelector('#challenge-stage, #cf-stage, .ctp-checkbox-label, iframe[src*="challenges.cloudflare.com"]')) return true;
+              if (document.querySelector('#challenge-stage, #cf-stage, .ctp-checkbox-label, iframe[src*="challenges.cloudflare.com"], iframe[src*="challenge-platform"], iframe[src*="cdn-cgi"]')) return true;
               return false;
             } catch (_) {
               return false;
             }
             """)
-            if bool(res):
+            if res is True:
                 return True
     except Exception:
         pass
@@ -144,7 +155,7 @@ def is_cloudflare_challenge(driver: Any) -> bool:
 
 def solve_cloudflare_challenge_if_present(
     driver: Any,
-    max_wait: float = 25.0,
+    max_wait: float = 35.0,
     emit_fn: Callable[[str], None] | None = None,
 ) -> bool:
     """
@@ -170,9 +181,19 @@ def solve_cloudflare_challenge_if_present(
 
     end = time.time() + max_wait
     clicked = False
+    _CB_SELECTORS = (
+        "input[type='checkbox']",
+        ".ctp-checkbox-label",
+        "#cf-stage",
+        "span.mark",
+        "[role='checkbox']",
+        "div.ctp-checkbox-container",
+        "#challenge-stage",
+        "label.ctp-checkbox-label",
+    )
 
     while time.time() < end:
-        # 每轮优先检查是否已脱离质询页面
+        # 每轮优先检查是否已脱离质询页面（例如算力盾已自主放行或重定向）
         if not is_cloudflare_challenge(driver):
             logger.info("%s Cloudflare 人机安全质询已成功穿透放行！", prefix)
             if emit_fn:
@@ -189,40 +210,109 @@ def solve_cloudflare_challenge_if_present(
                 frames = list(getattr(page, "frames", []) or [])
                 for frame in frames:
                     f_url = str(getattr(frame, "url", "") or "").lower()
-                    if "challenges.cloudflare.com" in f_url or ("cloudflare" in f_url and "turnstile" in f_url):
-                        # 检查是否已勾选（正在提交或已放行）
-                        try:
-                            if frame.locator("input[type='checkbox']:checked, .ctp-checkbox-checked, #success").count() > 0:
-                                time.sleep(1.0)
-                                continue
-                        except Exception:
-                            pass
+                    # 识别候选 Frame：非主框架，或包含 challenge / turnstile / cdn-cgi / about 等
+                    is_candidate = (
+                        frame != getattr(page, "main_frame", None)
+                        or any(k in f_url for k in ("challenges.cloudflare.com", "challenge-platform", "turnstile", "cdn-cgi", "about:"))
+                    )
+                    if not is_candidate:
+                        continue
 
-                        box = frame.locator("input[type='checkbox'], .ctp-checkbox-label, #cf-stage, span.mark, [role='checkbox'], div.ctp-checkbox-container").first
-                        if box.is_visible():
-                            logger.info("%s [Cloudflare] 发现 Turnstile 人机验证复选框，正在模拟点击…", prefix)
-                            if emit_fn and not clicked:
+                    # 检查是否已勾选（正在提交或已放行）
+                    try:
+                        if frame.locator("input[type='checkbox']:checked, .ctp-checkbox-checked, #success").count() > 0:
+                            time.sleep(1.0)
+                            continue
+                    except Exception:
+                        pass
+
+                    for cb_sel in _CB_SELECTORS:
+                        try:
+                            box = frame.locator(cb_sel).first
+                            if box.is_visible():
+                                logger.info("%s [Cloudflare] 发现 Turnstile 复选框 (%s, frame=%s)，正在模拟点击…", prefix, cb_sel, f_url[:60])
+                                if emit_fn and not clicked:
+                                    try:
+                                        emit_fn("发现 Cloudflare Turnstile 复选框，正在模拟点击…")
+                                    except Exception:
+                                        pass
                                 try:
-                                    emit_fn("发现 Cloudflare Turnstile 复选框，正在模拟点击…")
+                                    box.scroll_into_view_if_needed(timeout=1500)
                                 except Exception:
                                     pass
-                            try:
-                                box.scroll_into_view_if_needed(timeout=2000)
-                            except Exception:
-                                pass
-                            try:
-                                box.hover(timeout=2000)
-                                time.sleep(random.uniform(0.1, 0.25))
-                            except Exception:
-                                pass
-                            box.click(delay=random.randint(80, 160))
-                            clicked = True
-                            time.sleep(2.0)
-                            break
+                                try:
+                                    box.hover(timeout=1500)
+                                    time.sleep(random.uniform(0.1, 0.25))
+                                except Exception:
+                                    pass
+                                box.click(delay=random.randint(80, 160))
+                                clicked = True
+                                time.sleep(2.0)
+                                break
+                        except Exception:
+                            pass
+                    if clicked:
+                        break
             except Exception as exc:
-                logger.debug("%s [Cloudflare] Playwright 质询穿透交互异常：%s", prefix, exc)
+                logger.debug("%s [Cloudflare] Playwright Frame 遍历异常：%s", prefix, exc)
 
-            # 主框架备用兜底定位
+            # 层级 2：使用 frame_locator 强穿透
+            if not clicked:
+                for if_sel in (
+                    "iframe[src*='challenge-platform']",
+                    "iframe[src*='challenges.cloudflare.com']",
+                    "iframe[src*='cdn-cgi']",
+                    "iframe[title*='Cloudflare']",
+                    "iframe[title*='challenge']",
+                    "#cf-turnstile iframe",
+                    "#turnstile-wrapper iframe",
+                    "#challenge-stage iframe",
+                ):
+                    try:
+                        fl = page.frame_locator(if_sel)
+                        for cb_sel in _CB_SELECTORS:
+                            box = fl.locator(cb_sel).first
+                            if box.is_visible():
+                                logger.info("%s [Cloudflare] 通过 frame_locator(%s) 发现复选框，执行点击…", prefix, if_sel)
+                                box.click(delay=random.randint(80, 160))
+                                clicked = True
+                                time.sleep(2.0)
+                                break
+                        if clicked:
+                            break
+                    except Exception:
+                        pass
+
+            # 层级 3：模拟绝对屏幕坐标点击（穿透跨域/隔离 iframe）
+            if not clicked:
+                for if_sel in (
+                    "iframe[src*='challenge-platform']",
+                    "iframe[src*='challenges.cloudflare.com']",
+                    "iframe[src*='cdn-cgi']",
+                    "iframe[title*='Cloudflare']",
+                    "iframe[title*='challenge']",
+                    "#challenge-stage iframe",
+                    "iframe",
+                ):
+                    try:
+                        if_el = page.locator(if_sel).first
+                        if if_el.is_visible():
+                            bbox = if_el.bounding_box()
+                            if bbox and bbox.get("width", 0) > 40 and bbox.get("height", 0) > 30:
+                                # Turnstile 勾选框固定在 widget 左侧约 28px、垂直居中位置
+                                cx = bbox["x"] + min(30.0, bbox["width"] * 0.15)
+                                cy = bbox["y"] + (bbox["height"] / 2.0)
+                                logger.info("%s [Cloudflare] 触发坐标点击穿透 Turnstile：x=%.1f y=%.1f", prefix, cx, cy)
+                                page.mouse.move(cx, cy, steps=4)
+                                time.sleep(random.uniform(0.1, 0.2))
+                                page.mouse.click(cx, cy, delay=random.randint(80, 150))
+                                clicked = True
+                                time.sleep(2.5)
+                                break
+                    except Exception:
+                        pass
+
+            # 层级 4：主框架备用兜底定位
             if not clicked:
                 try:
                     main_box = page.locator("#challenge-stage input[type='checkbox'], #cf-stage, .ctp-checkbox-label").first
@@ -241,7 +331,7 @@ def solve_cloudflare_challenge_if_present(
                 iframes = driver.find_elements(By.TAG_NAME, "iframe")
                 for iframe in iframes:
                     src = str(iframe.get_attribute("src") or "").lower()
-                    if "challenges.cloudflare.com" in src or "cloudflare" in src or "turnstile" in src:
+                    if any(k in src for k in ("challenges.cloudflare.com", "challenge-platform", "turnstile", "cdn-cgi")):
                         driver.switch_to.frame(iframe)
                         for sel in ["input[type='checkbox']", ".ctp-checkbox-label", "#cf-stage", "[role='checkbox']"]:
                             boxes = driver.find_elements(By.CSS_SELECTOR, sel)

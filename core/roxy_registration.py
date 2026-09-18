@@ -533,7 +533,7 @@ def _wait_for_email_input(driver, timeout: int | None = None):
     last_state = None
     clicked_email_option = False
     while time.time() < end:
-        if solve_cloudflare_challenge_if_present(driver, max_wait=15.0):
+        if solve_cloudflare_challenge_if_present(driver, max_wait=20.0):
             time.sleep(1.0)
             continue
         el = _find_visible_email_input_js(driver)
@@ -546,6 +546,8 @@ def _wait_for_email_input(driver, timeout: int | None = None):
             _assert_not_external_idp(driver, "点击邮箱入口后")
             continue
         time.sleep(0.4)
+    if is_cloudflare_challenge(driver):
+        raise RuntimeError(f"页面被 Cloudflare 人机安全质询拦截，无法进入邮箱输入框: state={last_state}")
     raise RuntimeError(f"找不到邮箱输入框/邮箱入口（未使用文字识别），state={last_state}")
 
 
@@ -960,7 +962,7 @@ def _is_email_login_page_still_present(driver) -> bool:
     return bool(state.get("inputs"))
 
 
-def _wait_email_submit_next_state(driver, email: str, timeout: int = 18) -> str:
+def _wait_email_submit_next_state(driver, email: str, timeout: int = 35) -> str:
     """邮箱提交后等待进入 password / otp / logged_in；仍停留邮箱页则返回 email_page。
 
     Cloak/Playwright 路径里，点击 submit 后页面经常先发生一次 SPA 导航：
@@ -969,6 +971,7 @@ def _wait_email_submit_next_state(driver, email: str, timeout: int = 18) -> str:
     `auth.openai.com/...` 前过早重填，形成“提交 -> 清空 -> 重填”的循环。
     这里对 email_cleared 做去抖：只记录并继续观察几秒；若期间进入
     password/otp/login_password/logged_in 则按真实状态返回，持续清空才让上层重试。
+    若检测到 Cloudflare 质询，全力穿透并等待放行，绝不提前退回重填邮箱。
     """
     end = time.time() + timeout
     last = None
@@ -977,7 +980,13 @@ def _wait_email_submit_next_state(driver, email: str, timeout: int = 18) -> str:
     cleared_recover_done = False
     expected_email = str(email or "").strip().lower()
     while time.time() < end:
-        if solve_cloudflare_challenge_if_present(driver, max_wait=15.0):
+        if solve_cloudflare_challenge_if_present(driver, max_wait=30.0):
+            logger.info("%s Cloudflare 质询已尝试穿透/放行，延长下一步等待窗口", _log_prefix(driver))
+            end = max(end, time.time() + 15.0)
+            time.sleep(1.0)
+            continue
+        if is_cloudflare_challenge(driver):
+            logger.info("%s 页面仍处于 Cloudflare 质询中，保持观察等待放行...", _log_prefix(driver))
             time.sleep(1.0)
             continue
         if _has_access_token(driver):
@@ -1023,6 +1032,9 @@ def _wait_email_submit_next_state(driver, email: str, timeout: int = 18) -> str:
                 cleared_seen_at = None
             # 仍是当前邮箱页，继续短等。
         time.sleep(0.8)
+    if is_cloudflare_challenge(driver):
+        logger.warning("%s 邮箱提交后遭遇 Cloudflare 拦截且超时未通过", _log_prefix(driver))
+        return "cloudflare_blocked"
     logger.info("%s 邮箱提交后等待下一步超时，最后邮箱页状态=%s", _log_prefix(driver), last)
     return "email_page" if _is_email_login_page_still_present(driver) else "unknown"
 
@@ -1059,12 +1071,14 @@ def _submit_email_and_wait_next(
         human_delay("form")
         _submit_email_step(driver, current_email)
         logger.info("%s 已提交邮箱，等待进入密码页或验证码页（%s/%s）", _log_prefix(driver), attempt, attempts)
-        state_name = _wait_email_submit_next_state(driver, current_email, timeout=20)
+        state_name = _wait_email_submit_next_state(driver, current_email, timeout=35)
         if state_name == "login_password":
             raise RuntimeError(f"邮箱提交后进入登录密码页，按已注册/不可用邮箱处理并停用: url={getattr(driver, 'current_url', '') or 'https://auth.openai.com/log-in/password'}")
         if state_name in ("password", "otp", "logged_in"):
             logger.info("%s 邮箱提交后已进入下一步：%s", _log_prefix(driver), state_name)
             return state_name
+        if state_name == "cloudflare_blocked":
+            raise RuntimeError("邮箱提交后遭遇 Cloudflare 人机安全质询拦截且未能放行 (Cloudflare blocked)")
         logger.warning("%s 邮箱提交后仍未进入下一步：%s，准备重填重试 state=%s", _log_prefix(driver), state_name, _email_input_value_state(driver))
         time.sleep(1.0)
     raise RuntimeError(f"邮箱提交后未进入密码页/验证码页，最后状态={last_state}")
