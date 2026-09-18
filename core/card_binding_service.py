@@ -811,36 +811,10 @@ def bind_card_with_cloak(
         _emit(f"[阶段 1/2] 正在通过账号属地代理 ({origin_country}) 申请 Stripe 试用会话…")
         _emit(f"提链代理路由: {stage1_proxy.split('@')[-1] if '@' in stage1_proxy else (stage1_proxy or '直连')}")
 
-        protocol_error = None
-        # 1A. 优先尝试速度最快的原生协议提链
-        try:
-            _emit("尝试原生 HTTP 协议极速提链…")
-            checkout_data = extract_native_checkout_url(
-                access_token=token,
-                proxy_url=stage1_proxy,
-                with_promo=True,
-                country=origin_country,
-            )
-            if checkout_data.get("already_paid"):
-                _emit("检测到账号已经是 Plus 会员，自动校准状态")
-                db.update_account_card_binding(account_id, {
-                    "ok": True,
-                    "status": "success",
-                    "message": "账号已是 Plus 会员",
-                    "card_brand": card_info.get("brand"),
-                    "card_last4": card_info.get("last4"),
-                })
-                return {"ok": True, "already_paid": True, "message": "账号已是 Plus 会员"}
-
-            target_checkout_url = checkout_data.get("url")
-            _emit(f"[阶段 1/2] 协议提链成功，结账链接就绪: {target_checkout_url[:60]}…")
-        except Exception as exc:
-            protocol_error = str(exc)
-            _emit(f"协议提链受风控拦截 ({protocol_error})，自动降级启用 CloakBrowser 指纹浏览器真实环境提链…")
-
-        # 1B. 协议被拦截时，自动降级启用 CloakBrowser 指纹浏览器真实环境提链
+        # 1. 提链阶段：直接通过 CloakBrowser 原生指纹浏览器在真实环境中提链（彻底规避协议层 Sentinel 拦截）
         if not target_checkout_url:
             try:
+                _emit(f"[阶段 1/2] 正在通过 CloakBrowser 原生指纹浏览器 (挂载 {origin_country} 属地代理) 申请 Stripe 试用会话…")
                 cloak_checkout_data = extract_checkout_url_with_cloak(
                     account=acc,
                     proxy_url=stage1_proxy,
@@ -858,10 +832,18 @@ def bind_card_with_cloak(
                     return {"ok": True, "already_paid": True, "message": "账号已是 Plus 会员"}
 
                 target_checkout_url = cloak_checkout_data.get("url")
+                if not target_checkout_url:
+                    raise RuntimeError(f"指纹浏览器未能提取到 Stripe 链接: {cloak_checkout_data}")
                 _emit(f"[阶段 1/2] 指纹浏览器提链成功，结账链接就绪: {target_checkout_url[:60]}…")
             except Exception as cloak_exc:
-                err = f"获取支付会话失败 (协议: {protocol_error}; 指纹浏览器: {cloak_exc})。（提示：您也可在本地日本 IP 浏览器中点击试用，并将生成的 Stripe 结账链接直接粘贴到本弹窗，系统将秒开美区指纹代绑！）"
+                err = f"指纹浏览器提链失败: {cloak_exc}。（提示：您也可在本地属地 IP 浏览器中点击试用，并将生成的 Stripe 结账链接直接粘贴到本弹窗，系统将自动使用美区住宅代理代绑！）"
                 _emit(err)
+                db.update_account_card_binding(account_id, {
+                    "ok": False,
+                    "status": "failed",
+                    "error": err,
+                    "message": err,
+                })
                 return {"ok": False, "error": err}
 
     if not target_checkout_url:
@@ -1097,14 +1079,14 @@ def enqueue_card_binding(
         from core.db import pick_proxy_by_country
         p = proxy_url or pick_proxy_by_country(country) or acc.get("proxy_used") or _pick_best_proxy_for_card(country)
         try:
-            res = extract_native_checkout_url(access_token=token, proxy_url=p, with_promo=True, country=country)
-            if res.get("url"):
+            res_cloak = extract_checkout_url_with_cloak(account=acc, proxy_url=p)
+            if res_cloak.get("url"):
                 db.update_account_extract(account_id, {
                     "ok": True,
                     "status": "success",
                     "link_type": "card",
                     "result": {
-                        "long_url": res["url"],
+                        "long_url": res_cloak["url"],
                         "payment_method": "card",
                         "expires_at": int(time.time()) + 86400,
                     }
@@ -1112,34 +1094,12 @@ def enqueue_card_binding(
             return {
                 "accepted": True,
                 "mode": "link_only",
-                "url": res.get("url"),
-                "already_paid": res.get("already_paid"),
+                "url": res_cloak.get("url"),
+                "already_paid": res_cloak.get("already_paid"),
                 "card_info": parsed,
             }
-        except Exception as exc:
-            # 协议失败，尝试指纹浏览器降级提链
-            try:
-                res_cloak = extract_checkout_url_with_cloak(account=acc, proxy_url=p)
-                if res_cloak.get("url"):
-                    db.update_account_extract(account_id, {
-                        "ok": True,
-                        "status": "success",
-                        "link_type": "card",
-                        "result": {
-                            "long_url": res_cloak["url"],
-                            "payment_method": "card",
-                            "expires_at": int(time.time()) + 86400,
-                        }
-                    })
-                return {
-                    "accepted": True,
-                    "mode": "link_only",
-                    "url": res_cloak.get("url"),
-                    "already_paid": res_cloak.get("already_paid"),
-                    "card_info": parsed,
-                }
-            except Exception as cloak_exc:
-                return {"accepted": False, "error": f"协议提链受阻: {exc}；指纹浏览器提链失败: {cloak_exc}"}
+        except Exception as cloak_exc:
+            return {"accepted": False, "error": f"指纹浏览器提链失败: {cloak_exc}"}
 
     # 自动绑卡模式
     db.mark_account_card_binding_running(account_id)

@@ -227,10 +227,10 @@ def test_webui_bind_card_endpoints(tmp_path, monkeypatch):
         "access_token": "valid_token_123",
     }])
 
-    # Mock native extract checkout URL
+    # Mock extract checkout URL with cloak
     monkeypatch.setattr(
         card_binding_service,
-        "extract_native_checkout_url",
+        "extract_checkout_url_with_cloak",
         lambda *args, **kwargs: {
             "ok": True,
             "already_paid": False,
@@ -398,7 +398,6 @@ def test_bind_card_fallback_to_cloak_when_protocol_fails(monkeypatch):
     )
     assert cloak_called.get("called") is True
     assert cloak_called.get("email") == "fallback@example.com"
-    assert any("降级启用 CloakBrowser" in l for l in logs)
     assert any("指纹浏览器提链成功" in l for l in logs)
     assert res.get("ok") is True
 
