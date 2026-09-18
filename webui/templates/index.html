@@ -739,6 +739,7 @@
       text-align: left; vertical-align: middle;
     }
     .accounts-table-v2 .col-id { width: 72px; }
+    .accounts-table-v2 .col-region { width: 130px; }
     .accounts-table-v2 .col-email { width: 330px; }
     .accounts-table-v2 .col-source { width: 90px; }
     .accounts-table-v2 .col-token { width: 100px; }
@@ -750,6 +751,24 @@
     .accounts-table-v2 .col-agent { width: 140px; }
     .accounts-table-v2 .col-time { width: 170px; }
     .accounts-table-v2 .col-actions { width: 148px; }
+    .country-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #f4f4f5;
+      border: 1px solid #e4e7ed;
+      font-size: 12px;
+      font-weight: 500;
+      color: #303133;
+      white-space: nowrap;
+    }
+    .country-badge-unknown {
+      color: #909399;
+      background: #fafafa;
+      border-style: dashed;
+    }
     .accounts-table-v2 input[type="checkbox"] {
       width: 16px !important; height: 16px !important;
       min-width: 16px !important; min-height: 16px !important;
@@ -1570,7 +1589,7 @@
     .outlook-panel-v2 .jobs-v2-pager { border-top: 1px solid #ebeef5; }
 
     /* ---- 弹窗通用容器 ---- */
-    #outlookImportModal:not(.hidden), #emailChangeModalV2:not(.hidden), #proxyAddModal:not(.hidden), #proxyEditModal:not(.hidden), #bindCardModal:not(.hidden) {
+    #outlookImportModal:not(.hidden), #emailChangeModalV2:not(.hidden), #proxyAddModal:not(.hidden), #proxyEditModal:not(.hidden) {
       position: fixed; inset: 0; z-index: 1200;
       display: flex; align-items: center; justify-content: center;
       padding: 24px; box-sizing: border-box;
@@ -2376,8 +2395,7 @@
           <span class="acc-v2-btn-group-title">套餐/提链</span>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedLiveV2" onclick="checkSelectedLive()" title="重新登录选中账号；成功且未封号则标记正常，并刷新最新 AT/accessToken">查活</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedPlansV2" disabled title="查询选中账号当前套餐；free 账号会检查 Plus 试用资格">查套餐</button>
-          <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnExtractSelectedLinksV2" disabled title="给选中的 free(可Plus试用) 账号批量提链，类型按配置 PIX/UPI/KAKAO_PAY/IDEAL">提链</button>
-          <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnBindSelectedCardV2" disabled title="为选中的账号进行自动绑卡开通 Plus 或原生提链">💳 一键绑卡</button>
+          <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnExtractSelectedLinksV2" disabled title="给选中的 free(可Plus试用) 账号按属地匹配代理批量原生提取 Stripe 试用直链">🔗 提链</button>
         </div>
         <div class="acc-v2-btn-group">
           <span class="acc-v2-btn-group-title">Codex</span>
@@ -2406,7 +2424,7 @@
       <div class="accounts-table-v2-wrap">
         <table class="accounts-table-v2">
           <colgroup>
-            <col class="col-check"><col class="col-id"><col class="col-email"><col class="col-source">
+            <col class="col-check"><col class="col-id"><col class="col-region"><col class="col-email"><col class="col-source">
             <col class="col-token"><col class="col-password"><col class="col-plan"><col class="col-note"><col class="col-small">
             <col class="col-status"><col class="col-time"><col class="col-actions">
           </colgroup>
@@ -2414,6 +2432,7 @@
             <tr>
               <th class="col-check"><input type="checkbox" id="accountsSelectAllV2" title="全选/取消全选当前页账号" disabled></th>
               <th class="col-id">ID</th>
+              <th class="col-region">属地</th>
               <th class="col-email">邮箱</th>
               <th class="col-source">来源</th>
               <th class="col-token">Token</th>
@@ -2667,11 +2686,12 @@
           <colgroup>
             <col class="col-check" style="width: 46px;">
             <col style="width: 60px;">
+            <col style="width: 130px;">
             <col style="width: 140px;">
             <col style="width: 90px;">
             <col style="width: 210px;">
             <col style="width: 140px;">
-            <col style="width: 160px;">
+            <col style="width: 150px;">
             <col style="width: 105px;">
             <col style="width: 110px;">
             <col style="width: 80px;">
@@ -2681,11 +2701,12 @@
             <tr>
               <th class="col-check"><input type="checkbox" id="proxySelectAllV2" title="全选/取消全选当前页代理"></th>
               <th>ID</th>
+              <th>地区/属地</th>
               <th>名称</th>
               <th>协议</th>
               <th>节点地址 (Host:Port)</th>
               <th>认证信息</th>
-              <th>出口 IP / 地区</th>
+              <th>出口 IP</th>
               <th>连接延迟</th>
               <th>OpenAI 质量</th>
               <th>状态</th>
@@ -2815,81 +2836,8 @@
   </div>
 </div>
 
-<div id="bindCardModal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="bindCardTitle">
-  <div class="outlook-import-dialog" role="document" style="max-width:560px;">
-    <div class="outlook-import-head">
-      <div class="outlook-import-head-main">
-        <h3 id="bindCardTitle">💳 一键自动绑卡 / 原生提链</h3>
-        <p id="bindCardHint">为账号开通 Plus 免费试用或生成免 CDK 官方 Stripe 结账直链。</p>
-      </div>
-      <button type="button" class="outlook-import-close" id="btnCloseBindCard">×</button>
-    </div>
-    <div class="outlook-import-body">
-      <div id="bindCardAccountInfo" class="banner" style="margin:0; font-weight:500; font-size:13px; color:#1e293b;"></div>
 
-      <div class="outlook-import-field">
-        <span>执行模式</span>
-        <div style="display:flex; flex-direction:column; gap:8px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:10px 14px;">
-          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px; font-weight:600; color:#0f172a;">
-            <input type="radio" name="bindCardMode" value="auto" checked onchange="onBindCardModeChange()">
-            <span>⚡ CloakBrowser 全自动绑卡 (原生抗封指纹 + 美区住宅代理 + 模拟击键)</span>
-          </label>
-          <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px; font-weight:600; color:#0f172a;">
-            <input type="radio" name="bindCardMode" value="link_only" onchange="onBindCardModeChange()">
-            <span>🔗 原生提链 (免 CDK / 获取官方 Stripe 直链)</span>
-          </label>
-        </div>
-      </div>
 
-      <label class="outlook-import-field">
-        <span>卡密内容 (支持直接粘贴多种格式，可包含 Stripe 链接)</span>
-        <textarea id="bindCardInput" rows="3" class="mono" style="width:100%; border:1px solid #dcdfe6; border-radius:6px; padding:8px 12px; font-size:13px; resize:vertical; box-sizing:border-box;" placeholder="例如: 4000123456789010|12|28|123 或 4000123456789010 12/28 123 或整段卡密/卡商文本"></textarea>
-      </label>
-
-      <label class="outlook-import-field" style="margin-top:8px;">
-        <span style="display:flex; justify-content:space-between; align-items:center;">
-          <span>Stripe 结账链接 (可选，直接填入可 0 秒跳过提链直达美区绑卡)</span>
-          <span style="font-size:11px; color:#64748b; font-weight:normal;">留空则由系统两阶段自动接力提链</span>
-        </span>
-        <input type="text" id="bindCardCheckoutUrl" class="mono" style="width:100%; border:1px solid #dcdfe6; border-radius:6px; padding:7px 12px; font-size:12px; box-sizing:border-box;" placeholder="https://checkout.stripe.com/c/pay/cs_live_... (可选)" />
-      </label>
-
-      <!-- 实时解析与免税账单卡片 -->
-      <div id="bindCardPreview" style="display:none; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:8px; padding:10px 14px;">
-        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
-          <div style="display:flex; align-items:center; gap:8px;">
-            <span id="previewCardBrand" class="pill status-success" style="font-weight:bold;">Visa</span>
-            <span id="previewCardNumber" class="mono" style="font-weight:bold; color:#0f172a; font-size:14px;">**** 9010</span>
-          </div>
-          <div style="display:flex; align-items:center; gap:6px;">
-            <span id="previewCardExp" class="mono" style="font-size:12px; color:#475569;">12/28</span>
-            <span id="previewCardCvc" class="mono" style="font-size:12px; color:#475569;">CVC: ***</span>
-            <span id="previewCardCountry" class="pill status-used" style="font-size:11px;">🇺🇸 US</span>
-          </div>
-        </div>
-        <div id="previewBilling" style="font-size:12px; color:#166534; line-height:1.5; border-top:1px dashed #86efac; padding-top:6px;">
-          免税账单: 俄勒冈州 (Portland, OR 97201) 消费税: $0.00
-        </div>
-      </div>
-
-      <div id="bindCardParseError" class="banner warn" style="display:none; margin:0; font-size:12px;"></div>
-
-      <!-- 实时执行日志与终端监控 -->
-      <div id="bindCardConsoleWrap" style="display:none;">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
-          <span style="font-size:12px; font-weight:600; color:#64748b;">执行终端日志</span>
-          <span id="bindCardStatusBadge" class="pill status-running">执行中</span>
-        </div>
-        <div id="bindCardLogConsole" style="background:#090d16; color:#a5f3fc; font-family:monospace; font-size:12px; border-radius:6px; padding:10px 12px; height:150px; overflow-y:auto; line-height:1.6; white-space:pre-wrap;"></div>
-        <div id="bindCardResultAction" style="margin-top:8px; display:none;"></div>
-      </div>
-    </div>
-    <div class="outlook-import-foot">
-      <button type="button" class="jobs-tb-btn" id="btnCancelBindCard">关闭</button>
-      <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnSubmitBindCard">立即执行</button>
-    </div>
-  </div>
-</div>
 
 <div id="proxyAddModal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="proxyAddTitle">
   <div class="outlook-import-dialog" role="document" style="max-width: 620px;">
@@ -3174,6 +3122,36 @@ function isPlaceholderEmpty(v) {
 function short(v, n=40) { const s = v || ''; return s.length > n ? s.slice(0,n)+'…' : s; }
 function copyId(v) { if (!v) return ''; const id = 'c'+(++copySeq); copyStore.set(id, v); return id; }
 function cbtn(label, value, cls='') { const id = copyId(value); return `<button class="${cls}" data-copy-id="${id}" ${id?'':'disabled'}>${label}</button>`; }
+const COUNTRY_CN_MAP = {
+  'US': '美国', 'JP': '日本', 'SG': '新加坡', 'HK': '中国香港', 'TW': '中国台湾',
+  'KR': '韩国', 'GB': '英国', 'UK': '英国', 'DE': '德国', 'FR': '法国',
+  'CA': '加拿大', 'AU': '澳大利亚', 'IN': '印度', 'NL': '荷兰', 'SE': '瑞典',
+  'CH': '瑞士', 'IT': '意大利', 'ES': '西班牙', 'BR': '巴西', 'MX': '墨西哥',
+  'RU': '俄罗斯', 'ID': '印度尼西亚', 'MY': '马来西亚', 'PH': '菲律宾', 'TH': '泰国',
+  'VN': '越南', 'TR': '土耳其', 'AE': '阿联酋', 'IL': '以色列', 'PL': '波兰',
+  'IE': '爱尔兰', 'NO': '挪威', 'FI': '芬兰', 'DK': '丹麦', 'NZ': '新西兰',
+  'ZA': '南非', 'AR': '阿根廷', 'CL': '智利', 'CO': '哥伦比亚', 'EG': '埃及',
+  'SA': '沙特阿拉伯',
+};
+function getCountryFlag(code) {
+  if (!code || code.length !== 2) return '';
+  try {
+    const codePoints = [...code.toUpperCase()].map(c => 127397 + c.charCodeAt(0));
+    return String.fromCodePoint(...codePoints);
+  } catch(e) { return ''; }
+}
+function formatCountryBadgeHtml(code, countryName = '', badge = '') {
+  if (badge) {
+    return `<span class="country-badge" title="${esc(countryName || badge)}">${esc(badge)}</span>`;
+  }
+  const c = (code || '').toUpperCase().trim();
+  if (!c || c === 'UN' || c === 'UNKNOWN') {
+    return `<span class="country-badge country-badge-unknown" title="未知属地">🌐 未知 (UN)</span>`;
+  }
+  const flag = getCountryFlag(c) || '🌐';
+  const name = COUNTRY_CN_MAP[c] || countryName || '未知';
+  return `<span class="country-badge" title="${esc(countryName || name)}">${flag} ${esc(name)} (${esc(c)})</span>`;
+}
 function pill(status) {
   const map = { available:'可用', used:'已用', failed:'失败', partial_success:'部分成功', disabled:'已停用', pending:'排队', running:'运行中', stopping:'停止中', stopped:'已停止', success:'成功', cancelled:'已取消' };
   return `<span class="pill status-${esc(status)}">${esc(map[status]||status||'-')}</span>`;
@@ -3760,13 +3738,9 @@ async function pollAccountPlanStatuses() {
         const wasExtracting = ['queued', 'running'].includes(account?.extract_link_status);
         const isExtracting = ['queued', 'running'].includes(item.extract_link_status);
         const wasAgenting = ['queued', 'running'].includes(account?.codex_agent_status);
-        const isAgenting = ['queued', 'running'].includes(item.codex_agent_status);
-        const wasBinding = ['queued', 'running'].includes(account?.card_binding_status);
-        const isBinding = ['queued', 'running'].includes(item.card_binding_status);
         if (wasChecking && !isChecking) needsFullReload = true;
         if (wasExtracting && !isExtracting) needsFullReload = true;
         if (wasAgenting && !isAgenting) needsFullReload = true;
-        if (wasBinding && !isBinding) needsFullReload = true;
         Object.assign(account, item);
       });
       planStatusRevision = snapshot.revision || '';
@@ -3982,15 +3956,14 @@ function _extractLinkCell(r) {
   const title = esc(err || msg || r.extract_link_job_id || '');
   if (s === 'queued') return `<span class="pill status-running" title="${title}">提链排队</span>`;
   if (s === 'running') return `<span class="pill status-running" title="${title}">${esc(msg || '提链中')}</span>`;
+  if (s === 'skipped') {
+    const reason = err || msg || '系统无匹配属地代理，跳过提链';
+    return `<div class="extract-link-cell"><span class="pill status-failed" title="${esc(reason)}" style="background:#fff7ed;color:#c2410c;border-color:#ffedd5;">跳过提链</span><div class="extract-link-error" title="${esc(reason)}" style="color:#c2410c;">${esc(reason)}</div></div>`;
+  }
   if (s === 'success') {
-    const typ = (r.extract_link_type || '').toUpperCase();
-    const link = r.extract_link_long_url || r.extract_link_copy_paste || '';
-    const qr = r.extract_link_image_url_png || r.extract_link_image_url_svg || '';
-    const expire = _fmtExtractExpire(r.extract_link_expires_at || '');
-    const copy = link ? cbtn('复制提链', link, 'extract-link-btn extract-copy') : '';
-    const qrBtn = qr ? `<button class="extract-link-btn extract-qr" data-qr-url="${esc(qr)}" title="打开支付二维码图片">查看二维码</button>` : '';
-    const expireHtml = expire ? `<div class="extract-link-expire" title="支付链接过期时间">支付到期：${esc(expire)}</div>` : '';
-    return `<div class="extract-link-cell"><span class="pill status-success" title="${title || esc(link)}">提链成功${typ ? '(' + esc(typ) + ')' : ''}</span>${copy}${qrBtn}${expireHtml}</div>`;
+    const link = r.extract_link_long_url || r.extract_link_copy_paste || r.stripe_checkout_url || '';
+    const copy = link ? cbtn('复制 Stripe 链接', link, 'extract-link-btn extract-copy') : '';
+    return `<div class="extract-link-cell"><span class="pill status-success" title="${title || esc(link)}">提链成功</span>${copy}</div>`;
   }
   if (s === 'failed') {
     const reason = err || msg || '未知原因';
@@ -4004,25 +3977,9 @@ function _extractLinkAction(r) {
   const plan = (r.current_plan_type || r.plan_type || '').toString().toLowerCase();
   const eligible = plan === 'free' && !!r.plus_trial_eligible;
   if (!eligible) return '';
-  const failedReason = s === 'failed' ? (r.extract_link_error || r.extract_link_message || '') : '';
-  return `<button class="good" data-extract-link="${esc(r.id)}" title="${esc(failedReason ? '重新提链；上次失败原因：' + failedReason : '为该 free(可Plus试用) 账号创建 PIX/UPI/KAKAO_PAY/IDEAL 提链任务')}">提链</button>`;
-}
-function _cardBindingCell(r) {
-  const s = r.card_binding_status || '';
-  if (['queued', 'running'].includes(s)) {
-    return `<div style="margin-top:2px;"><span class="pill status-running" title="${esc(r.card_binding_message || '自动绑卡中')}">💳 绑卡中…</span></div>`;
-  }
-  if (s === 'success') {
-    const brand = r.card_brand || '';
-    const last4 = r.card_last4 || '';
-    const info = [brand, last4 ? '*' + last4 : ''].filter(Boolean).join(' ');
-    return `<div style="margin-top:2px;"><span class="pill status-success" title="${esc(r.card_binding_message || '已绑卡')}">💳 ${esc(info || '已绑卡')}</span></div>`;
-  }
-  if (s === 'failed') {
-    const reason = r.card_binding_error || r.card_binding_message || '绑卡失败';
-    return `<div style="margin-top:2px;"><span class="pill status-failed" title="${esc(reason)}">💳 绑卡失败</span></div>`;
-  }
-  return '';
+  const failedReason = (s === 'failed' || s === 'skipped') ? (r.extract_link_error || r.extract_link_message || '') : '';
+  const titleText = failedReason ? `重新提链；上次：${failedReason}` : '使用与账号同属地代理原生提取 Stripe 试用链接';
+  return `<button class="good" data-extract-link="${esc(r.id)}" title="${esc(titleText)}">🔗 提链</button>`;
 }
 function _codexAction(r) {
   const s = r.codex_status || '';
@@ -4060,7 +4017,6 @@ function _accountsV2MoreMenu(r) {
     `<button type="button" data-account-totp-log="${esc(r.email)}" title="查看该账号最近一次 2FA 设置日志">2FA日志</button>`,
     _planAction(r),
     _extractLinkAction(r),
-    `<button type="button" data-account-bind-card="${esc(r.id)}" title="一键自动绑卡开通Plus / 原生提链">💳 绑卡/提链</button>`,
     _codexAction(r),
     `<button type="button" data-codex-log="${esc(r.email)}" title="查看该账号最近一次 Codex 补跑日志">补跑日志</button>`,
     `<button type="button" data-account-archive="${esc(r.id)}" data-archived="${r.archived ? '0' : '1'}" title="${r.archived ? '恢复到默认账号列表' : '归档后默认账号列表不再显示'}">${r.archived ? '恢复' : '归档'}</button>`,
@@ -4097,6 +4053,7 @@ function renderAccounts() {
     <tr>
       <td class="col-check"><input type="checkbox" class="account-row-check" data-account-id="${esc(r.id)}" ${ACCOUNT_SELECTED.has(Number(r.id)) ? 'checked' : ''}></td>
       <td class="col-id">#${esc(r.id)}</td>
+      <td class="col-region">${formatCountryBadgeHtml(r.country_code, r.country, r.country_badge)}</td>
       <td class="col-email" title="${esc(r.email || '-')}${r.original_email ? `\n原邮箱: ${esc(r.original_email)}` : ''}\n${esc(r.user_name || '-')}">
         <div class="acc-v2-email">${esc(r.email)}${r.archived ? ' <span class="pill status-used" title="该账号已归档">归档</span>' : ''}</div>
         ${r.original_email ? `<div class="acc-v2-email-history">原邮箱: ${esc(r.original_email)}</div>` : ''}
@@ -4106,14 +4063,14 @@ function renderAccounts() {
       <td class="col-source">${esc(r.email_source || '-')}</td>
       <td class="col-token">${_tokenCellV2(r)}</td>
       <td class="col-password">${r.password ? `<span class="mono" title="${esc(r.password)}">${esc(short(r.password, 18))}</span>` : '<span class="acc-v2-muted">-</span>'}</td>
-      <td class="col-plan">${_planCell(r)}<div class="acc-v2-sub">${_extractLinkCell(r)}${_cardBindingCell(r)}</div></td>
+      <td class="col-plan">${_planCell(r)}<div class="acc-v2-sub">${_extractLinkCell(r)}</div></td>
       <td class="col-note" title="${esc(r.note || '')}">${r.note ? esc(short(r.note, 80)) : '<span class="acc-v2-muted">-</span>'}</td>
       <td class="col-small">${_totpCellV2(r)}</td>
       <td class="col-status">${_codexCellV2(r)}</td>
       <td class="col-time" title="${esc(r.created_at || '-')}">${esc(r.created_at || '-')}</td>
       <td class="col-actions">
         <div class="acc-v2-actions">
-          <button type="button" class="good acc-v2-btn-bind-card" data-account-bind-card="${esc(r.id)}" title="一键全自动绑卡 / 原生提链">💳 绑卡</button>
+          <button type="button" class="good acc-v2-btn-extract-link" data-extract-link="${esc(r.id)}" title="使用账号属地代理原生提链">🔗 提链</button>
           <button type="button" class="danger" data-account-delete="${esc(r.id)}" data-email="${esc(r.email)}">删除</button>
           <div class="acc-v2-more">
             <button type="button" class="acc-v2-more-btn" data-acc-more-toggle aria-haspopup="true" aria-expanded="false">更多</button>
@@ -4125,7 +4082,7 @@ function renderAccounts() {
 
   const bodyV2 = $('#accountsBodyV2');
   if (bodyV2) {
-    bodyV2.innerHTML = rows.map(rowHtmlV2).join('') || '<tr><td colspan="12" style="text-align:center;color:#909399;padding:28px;">暂无账号</td></tr>';
+    bodyV2.innerHTML = rows.map(rowHtmlV2).join('') || '<tr><td colspan="13" style="text-align:center;color:#909399;padding:28px;">暂无账号</td></tr>';
   }
   updateAccountSelectionUi(rows);
   _renderPager('accounts', total);
@@ -4139,7 +4096,7 @@ function updateAccountSelectionUi(pageRows = null) {
   const archiveLabel = SHOW_ARCHIVED_ACCOUNTS ? '恢复选中' : '归档选中';
   const archiveTitle = SHOW_ARCHIVED_ACCOUNTS ? '把选中的归档账号恢复到默认账号列表' : '归档选中的账号；默认账号列表将不再查询/显示这些账号';
   const v2Ids = [
-    'btnCheckSelectedPlansV2', 'btnExtractSelectedLinksV2', 'btnBindSelectedCardV2',
+    'btnCheckSelectedPlansV2', 'btnExtractSelectedLinksV2',
     'btnRetrySelectedCodexV2', 'btnDownloadSelectedCpaV2', 'btnStopSelectedCodexV2',
     'btnSetupSelectedTotpV2', 'btnChangeSelectedEmailsV2', 'btnNoteSelectedAccountsV2', 'btnCopySelectedLinesV2', 'btnCopySelectedTokensV2', 'btnCopySelectedEmailsV2',
     'btnDownloadSelectedTxtV2', 'btnArchiveSelectedAccountsV2', 'btnDeleteSelectedAccountsV2',
@@ -4374,12 +4331,6 @@ async function onAccountsBodyClick(e) {
   const totpLogBtn = e.target.closest('[data-account-totp-log]');
   if (totpLogBtn) {
     openTotpLog(totpLogBtn.dataset.accountTotpLog);
-    return;
-  }
-
-  const bindCardBtn = e.target.closest('[data-account-bind-card]');
-  if (bindCardBtn) {
-    openBindCardModal(Number(bindCardBtn.dataset.accountBindCard));
     return;
   }
 
@@ -5017,7 +4968,7 @@ async function extractOneLink(id, btn) {
     showToast('仅支持 free(可Plus试用) 账号提链');
     return;
   }
-  if (!confirm(`确定为该账号提链吗？\n\n${acc.email || ('#' + id)}\n\n提链类型按配置使用 PIX/UPI/KAKAO_PAY/IDEAL，成功会消耗 1 次 CDK。`)) return;
+  if (!confirm(`确定为该账号提链吗？\n\n${acc.email || ('#' + id)}\n\n系统将自动匹配与账号同属地的代理，提取原生官方 Stripe 结账链接。`)) return;
   const old = btn.textContent;
   btn.disabled = true;
   btn.textContent = '提链中…';
@@ -5042,7 +4993,7 @@ async function extractSelectedLinks() {
   const selected = ids.map(id => ACCOUNTS.find(a => Number(a.id) === Number(id))).filter(Boolean);
   const eligible = selected.filter(a => (a.current_plan_type || a.plan_type || '').toString().toLowerCase() === 'free' && !!a.plus_trial_eligible);
   if (!eligible.length) { showToast('选中账号里没有 free(可Plus试用)'); return; }
-  if (!confirm(`确定批量提链 ${eligible.length} 个 free(可Plus试用) 账号吗？\n\n非可试用账号会自动跳过。成功会按账号消耗 CDK 次数。`)) return;
+  if (!confirm(`确定批量提链 ${eligible.length} 个 free(可Plus试用) 账号吗？\n\n系统将为各账号严格按属地匹配同国别代理执行原生提链；无匹配代理的账号将自动安全跳过。`)) return;
   const btn = $('#btnExtractSelectedLinksV2');
   const old = btn.textContent;
   btn.disabled = true;
@@ -5543,207 +5494,6 @@ $('#btnCancelEmailChangeV2').addEventListener('click', closeEmailChangeModal);
 $('#btnSubmitEmailChangeV2').addEventListener('click', submitEmailChange);
 $('#emailChangeModalV2').addEventListener('click', e => { if (e.target.id === 'emailChangeModalV2') closeEmailChangeModal(); });
 
-let BIND_CARD_ACCOUNT_ID = null;
-let BIND_CARD_POLL_TIMER = null;
-let BIND_CARD_PARSE_DEBOUNCE = null;
-
-function onBindCardModeChange() {
-  const mode = document.querySelector('input[name="bindCardMode"]:checked')?.value || 'auto';
-  const btn = $('#btnSubmitBindCard');
-  if (btn) {
-    btn.textContent = mode === 'auto' ? '立即全自动绑卡' : '立即提链';
-  }
-}
-
-function openBindCardModal(id) {
-  const acc = ACCOUNTS.find(r => Number(r.id) === Number(id));
-  if (!acc) { showToast('未找到账号信息'); return; }
-  BIND_CARD_ACCOUNT_ID = Number(id);
-
-  const plan = (acc.current_plan_type || acc.plan_type || '').toLowerCase();
-  const infoEl = $('#bindCardAccountInfo');
-  if (infoEl) {
-    infoEl.innerHTML = `目标账号: <strong>#${esc(acc.id)} (${esc(acc.email)})</strong> · 当前套餐: <code>${esc(plan || 'free')}</code>`;
-  }
-
-  const inputEl = $('#bindCardInput');
-  if (inputEl) inputEl.value = '';
-  const checkoutUrlEl = $('#bindCardCheckoutUrl');
-  if (checkoutUrlEl) checkoutUrlEl.value = '';
-  $('#bindCardPreview').style.display = 'none';
-  $('#bindCardParseError').style.display = 'none';
-  $('#bindCardConsoleWrap').style.display = 'none';
-  $('#bindCardLogConsole').textContent = '';
-  $('#bindCardResultAction').style.display = 'none';
-  $('#bindCardResultAction').innerHTML = '';
-  $('#btnSubmitBindCard').disabled = false;
-  onBindCardModeChange();
-
-  $('#bindCardModal').classList.remove('hidden');
-  updateModalScrollLock();
-}
-
-function closeBindCardModal() {
-  if (BIND_CARD_POLL_TIMER) {
-    clearInterval(BIND_CARD_POLL_TIMER);
-    BIND_CARD_POLL_TIMER = null;
-  }
-  $('#bindCardModal').classList.add('hidden');
-  BIND_CARD_ACCOUNT_ID = null;
-  updateModalScrollLock();
-}
-
-async function parseCardInputPreview() {
-  const text = $('#bindCardInput')?.value?.trim() || '';
-  const previewEl = $('#bindCardPreview');
-  const errorEl = $('#bindCardParseError');
-  if (!text) {
-    previewEl.style.display = 'none';
-    errorEl.style.display = 'none';
-    return;
-  }
-  try {
-    const res = await api('/api/accounts/parse-card', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ card_text: text }),
-    });
-    if (res.ok && res.card) {
-      errorEl.style.display = 'none';
-      previewEl.style.display = 'block';
-      if (res.card.checkout_url && $('#bindCardCheckoutUrl') && !$('#bindCardCheckoutUrl').value) {
-        $('#bindCardCheckoutUrl').value = res.card.checkout_url;
-      }
-      $('#previewCardBrand').textContent = res.card.cardholder_name
-        ? `${res.card.brand || 'Card'} · ${res.card.cardholder_name}`
-        : (res.card.brand || 'Card');
-      $('#previewCardNumber').textContent = `**** **** **** ${res.card.last4}`;
-      $('#previewCardExp').textContent = `到期: ${res.card.exp_month}/${res.card.exp_year.slice(-2)}`;
-      $('#previewCardCvc').textContent = `CVC: ${res.card.cvc.replace(/./g, '*')}`;
-      $('#previewCardCountry').textContent = `🇺🇸 ${res.card.country} (${res.card.country_name || 'US'})`;
-      const b = res.billing || {};
-      let billingHtml = `免税账单: <strong>${esc(b.state_name || b.state)} (${esc(b.city)}, ${esc(b.postal_code)})</strong> · 姓名: <strong>${esc(b.name || 'Random')}</strong> · 消费税: <strong style="color:var(--success-color,#10b981)">$0.00</strong>`;
-      if (res.card.raw_address) {
-        billingHtml += `<div style="font-size:11px;color:var(--text-muted);margin-top:3px;">(已智能将卡商附带地址规整至免税州以保障 $0.00 零税率扣款通过)</div>`;
-      }
-      $('#previewBilling').innerHTML = billingHtml;
-    }
-  } catch (err) {
-    previewEl.style.display = 'none';
-    errorEl.style.display = 'block';
-    errorEl.textContent = `卡密识别提示: ${err.message}`;
-  }
-}
-
-async function submitBindCard() {
-  if (!BIND_CARD_ACCOUNT_ID) return;
-  const rawCard = $('#bindCardInput')?.value?.trim() || '';
-  if (!rawCard) {
-    showToast('请先输入或粘贴卡密信息');
-    return;
-  }
-
-  const checkoutUrl = $('#bindCardCheckoutUrl')?.value?.trim() || '';
-  const mode = document.querySelector('input[name="bindCardMode"]:checked')?.value || 'auto';
-  const submitBtn = $('#btnSubmitBindCard');
-  submitBtn.disabled = true;
-
-  const consoleWrap = $('#bindCardConsoleWrap');
-  const logConsole = $('#bindCardLogConsole');
-  const statusBadge = $('#bindCardStatusBadge');
-  const resultAction = $('#bindCardResultAction');
-
-  consoleWrap.style.display = 'block';
-  statusBadge.className = 'pill status-running';
-  statusBadge.textContent = '执行中…';
-  logConsole.textContent = `[${new Date().toLocaleTimeString()}] 正在提交任务到后台…\n`;
-  resultAction.style.display = 'none';
-  resultAction.innerHTML = '';
-
-  try {
-    const res = await api('/api/accounts/bind-card', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        account_id: BIND_CARD_ACCOUNT_ID,
-        card_text: rawCard,
-        checkout_url: checkoutUrl || undefined,
-        mode: mode,
-      }),
-    });
-
-    if (mode === 'link_only') {
-      statusBadge.className = 'pill status-success';
-      statusBadge.textContent = '提链成功';
-      logConsole.textContent += `[${new Date().toLocaleTimeString()}] 官方 Stripe 结账直链生成成功！\n`;
-      const url = res.url || '';
-      resultAction.style.display = 'block';
-      resultAction.innerHTML = `
-        <div style="display:flex; gap:8px; align-items:center;">
-          <input type="text" readonly value="${esc(url)}" class="mono" style="flex:1; padding:6px 10px; font-size:12px; border:1px solid #cbd5e1; border-radius:4px; background:#fff;">
-          <button type="button" class="jobs-tb-btn jobs-tb-btn--good" onclick="copyText('${esc(url)}'); showToast('直链已复制');">复制链接</button>
-          <a href="${esc(url)}" target="_blank" rel="noopener noreferrer" class="jobs-tb-btn" style="text-decoration:none; display:inline-flex; align-items:center;">打开收银台</a>
-        </div>
-      `;
-      submitBtn.disabled = false;
-      loadAccounts();
-      return;
-    }
-
-    // Auto mode: poll job status
-    const jobId = res.job_id;
-    logConsole.textContent += `[${new Date().toLocaleTimeString()}] 任务已分配 JobID: ${jobId}，正在启动 CloakBrowser 挂载住宅代理…\n`;
-
-    if (BIND_CARD_POLL_TIMER) clearInterval(BIND_CARD_POLL_TIMER);
-    BIND_CARD_POLL_TIMER = setInterval(async () => {
-      try {
-        const poll = await api(`/api/accounts/bind-card/status/${jobId}`);
-        if (!poll.ok || !poll.job) return;
-        const job = poll.job;
-        if (Array.isArray(job.logs)) {
-          logConsole.textContent = job.logs.join('\n');
-          logConsole.scrollTop = logConsole.scrollHeight;
-        }
-        if (job.status === 'success') {
-          clearInterval(BIND_CARD_POLL_TIMER);
-          BIND_CARD_POLL_TIMER = null;
-          statusBadge.className = 'pill status-success';
-          statusBadge.textContent = '绑卡成功';
-          submitBtn.disabled = false;
-          showToast('🎉 恭喜！绑卡成功，账号已升级为 ChatGPT Plus！');
-          loadAccounts();
-        } else if (job.status === 'failed') {
-          clearInterval(BIND_CARD_POLL_TIMER);
-          BIND_CARD_POLL_TIMER = null;
-          statusBadge.className = 'pill status-failed';
-          statusBadge.textContent = '绑卡失败';
-          submitBtn.disabled = false;
-          showToast(`绑卡失败: ${job.result?.error || '未知原因'}`);
-          loadAccounts();
-        }
-      } catch (pollErr) {
-        // ignore network jitter
-      }
-    }, 1500);
-
-  } catch (err) {
-    statusBadge.className = 'pill status-failed';
-    statusBadge.textContent = '提交失败';
-    logConsole.textContent += `[${new Date().toLocaleTimeString()}] 提交失败: ${err.message}\n`;
-    showToast(`提交失败: ${err.message}`);
-    submitBtn.disabled = false;
-  }
-}
-
-$('#btnCloseBindCard').addEventListener('click', closeBindCardModal);
-$('#btnCancelBindCard').addEventListener('click', closeBindCardModal);
-$('#btnSubmitBindCard').addEventListener('click', submitBindCard);
-$('#bindCardModal').addEventListener('click', e => { if (e.target.id === 'bindCardModal') closeBindCardModal(); });
-$('#bindCardInput').addEventListener('input', () => {
-  if (BIND_CARD_PARSE_DEBOUNCE) clearTimeout(BIND_CARD_PARSE_DEBOUNCE);
-  BIND_CARD_PARSE_DEBOUNCE = setTimeout(parseCardInputPreview, 250);
-});
-
 (function bindAccountsToolbarV2() {
   const bind = (id, fn) => {
     const el = document.getElementById(id);
@@ -5751,11 +5501,6 @@ $('#bindCardInput').addEventListener('input', () => {
   };
   bind('btnCheckSelectedPlansV2', checkSelectedPlans);
   bind('btnExtractSelectedLinksV2', extractSelectedLinks);
-  bind('btnBindSelectedCardV2', () => {
-    const ids = Array.from(ACCOUNT_SELECTED);
-    if (ids.length) openBindCardModal(ids[0]);
-    else showToast('请先选择账号');
-  });
   bind('btnRetrySelectedCodexV2', retrySelectedCodex);
   bind('btnDownloadSelectedCpaV2', downloadSelectedCpa);
   bind('btnStopSelectedCodexV2', stopSelectedCodex);
@@ -7763,13 +7508,6 @@ let PROXIES = [];
 let PROXIES_TOTAL = 0;
 const PROXY_SELECTED = new Set();
 
-function getCountryFlag(code) {
-  if (!code || code.length !== 2) return '';
-  try {
-    const codePoints = [...code.toUpperCase()].map(c => 127397 + c.charCodeAt(0));
-    return String.fromCodePoint(...codePoints);
-  } catch(e) { return ''; }
-}
 
 function getProxyStatusFilter() {
   return ($('#proxyStatusFilter')?.value || '').trim();
@@ -7863,7 +7601,7 @@ function renderProxies() {
   const body = $('#proxyBodyV2');
   if (!body) return;
   if (!PROXIES.length) {
-    body.innerHTML = `<tr><td colspan="11" style="text-align:center;padding:48px 16px;color:#909399;">暂无代理数据。可点击右上角「+ 添加代理」添加节点</td></tr>`;
+    body.innerHTML = `<tr><td colspan="12" style="text-align:center;padding:48px 16px;color:#909399;">暂无代理数据。可点击右上角「+ 添加代理」添加节点</td></tr>`;
     return;
   }
 
@@ -7883,12 +7621,11 @@ function renderProxies() {
       authHtml = `<span style="font-family:ui-monospace,Consolas,monospace;font-size:12px;" title="${authStr}">${esc(r.username)}:••••</span><button type="button" class="proxy-icon-btn" onclick="copyText('${esc(r.username)}:${esc(r.password)}')" title="复制账号密码"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>`;
     }
 
-    // 出口 IP 与地理位置
+    // 属地与出口 IP
+    const countryBadge = formatCountryBadgeHtml(r.country_code, r.country, r.country_badge);
     let exitHtml = '<span style="color:#c0c4cc;">未探测</span>';
     if (r.exit_ip) {
-      const flag = getCountryFlag(r.country_code);
-      const loc = [r.country_code, r.city].filter(Boolean).join(' ');
-      exitHtml = `<div style="display:flex;align-items:center;gap:4px;"><span style="cursor:pointer;color:#377DFF;font-weight:500;" onclick="copyText('${esc(r.exit_ip)}')" title="点击复制出口IP">${esc(r.exit_ip)}</span><span style="font-size:12px;color:#909399;" title="${esc(r.country || '')}">${flag} ${esc(loc)}</span></div>`;
+      exitHtml = `<span style="cursor:pointer;color:#377DFF;font-weight:500;" onclick="copyText('${esc(r.exit_ip)}')" title="点击复制出口IP">${esc(r.exit_ip)}</span>`;
     }
 
     // 延迟状态
@@ -7918,6 +7655,7 @@ function renderProxies() {
     return `<tr>
       <td class="col-check"><input type="checkbox" class="proxy-select-item" data-id="${r.id}" ${checked}></td>
       <td style="color:#909399;font-size:12px;">#${r.id}</td>
+      <td>${countryBadge}</td>
       <td style="font-weight:600;color:#303133;" title="${esc(r.name || '')}">${esc(r.name || '代理 #' + r.id)}</td>
       <td>${protoPill}</td>
       <td><span style="font-family:ui-monospace,Consolas,monospace;font-size:13px;">${hostPort}</span>${copyAddrBtn}</td>

@@ -21,7 +21,7 @@ from urllib.parse import urlparse
 from flask import Flask, Response, jsonify, make_response, render_template, request
 import pyotp
 
-from core import codex_retry_service, db, plan_check_service, extract_link_service, codex_agent_service, live_check_service, proxy_service, card_binding_service
+from core import codex_retry_service, db, plan_check_service, extract_link_service, codex_agent_service, live_check_service, proxy_service
 from webui.auth import init_auth, register_auth_routes
 from core import registration_service as svc
 from webui import config_editor
@@ -329,9 +329,6 @@ def create_app(auth_code: str | None = None) -> Flask:
     recovered_extract_links = db.recover_interrupted_extract_links()
     if recovered_extract_links:
         logger.warning("已恢复 %s 个因 WebUI 重启中断的提链状态", recovered_extract_links)
-    recovered_card_bindings = db.recover_interrupted_card_bindings()
-    if recovered_card_bindings:
-        logger.warning("已恢复 %s 个因 WebUI 重启中断的绑卡任务状态", recovered_card_bindings)
     recovered_live_checks = db.recover_interrupted_live_checks()
     if recovered_live_checks:
         logger.warning("已恢复 %s 个因 WebUI 重启中断的查活状态", recovered_live_checks)
@@ -991,22 +988,13 @@ def create_app(auth_code: str | None = None) -> Flask:
             "skipped_count": len(skipped),
         }), 202
 
-    @app.get("/api/extract-link/cdk")
-    def api_extract_link_cdk():
-        """查询当前配置或传入 CDK 的剩余次数。"""
-        code = (request.args.get("code") or "").strip() or None
-        try:
-            return jsonify({"ok": True, **extract_link_service.query_cdk(cdk=code)})
-        except Exception as exc:
-            return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 400
-
     def _is_extract_eligible(acc: dict) -> bool:
-        plan = str(acc.get("current_plan_type") or acc.get("plan_type") or "").lower()
-        return plan == "free" and bool(acc.get("plus_trial_eligible"))
+        plan = str(acc.get("current_plan_type") or acc.get("plan_type") or "free").lower()
+        return "plus" not in plan
 
     @app.post("/api/accounts/extract-link")
     def api_account_extract_link():
-        """单账号提链。Body {account_id|id, link_type?, cdk?}。"""
+        """单账号原生官方试用提链。Body {account_id|id}。"""
         data = request.get_json(silent=True) or {}
         acc_id = data.get("account_id") or data.get("id")
         try:
@@ -1016,7 +1004,7 @@ def create_app(auth_code: str | None = None) -> Flask:
         if not acc:
             return jsonify({"ok": False, "error": "账号不存在"}), 404
         if not _is_extract_eligible(acc):
-            return jsonify({"ok": False, "error": "仅支持 free(可Plus试用) 账号提链；请先查询套餐确认资格"}), 400
+            return jsonify({"ok": False, "error": "该账号已是 Plus 会员，无需再次提链"}), 400
         token = (acc.get("access_token") or "").strip()
         if not token:
             return jsonify({"ok": False, "error": "该账号没有 access_token"}), 400
@@ -1026,8 +1014,6 @@ def create_app(auth_code: str | None = None) -> Flask:
                 email=acc.get("email") or "",
                 access_token=token,
                 trigger="manual",
-                link_type=data.get("link_type"),
-                cdk=data.get("cdk"),
             )
         except Exception as exc:
             return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 400
@@ -1039,7 +1025,7 @@ def create_app(auth_code: str | None = None) -> Flask:
 
     @app.post("/api/accounts/extract-link-bulk")
     def api_accounts_extract_link_bulk():
-        """批量提链。Body {account_ids:[...], link_type?, cdk?}。"""
+        """批量原生官方试用提链。Body {account_ids:[...]}。"""
         data = request.get_json(silent=True) or {}
         ids = data.get("account_ids") or data.get("ids") or []
         if not isinstance(ids, list) or not ids:
@@ -1067,7 +1053,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                 continue
             email = acc.get("email")
             if not _is_extract_eligible(acc):
-                skipped.append({"id": acc_id, "email": email, "reason": "不是 free(可Plus试用)"})
+                skipped.append({"id": acc_id, "email": email, "reason": "已是 Plus 会员"})
                 continue
             token = (acc.get("access_token") or "").strip()
             if not token:
@@ -1079,8 +1065,6 @@ def create_app(auth_code: str | None = None) -> Flask:
                     email=email or "",
                     access_token=token,
                     trigger="manual_bulk",
-                    link_type=data.get("link_type"),
-                    cdk=data.get("cdk"),
                 )
             except Exception as exc:
                 failed.append({"id": acc_id, "email": email, "error": f"{type(exc).__name__}: {exc}"})
@@ -1103,64 +1087,6 @@ def create_app(auth_code: str | None = None) -> Flask:
             "skipped": skipped,
             "skipped_count": len(skipped),
         }), 202
-
-    @app.post("/api/accounts/parse-card")
-    def api_accounts_parse_card():
-        """智能解析剪贴板卡密文本并返回发卡国/品牌与免税账单预览。"""
-        data = request.get_json(silent=True) or {}
-        raw = data.get("raw_card") or data.get("card_text") or data.get("text") or ""
-        parsed = card_binding_service.parse_card_input(raw)
-        if not parsed.get("valid"):
-            return jsonify({"ok": False, "error": parsed.get("error") or "无效卡密"}), 400
-        billing = card_binding_service.generate_tax_free_billing(
-            country=parsed.get("country", "US"),
-            hint_zip=parsed.get("postal_code"),
-            name=parsed.get("cardholder_name"),
-        )
-        return jsonify({"ok": True, "card": parsed, "billing": billing})
-
-    @app.post("/api/accounts/bind-card")
-    def api_account_bind_card():
-        """一键全自动绑卡或原生提链。Body {account_id, card_text, mode: 'auto'|'link_only', proxy_url?}。"""
-        data = request.get_json(silent=True) or {}
-        acc_id = data.get("account_id") or data.get("id")
-        raw_card = data.get("card_text") or data.get("raw_card") or ""
-        mode = data.get("mode") or "auto"
-        proxy_url = data.get("proxy_url") or None
-
-        if not acc_id:
-            return jsonify({"ok": False, "error": "缺少 account_id"}), 400
-        try:
-            acc = db.get_account(int(acc_id))
-        except Exception:
-            acc = None
-        if not acc:
-            return jsonify({"ok": False, "error": "账号不存在"}), 404
-
-        token = (acc.get("access_token") or "").strip()
-        if not token:
-            return jsonify({"ok": False, "error": "该账号没有 access_token"}), 400
-
-        checkout_url = data.get("checkout_url") or data.get("stripe_url") or None
-
-        res = card_binding_service.enqueue_card_binding(
-            account_id=int(acc_id),
-            raw_card_input=raw_card,
-            checkout_url=checkout_url,
-            mode=mode,
-            proxy_url=proxy_url,
-        )
-        if not res.get("accepted"):
-            return jsonify({"ok": False, "error": res.get("error") or "任务创建失败"}), 400
-        return jsonify({"ok": True, **res})
-
-    @app.get("/api/accounts/bind-card/status/<job_id>")
-    def api_account_bind_card_status(job_id: str):
-        """轮询后台 CloakBrowser 绑卡进度与实时日志。"""
-        job = card_binding_service.get_binding_job_status(job_id)
-        if not job:
-            return jsonify({"ok": False, "error": "未找到指定绑卡任务"}), 404
-        return jsonify({"ok": True, "job": job})
 
     @app.post("/api/accounts/codex-agent")
     def api_account_codex_agent():
@@ -2008,6 +1934,10 @@ def create_app(auth_code: str | None = None) -> Flask:
             return jsonify({"ok": False, "error": "请填写有效的主机地址和端口号 (1-65535)"}), 400
 
         proxy = db.create_proxy(data)
+        if proxy and proxy.get("id"):
+            # 自动对新添加的代理执行测试并分配国别地区信息，合格后激活启用
+            proxy_service.auto_test_and_activate_new_proxies([proxy["id"]])
+            proxy = db.get_proxy(proxy["id"]) or proxy
         return jsonify({"ok": True, "proxy": proxy})
 
     @app.post("/api/proxies/batch")
@@ -2032,6 +1962,11 @@ def create_app(auth_code: str | None = None) -> Flask:
             return jsonify({"ok": False, "error": "没有可添加的有效代理条目"}), 400
 
         res = db.batch_create_proxies(proxies_list)
+        created_ids = res.get("created_ids") or []
+        if created_ids:
+            # 后台异步对新添加的代理执行测速与国别识别，合格后方可激活启用
+            proxy_service.auto_test_and_activate_async(created_ids)
+
         return jsonify({
             "ok": True,
             "created": res["created"],

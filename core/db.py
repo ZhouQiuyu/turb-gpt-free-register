@@ -725,6 +725,27 @@ def _decorate_account(row: dict) -> dict:
     out = dict(row)
     out["note"] = out.get("note") or ""
     out["note_updated_at"] = out.get("note_updated_at") or ""
+
+    # 国别地区信息解析与徽标格式化
+    if not out.get("country_code") and out.get("proxy_used"):
+        p_info = find_proxy_by_url(out["proxy_used"])
+        if p_info and p_info.get("country_code"):
+            out["country_code"] = p_info["country_code"]
+            out["country"] = out.get("country") or p_info.get("country")
+            out["city"] = out.get("city") or p_info.get("city")
+
+    from core.geo_utils import get_country_badge_info
+    badge_info = get_country_badge_info(out.get("country_code"), out.get("country"))
+    out["country_code"] = badge_info["code"]
+    out["country_flag"] = badge_info["flag"]
+    out["country_name_cn"] = badge_info["name_cn"]
+    out["country_badge"] = badge_info["badge"]
+
+    # 结账链接规范化透出
+    stripe_link = out.get("stripe_checkout_url") or out.get("extract_link_url") or out.get("extract_link_long_url") or ""
+    out["stripe_checkout_url"] = stripe_link
+    out["extract_link_url"] = stripe_link
+
     plan_status = out.get("plan_check_status")
     if plan_status in {"queued", "running"}:
         try:
@@ -938,6 +959,9 @@ def insert_account(
     expires_at: str | None = None,
     device_id: str | None = None,
     proxy_used: str | None = None,
+    country_code: str | None = None,
+    country: str | None = None,
+    city: str | None = None,
     email_source: str | None = None,
     extra: dict | None = None,
     codex_status: str | None = None,   # success / failed / skipped / missing
@@ -950,6 +974,13 @@ def insert_account(
         existing = _find_by_email(accounts, email)
         outlook_row = _find_by_email(outlook_rows, email)
         extra_json = json.dumps(extra, ensure_ascii=False) if extra else None
+
+        if not country_code and proxy_used:
+            p_info = find_proxy_by_url(proxy_used)
+            if p_info and p_info.get("country_code"):
+                country_code = p_info["country_code"]
+                country = country or p_info.get("country")
+                city = city or p_info.get("city")
 
         if existing is None:
             row_id = _next_id(accounts)
@@ -971,6 +1002,9 @@ def insert_account(
             "plan_type": plan_type if plan_type is not None else row.get("plan_type"),
             "expires_at": expires_at if expires_at is not None else row.get("expires_at"),
             "proxy_used": proxy_used if proxy_used is not None else row.get("proxy_used"),
+            "country_code": (country_code or "").upper() if country_code is not None else row.get("country_code", ""),
+            "country": country if country is not None else row.get("country", ""),
+            "city": city if city is not None else row.get("city", ""),
             "email_source": email_source if email_source is not None else row.get("email_source"),
             "extra_json": extra_json if extra_json is not None else row.get("extra_json"),
             "codex_status": codex_status if codex_status is not None else row.get("codex_status"),
@@ -1370,7 +1404,7 @@ def update_account_extract(acc_id: int, result: dict | None = None) -> bool:
         row["extract_link_status"] = status
         row["extract_link_ok"] = ok
         row["extract_link_checked_at"] = result.get("checked_at") or _now()
-        if status in {"success", "failed", "stopped"}:
+        if status in {"success", "failed", "stopped", "skipped"}:
             row["extract_link_completed_at"] = _now()
         row["extract_link_error"] = None if ok or status == "running" else result.get("error")
         if result.get("message") is not None:
@@ -1379,19 +1413,22 @@ def update_account_extract(acc_id: int, result: dict | None = None) -> bool:
             row["extract_link_job_id"] = result.get("job_id")
         if result.get("link_type") is not None:
             row["extract_link_type"] = result.get("link_type")
-        if result.get("cdk_remaining") is not None:
-            row["extract_link_cdk_remaining"] = result.get("cdk_remaining")
+        url = result.get("url") or result.get("link") or result.get("stripe_checkout_url")
+        if url:
+            row["stripe_checkout_url"] = url
+            row["extract_link_url"] = url
+            row["extract_link_long_url"] = url
         payload = result.get("result") if isinstance(result.get("result"), dict) else {}
         if payload:
-            row["extract_link_long_url"] = payload.get("long_url")
+            if payload.get("long_url"):
+                row["extract_link_long_url"] = payload.get("long_url")
+                row["stripe_checkout_url"] = payload.get("long_url")
             row["extract_link_copy_paste"] = payload.get("copy_paste")
             row["extract_link_image_url_png"] = payload.get("image_url_png")
             row["extract_link_image_url_svg"] = payload.get("image_url_svg")
             row["extract_link_payment_method"] = payload.get("payment_method")
             row["extract_link_payment_link_type"] = payload.get("payment_link_type")
             row["extract_link_expires_at"] = payload.get("expires_at")
-            if payload.get("cdk_remaining") is not None:
-                row["extract_link_cdk_remaining"] = payload.get("cdk_remaining")
             row["extract_link_result_json"] = json.dumps(payload, ensure_ascii=False)
         row["updated_at"] = _now()
         _save_accounts(accounts)
@@ -1418,75 +1455,26 @@ def recover_interrupted_extract_links() -> int:
         return recovered
 
 
-def mark_account_card_binding_running(acc_id: int) -> bool:
-    """把绑卡任务标记为运行中。"""
-    with _LOCK:
-        accounts = _load_accounts()
-        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
-        if row is None:
-            return False
-        row["card_binding_status"] = "running"
-        row["card_binding_started_at"] = _now()
-        row["card_binding_error"] = None
-        row["card_binding_message"] = "绑卡任务运行中"
-        row["updated_at"] = _now()
-        _save_accounts(accounts)
-        return True
 
-
-def update_account_card_binding(acc_id: int, result: dict | None = None) -> bool:
-    """更新账号绑卡结果/进度，成功时同步升级账号为 Plus。"""
-    result = result or {}
-    with _LOCK:
-        accounts = _load_accounts()
-        row = next((r for r in accounts if int(r.get("id") or 0) == int(acc_id)), None)
-        if row is None:
-            return False
-        status = str(result.get("status") or ("success" if result.get("ok") else "failed"))
-        ok = bool(result.get("ok")) and status == "success"
-        row["card_binding_status"] = status
-        row["card_binding_ok"] = ok
-        row["card_binding_checked_at"] = result.get("checked_at") or _now()
-        if status in {"success", "failed", "stopped"}:
-            row["card_binding_completed_at"] = _now()
-        row["card_binding_error"] = None if ok or status == "running" else result.get("error")
-        if result.get("message") is not None:
-            row["card_binding_message"] = result.get("message")
-        if result.get("card_brand") is not None:
-            row["card_brand"] = result.get("card_brand")
-        if result.get("card_last4") is not None:
-            row["card_last4"] = result.get("card_last4")
-        if result.get("card_bound_at") is not None:
-            row["card_bound_at"] = result.get("card_bound_at")
-        elif ok:
-            row["card_bound_at"] = _now()
-        if ok:
-            row["plan_type"] = "plus"
-            row["current_plan_type"] = "plus"
-            row["plus_trial_eligible"] = False
-        row["updated_at"] = _now()
-        _save_accounts(accounts)
-        return True
-
-
-def recover_interrupted_card_bindings() -> int:
-    """服务启动时恢复上次进程中断的绑卡任务。"""
+def recover_interrupted_extract_links() -> int:
+    """服务启动时恢复上次进程中断的提链状态。"""
     with _LOCK:
         accounts = _load_accounts()
         recovered = 0
         now = _now()
         for row in accounts:
-            if row.get("card_binding_status") not in {"queued", "running"}:
+            if row.get("extract_link_status") not in {"queued", "running"}:
                 continue
-            row["card_binding_status"] = "failed"
-            row["card_binding_ok"] = False
-            row["card_binding_error"] = "WebUI 重启导致绑卡任务中断，请重新尝试"
-            row["card_binding_completed_at"] = now
+            row["extract_link_status"] = "failed"
+            row["extract_link_ok"] = False
+            row["extract_link_error"] = "WebUI 重启导致提链任务中断，请重新尝试"
+            row["extract_link_completed_at"] = now
             row["updated_at"] = now
             recovered += 1
         if recovered:
             _save_accounts(accounts)
         return recovered
+
 
 
 def _account_matches_query(row: dict, q: str | None) -> bool:
@@ -1618,10 +1606,8 @@ def list_account_plan_check_statuses(
         "extract_link_status", "extract_link_ok", "extract_link_type",
         "extract_link_message", "extract_link_error",
         "extract_link_long_url", "extract_link_copy_paste",
-        "extract_link_image_url_png", "extract_link_image_url_svg",
-        "extract_link_expires_at",
-        "card_binding_status", "card_binding_ok", "card_binding_message", "card_binding_error",
-        "card_brand", "card_last4", "card_bound_at",
+        "extract_link_url", "stripe_checkout_url",
+        "country_code", "country", "city", "country_flag", "country_name_cn", "country_badge",
         "codex_status", "codex_error",
         "codex_agent_status", "codex_agent_message",
         "codex_agent_runtime_id", "codex_agent_sub2api_url",
@@ -1685,10 +1671,9 @@ def list_account_plan_check_statuses(
                     "plus_trial_eligible": row.get("plus_trial_eligible"),
                     "plus_trial_discount_percentage": row.get("plus_trial_discount_percentage"),
                     "extract_link_status": row.get("extract_link_status"),
-                    "card_binding_status": row.get("card_binding_status"),
-                    "card_binding_ok": row.get("card_binding_ok"),
-                    "card_binding_error": row.get("card_binding_error"),
-                    "card_bound_at": row.get("card_bound_at"),
+                    "stripe_checkout_url": row.get("stripe_checkout_url"),
+                    "country_code": row.get("country_code"),
+                    "country_badge": row.get("country_badge"),
                     "codex_status": row.get("codex_status"),
                     "codex_agent_status": row.get("codex_agent_status"),
                     "totp_setup_status": row.get("totp_setup_status"),
@@ -3626,6 +3611,31 @@ def proxy_to_url(proxy: dict) -> str:
     return f"{protocol}://{host}:{port}"
 
 
+def find_proxy_by_url(proxy_url: str | None) -> dict | None:
+    """根据代理 URL 查询 proxy_pool 中匹配的代理记录（包含 country_code 等属地属性）。"""
+    if not proxy_url:
+        return None
+    raw = str(proxy_url).strip()
+    parsed = parse_proxy_url_to_dict(raw)
+    if not parsed or not parsed.get("host") or not parsed.get("port"):
+        return None
+    try:
+        _ensure_sqlite()
+        with _LOCK, closing(_sqlite_conn()) as conn:
+            row = conn.execute(
+                "SELECT * FROM proxy_pool WHERE host=? AND port=? LIMIT 1",
+                (parsed["host"], parsed["port"])
+            ).fetchone()
+            if row:
+                d = dict(row)
+                d["url"] = proxy_to_url(d)
+                return d
+    except Exception:
+        pass
+    return None
+
+
+
 def _migrate_legacy_proxies_into_db(conn: sqlite3.Connection) -> None:
     """从 config.proxy 或 .env 中读取旧 PROXY_POOL 首次迁入数据库。"""
     try:
@@ -3713,9 +3723,14 @@ def list_proxies_page(
             [*params, limit, offset]
         ).fetchall()
         items = []
+        from core.geo_utils import get_country_badge_info
         for r in rows:
             d = dict(r)
             d["url"] = proxy_to_url(d)
+            b = get_country_badge_info(d.get("country_code"), d.get("country"))
+            d["country_flag"] = b["flag"]
+            d["country_name_cn"] = b["name_cn"]
+            d["country_badge"] = b["badge"]
             items.append(d)
         return {
             "items": items,
@@ -3757,6 +3772,11 @@ def get_proxy(proxy_id: int) -> dict | None:
             return None
         d = dict(row)
         d["url"] = proxy_to_url(d)
+        from core.geo_utils import get_country_badge_info
+        b = get_country_badge_info(d.get("country_code"), d.get("country"))
+        d["country_flag"] = b["flag"]
+        d["country_name_cn"] = b["name_cn"]
+        d["country_badge"] = b["badge"]
         return d
 
 
@@ -3766,6 +3786,7 @@ def create_proxy(data: dict) -> dict:
     protocol = str(data.get("protocol") or "socks5h").lower().strip()
     if protocol == "socks5":
         protocol = "socks5h"
+    status = str(data.get("status") or "disabled").strip().lower()
     with _LOCK, closing(_sqlite_conn()) as conn:
         cursor = conn.execute(
             """
@@ -3781,7 +3802,7 @@ def create_proxy(data: dict) -> dict:
                 int(data.get("port") or 1080),
                 str(data.get("username") or "").strip(),
                 str(data.get("password") or "").strip(),
-                str(data.get("status") or "active"),
+                status,
                 now_str,
                 now_str,
             )
@@ -3794,11 +3815,12 @@ def create_proxy(data: dict) -> dict:
 def batch_create_proxies(proxies: list[dict]) -> dict:
     _ensure_sqlite()
     if not proxies:
-        return {"created": 0, "skipped": 0, "total": 0}
+        return {"created": 0, "skipped": 0, "total": 0, "created_ids": []}
 
     now_str = _now()
     created = 0
     skipped = 0
+    created_ids: list[int] = []
 
     with _LOCK, closing(_sqlite_conn()) as conn:
         existing = set()
@@ -3824,7 +3846,9 @@ def batch_create_proxies(proxies: list[dict]) -> dict:
             if protocol == "socks5":
                 protocol = "socks5h"
 
-            conn.execute(
+            status = str(p.get("status") or "disabled").strip().lower()
+
+            cursor = conn.execute(
                 """
                 INSERT INTO proxy_pool (
                     name, protocol, host, port, username, password, status,
@@ -3838,15 +3862,16 @@ def batch_create_proxies(proxies: list[dict]) -> dict:
                     port,
                     user,
                     pwd,
-                    str(p.get("status") or "active"),
+                    status,
                     now_str,
                     now_str,
                 )
             )
+            created_ids.append(cursor.lastrowid)
             created += 1
         conn.commit()
 
-    return {"created": created, "skipped": skipped, "total": len(proxies)}
+    return {"created": created, "skipped": skipped, "total": len(proxies), "created_ids": created_ids}
 
 
 def update_proxy(proxy_id: int, updates: dict) -> dict | None:
@@ -3951,17 +3976,22 @@ def get_active_proxies_by_country(country_code: str = "US") -> list[dict]:
         return items
 
 
-def pick_proxy_by_country(country_code: str = "US") -> str:
-    """按国家代码从启用代理池随机抽取一个代理 URL，若无匹配则回退到任一活跃代理。"""
+def pick_proxy_by_country(country_code: str = "US", strict: bool = False) -> str:
+    """按国家代码从启用代理池随机抽取一个代理 URL。
+    strict=True 时，若无匹配该国家代码的活跃代理，直接返回空字符串，绝不回退到其他国家代理。
+    """
     import random
     proxies = get_active_proxies_by_country(country_code)
     if proxies:
         chosen = random.choice(proxies)
         return chosen.get("url") or ""
+    if strict:
+        return ""
     all_proxies = get_active_proxies()
     if all_proxies:
         chosen = random.choice(all_proxies)
         return chosen.get("url") or ""
     return ""
+
 
 

@@ -45,8 +45,13 @@ def _is_cloudflare_challenge(status_code: int, headers: dict, body_text: str) ->
     return False
 
 
-def test_proxy_connectivity(proxy_id: int, timeout: float = 8.0) -> dict:
-    """测试单个代理的连通性，获取实际出口 IP、地理位置与延迟。"""
+from core.geo_utils import format_country_badge, get_country_badge_info
+
+_PROXY_TEST_POOL = ThreadPoolExecutor(max_workers=6, thread_name_prefix="proxy-auto-test")
+
+
+def test_proxy_connectivity(proxy_id: int, timeout: float = 8.0, auto_enable: bool = True) -> dict:
+    """测试单个代理的连通性，获取实际出口 IP、地理位置与延迟。测试通过后若开启 auto_enable 则自动启用。"""
     proxy = get_proxy(proxy_id)
     if not proxy:
         return {"success": False, "message": f"代理 #{proxy_id} 不存在"}
@@ -97,6 +102,21 @@ def test_proxy_connectivity(proxy_id: int, timeout: float = 8.0) -> dict:
                 elif probe["type"] == "httpbin":
                     exit_ip = str(data.get("origin") or "").split(",")[0].strip()
 
+                # 兜底：若有出口 IP 但无国家信息，尝试查一次快速 geoip
+                if exit_ip and not country_code:
+                    try:
+                        import requests
+                        geo_r = requests.get(f"http://ip-api.com/json/{exit_ip}?lang=zh-CN", timeout=4.0)
+                        if geo_r.status_code == 200:
+                            gdata = geo_r.json()
+                            if gdata.get("status") == "success":
+                                country = str(gdata.get("country") or "").strip()
+                                country_code = str(gdata.get("countryCode") or "").strip()
+                                city = str(gdata.get("city") or "").strip()
+                    except Exception:
+                        pass
+
+                badge_info = get_country_badge_info(country_code, country)
                 updates = {
                     "latency_ms": latency_ms,
                     "latency_status": "success",
@@ -106,7 +126,13 @@ def test_proxy_connectivity(proxy_id: int, timeout: float = 8.0) -> dict:
                     "country_code": country_code,
                     "city": city,
                 }
+                if auto_enable:
+                    # 探测合格且识别到属地代码，正式激活启用
+                    updates["status"] = "active"
+
                 update_proxy(proxy_id, updates)
+                logger.info("[代理池] 代理 #%s 连通性测试通过：%s 延迟=%sms 出口=%s 状态=%s",
+                            proxy_id, badge_info["badge"], latency_ms, exit_ip, updates.get("status", proxy.get("status")))
                 return {
                     "success": True,
                     "id": proxy_id,
@@ -115,7 +141,9 @@ def test_proxy_connectivity(proxy_id: int, timeout: float = 8.0) -> dict:
                     "country": country,
                     "country_code": country_code,
                     "city": city,
+                    "country_badge": badge_info["badge"],
                     "message": "连通正常",
+                    "status": updates.get("status", proxy.get("status")),
                 }
             else:
                 last_err = f"HTTP {resp.status_code if resp else 'No response'}"
@@ -137,13 +165,39 @@ def test_proxy_connectivity(proxy_id: int, timeout: float = 8.0) -> dict:
         "latency_status": "failed",
         "latency_message": err_msg,
     }
+    if auto_enable:
+        # 测试失败的代理保持禁用状态，避免被注册或提链调度
+        updates["status"] = "disabled"
+
     update_proxy(proxy_id, updates)
+    logger.warning("[代理池] 代理 #%s 连通性测试失败 (%s)，保持禁用", proxy_id, err_msg)
     return {
         "success": False,
         "id": proxy_id,
         "latency_ms": None,
         "message": err_msg,
+        "status": "disabled",
     }
+
+
+def auto_test_and_activate_new_proxies(proxy_ids: list[int], timeout: float = 8.0) -> list[dict]:
+    """批量同步测试并按测试结果激活代理列表。"""
+    results = []
+    for pid in proxy_ids:
+        try:
+            r = test_proxy_connectivity(pid, timeout=timeout, auto_enable=True)
+            results.append(r)
+        except Exception as e:
+            logger.warning("[代理池] 代理 #%s 自动测速异常: %s", pid, e)
+            results.append({"id": pid, "success": False, "message": str(e)})
+    return results
+
+
+def auto_test_and_activate_async(proxy_ids: list[int], timeout: float = 8.0) -> None:
+    """后台异步并发测试新代理并在成功后激活。"""
+    if not proxy_ids:
+        return
+    _PROXY_TEST_POOL.submit(auto_test_and_activate_new_proxies, list(proxy_ids), timeout)
 
 
 def test_proxy_quality_openai(proxy_id: int, timeout: float = 10.0) -> dict:
