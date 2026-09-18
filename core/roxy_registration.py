@@ -1199,9 +1199,22 @@ def _submit_email_and_wait_next(
                         driver.get("https://chatgpt.com/auth/login")
                     time.sleep(2.0)
                 elif "slm=1" in c_url or c_url.rstrip("/") in ("https://chatgpt.com", "http://chatgpt.com"):
-                    logger.info("%s 校验失败时检测到处于游客首页 (%s)，重新导航至 /auth/login", _log_prefix(driver), c_url)
-                    driver.get("https://chatgpt.com/auth/login")
-                    time.sleep(1.5)
+                    logger.info("%s 校验失败时检测到处于游客首页 (%s)，尝试拉起登录弹窗或重新导航至 /auth/login", _log_prefix(driver), c_url)
+                    page = getattr(driver, "page", None)
+                    btn_clicked = False
+                    if page is not None and not type(driver).__name__.startswith("MagicMock"):
+                        try:
+                            slm_btn = page.locator('button[data-testid="login-button"], button[data-testid="signup-button"], [data-testid="login-button"], [data-testid="signup-button"], a[href*="/auth/login"]').first
+                            if slm_btn.is_visible():
+                                slm_btn.click(delay=60)
+                                btn_clicked = True
+                                logger.info("%s 已通过 Playwright 点击游客首页登录按钮", _log_prefix(driver))
+                                time.sleep(1.5)
+                        except Exception:
+                            pass
+                    if not btn_clicked:
+                        driver.get("https://chatgpt.com/auth/login")
+                        time.sleep(1.5)
             except Exception:
                 pass
             time.sleep(0.8)

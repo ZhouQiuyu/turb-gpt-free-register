@@ -214,6 +214,53 @@ class TestCloudflareSolver(unittest.TestCase):
         self.assertFalse(mock_page.mouse.click.called)
         self.assertTrue(mock_box.click.called)
 
+    def test_solve_turnstile_frame_element_coordinate_click(self):
+        """测试通过 frame_element 的 bounding_box 穿透封闭 Shadow DOM 并成功模拟坐标点击。"""
+        mock_frame_el = MagicMock()
+        mock_frame_el.bounding_box.return_value = {"x": 273.0, "y": 304.0, "width": 298.0, "height": 65.0}
+
+        mock_frame = MagicMock()
+        mock_frame.url = "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/if/ov2/av0/rcv0/0/mndu3/light/normal"
+        mock_frame.frame_element.return_value = mock_frame_el
+        mock_frame.locator.return_value.count.return_value = 0
+        mock_frame.locator.return_value.first.is_visible.return_value = False
+
+        mock_page = MagicMock()
+        mock_page.evaluate.return_value = None  # 模拟 evaluate 未能通过 light DOM 获取到组件
+        mock_page.frames = [mock_frame]
+        mock_page.url = "https://auth.openai.com/api/accounts/authorize"
+
+        driver = MagicMock()
+        driver.page = mock_page
+        driver.title = "Chờ một chút..."
+        driver.current_url = "https://auth.openai.com/api/accounts/authorize"
+        driver.execute_script.return_value = False
+
+        def mock_title_effect():
+            if mock_page.mouse.click.called or mock_page.mouse.down.called:
+                mock_page.frames = []
+                driver.current_url = "https://auth.openai.com/sign-up/password"
+                return "Enter your password"
+            return "Chờ một chút..."
+
+        type(driver).title = property(lambda self: mock_title_effect())
+
+        res = solve_cloudflare_challenge_if_present(driver, max_wait=5.0)
+        self.assertTrue(res)
+        # 证实：成功通过 frame_element 的坐标计算并触发了 mouse.click
+        self.assertTrue(mock_page.mouse.click.called or mock_page.mouse.down.called)
+
+    def test_detect_vietnamese_and_thai_titles(self):
+        """测试越语与泰语 Cloudflare 质询标题能被快速准确识别。"""
+        d1 = MagicMock(title="Chờ một chút...", current_url="https://chatgpt.com/auth/login", page=None)
+        self.assertTrue(is_cloudflare_challenge(d1))
+
+        d2 = MagicMock(title="รอสักครู่...", current_url="https://chatgpt.com/auth/login", page=None)
+        self.assertTrue(is_cloudflare_challenge(d2))
+
+        d3 = MagicMock(title="Thực hiện xác minh bảo mật", current_url="https://auth.openai.com/api/accounts/authorize", page=None)
+        self.assertTrue(is_cloudflare_challenge(d3))
+
 
 if __name__ == "__main__":
     unittest.main()
