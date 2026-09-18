@@ -1982,6 +1982,19 @@ def create_app(auth_code: str | None = None) -> Flask:
             return jsonify({"ok": False, "error": f"代理 #{proxy_id} 不存在"}), 404
         return jsonify({"ok": True, "proxy": updated})
 
+    @app.get("/api/proxies/auto-ban-setting")
+    def api_proxies_get_auto_ban_setting():
+        from core.proxy_dispatcher import is_auto_ban_enabled
+        return jsonify({"ok": True, "enabled": is_auto_ban_enabled()})
+
+    @app.post("/api/proxies/auto-ban-setting")
+    def api_proxies_set_auto_ban_setting():
+        from core.proxy_dispatcher import set_auto_ban_enabled
+        data = request.get_json(silent=True) or {}
+        enabled = bool(data.get("enabled", False))
+        set_auto_ban_enabled(enabled)
+        return jsonify({"ok": True, "enabled": enabled})
+
     @app.post("/api/proxies/<int:proxy_id>/toggle-status")
     def api_proxies_toggle_status(proxy_id: int):
         data = request.get_json(silent=True) or {}
@@ -1991,6 +2004,12 @@ def create_app(auth_code: str | None = None) -> Flask:
         target_status = data.get("status")
         if not target_status:
             target_status = "disabled" if p.get("status") == "active" else "active"
+        if target_status == "active":
+            try:
+                from core.proxy_dispatcher import reset_proxy_failure
+                reset_proxy_failure(proxy_id)
+            except Exception:
+                pass
         updated = db.update_proxy(proxy_id, {"status": target_status})
         return jsonify({"ok": True, "proxy": updated, "status": target_status})
 
@@ -2006,6 +2025,13 @@ def create_app(auth_code: str | None = None) -> Flask:
         status = str(data.get("status") or "active").strip().lower()
         if not ids or not isinstance(ids, list):
             return jsonify({"ok": False, "error": "请指定要操作的代理 ID 列表"}), 400
+        if status == "active":
+            try:
+                from core.proxy_dispatcher import reset_proxy_failure
+                for x in ids:
+                    reset_proxy_failure(int(x))
+            except Exception:
+                pass
         count = db.batch_update_proxy_status([int(x) for x in ids], status)
         return jsonify({"ok": True, "count": count, "updated_count": count, "status": status})
 

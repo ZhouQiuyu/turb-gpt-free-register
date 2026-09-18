@@ -74,7 +74,15 @@ def normalize_proxy_url(proxy: str) -> str:
 
 
 def pick_proxy() -> str:
-    """从代理池中随机抽取一个已启用的代理 URL；池为空时安全回退到 PROXY_POOL 或空串。"""
+    """从代理池中抽取一个可用代理 URL；优先使用并发数为 0 的代理。池为空时安全回退到 PROXY_POOL 或空串。"""
+    try:
+        from core.proxy_dispatcher import pick_best_proxy_url
+        url = pick_best_proxy_url()
+        if url:
+            return url
+    except Exception:
+        pass
+
     try:
         from core.db import get_active_proxies
         active_list = get_active_proxies()

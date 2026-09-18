@@ -2677,6 +2677,12 @@
         <button type="button" class="jobs-tb-btn" id="btnBatchTestProxies" title="测试代理连通性（默认包含已禁用的代理进行探活）">批量测试连接</button>
         <button type="button" class="jobs-tb-btn" id="btnBatchQualityProxies" title="检测代理 OpenAI 穿透质量（判断 401通畅/403阻断/CF验证码）">批量质量检测</button>
 
+        <!-- 动态禁用开关 -->
+        <label class="proxy-auto-ban-wrap" id="proxyAutoBanWrap" title="开启后，若代理在注册时连续5次连接失败，系统将自动将其置为禁用状态" style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;background:#f4f4f5;border:1px solid #e4e7ed;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;color:#606266;user-select:none;margin-right:4px;">
+          <span>动态禁用</span>
+          <input type="checkbox" id="proxyAutoBanToggle" class="config-switch-v2-toggle" role="switch" style="width:36px!important;height:20px!important;min-width:36px!important;max-width:36px!important;min-height:20px!important;max-height:20px!important;">
+        </label>
+
         <!-- 添加代理 -->
         <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnAddProxyModalOpen" style="margin-left:auto;" title="添加新代理">+ 添加代理</button>
       </div>
@@ -7560,6 +7566,31 @@ async function loadProxyStats() {
   } catch(e) {}
 }
 
+async function loadProxyAutoBanSetting() {
+  try {
+    const res = await api('/api/proxies/auto-ban-setting');
+    const toggle = $('#proxyAutoBanToggle');
+    if (toggle) {
+      toggle.checked = Boolean(res.enabled);
+    }
+  } catch(e) {}
+}
+
+async function onProxyAutoBanChange(e) {
+  const enabled = e.target.checked;
+  try {
+    const res = await api('/api/proxies/auto-ban-setting', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled })
+    });
+    showToast(res.enabled ? '已开启注册动态禁用（连续 5 次失败自动停用）' : '已关闭注册动态禁用');
+  } catch(err) {
+    e.target.checked = !enabled;
+    showToast('保存动态禁用设置失败: ' + err.message);
+  }
+}
+
 async function loadProxies() {
   try {
     const p = PAGERS.proxies;
@@ -7578,6 +7609,7 @@ async function loadProxies() {
     _renderPager('proxies', PROXIES_TOTAL);
     updateProxySelectionUi();
     loadProxyStats();
+    loadProxyAutoBanSetting();
   } catch(e) {
     showToast('加载代理列表失败: ' + e.message);
   }
@@ -8138,6 +8170,7 @@ async function submitProxyEdit() {
   $('#btnBatchDeleteProxies')?.addEventListener('click', batchDeleteProxies);
   $('#btnBatchTestProxies')?.addEventListener('click', batchTestProxies);
   $('#btnBatchQualityProxies')?.addEventListener('click', batchQualityProxies);
+  $('#proxyAutoBanToggle')?.addEventListener('change', onProxyAutoBanChange);
   $('#btnAddProxyModalOpen')?.addEventListener('click', openProxyAddModal);
 })();
 

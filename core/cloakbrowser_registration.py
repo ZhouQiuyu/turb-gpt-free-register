@@ -16,6 +16,13 @@ from core.cloakbrowser_driver import build_cloak_driver
 from core.cloudflare_solver import solve_cloudflare_challenge_if_present
 from core.email_provider import acquire_email_after_input, wait_for_otp, resolve_email_source
 from core.humanize import delay as human_delay
+from core.proxy_dispatcher import (
+    acquire_proxy_lease,
+    is_proxy_connection_error,
+    record_proxy_success,
+    record_proxy_failure,
+    ProxyLease,
+)
 
 # 复用 Roxy 注册流程里已维护好的页面操作函数。
 from core.roxy_registration import (  # noqa: F401
@@ -45,22 +52,76 @@ def run_cloak_registration(
     traffic_tracker: PlaywrightTrafficTracker | None = None
     data_saver: BrowserDataSaver | None = None
     network_traffic: dict | None = None
-    try:
-        driver, opened = build_cloak_driver(proxy=proxy)
-        try:
-            traffic_tracker = PlaywrightTrafficTracker(driver.context, label="Cloak")
-        except Exception as exc:
-            # 统计失败不应影响注册主流程。
-            logger.warning("[Cloak注册] 初始化浏览器流量统计失败，继续注册：%s: %s", type(exc).__name__, str(exc)[:180])
-        data_saver = BrowserDataSaver(label="Cloak")
-        if traffic_tracker is not None:
-            traffic_tracker.attach_data_saver(data_saver)
-        data_saver.install_playwright(driver.context)
-        logger.info("[Cloak注册] 开始：%s，profile=%s", email, opened.profile_id)
+    proxy_lease: ProxyLease | None = None
+    attempted_proxies: set[str] = set()
+    otp_after_ts = time.time()
 
-        otp_after_ts = time.time()
-        logger.info("[Cloak注册] 打开登录页：https://chatgpt.com/auth/login")
-        driver.get("https://chatgpt.com/auth/login")
+    try:
+        max_proxy_attempts = 3
+        last_conn_exc = None
+        for attempt in range(1, max_proxy_attempts + 1):
+            _check_manual_stop()
+            if proxy:
+                effective_proxy = proxy
+            else:
+                proxy_lease = acquire_proxy_lease(exclude_urls=attempted_proxies)
+                effective_proxy = proxy_lease.proxy_url if proxy_lease else None
+
+            if effective_proxy:
+                attempted_proxies.add(effective_proxy)
+
+            try:
+                driver, opened = build_cloak_driver(proxy=effective_proxy)
+                try:
+                    traffic_tracker = PlaywrightTrafficTracker(driver.context, label="Cloak")
+                except Exception as exc:
+                    # 统计失败不应影响注册主流程。
+                    logger.warning("[Cloak注册] 初始化浏览器流量统计失败，继续注册：%s: %s", type(exc).__name__, str(exc)[:180])
+                data_saver = BrowserDataSaver(label="Cloak")
+                if traffic_tracker is not None:
+                    traffic_tracker.attach_data_saver(data_saver)
+                data_saver.install_playwright(driver.context)
+                logger.info(
+                    "[Cloak注册] 开始：%s，profile=%s，代理=%s（尝试 %d/%d）",
+                    email, opened.profile_id, effective_proxy or "直连", attempt, max_proxy_attempts
+                )
+
+                otp_after_ts = time.time()
+                logger.info("[Cloak注册] 打开登录页：https://chatgpt.com/auth/login")
+                driver.get("https://chatgpt.com/auth/login")
+
+                # 页面成功加载，代理连通正常
+                if proxy_lease and proxy_lease.proxy_id:
+                    record_proxy_success(proxy_lease.proxy_id, effective_proxy)
+                last_conn_exc = None
+                break
+            except Exception as exc:
+                last_conn_exc = exc
+                if is_proxy_connection_error(exc) and not proxy and attempt < max_proxy_attempts:
+                    logger.warning(
+                        "[Cloak注册] 代理连接失败 (%s)，记录失败并自动切换代理重试 (第 %d/%d 次): %s: %s",
+                        effective_proxy, attempt, max_proxy_attempts, type(exc).__name__, str(exc)[:180]
+                    )
+                    if proxy_lease and proxy_lease.proxy_id:
+                        record_proxy_failure(proxy_lease.proxy_id, effective_proxy, error=str(exc))
+                    if driver:
+                        try:
+                            driver.quit()
+                        except Exception:
+                            pass
+                        driver = None
+                    if proxy_lease:
+                        proxy_lease.release()
+                        proxy_lease = None
+                    continue
+                else:
+                    if proxy_lease and proxy_lease.proxy_id and is_proxy_connection_error(exc):
+                        record_proxy_failure(proxy_lease.proxy_id, effective_proxy, error=str(exc))
+                    raise
+
+        if last_conn_exc:
+            raise last_conn_exc
+
         human_delay("navigate")
         _maybe_accept(driver)
         solve_cloudflare_challenge_if_present(driver, max_wait=20.0)
@@ -191,7 +252,7 @@ def run_cloak_registration(
             access_token=access_token,
             totp_secret=totp_secret,
             email_source=resolve_email_source(email),
-            proxy_used=((opened.raw or {}).get("proxy") if opened else None) or proxy or None,
+            proxy_used=((opened.raw or {}).get("proxy") if opened else None) or (proxy_lease.proxy_url if proxy_lease else None) or proxy or None,
             batch_dir=batch_dir,
             extra={
                 "user": session_info.get("user"),
@@ -247,5 +308,10 @@ def run_cloak_registration(
         if driver and not bool(_cfg.CLOAK_KEEP_BROWSER_OPEN):
             try:
                 driver.quit()
+            except Exception:
+                pass
+        if proxy_lease:
+            try:
+                proxy_lease.release()
             except Exception:
                 pass

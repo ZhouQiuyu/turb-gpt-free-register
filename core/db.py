@@ -3994,4 +3994,19 @@ def pick_proxy_by_country(country_code: str = "US", strict: bool = False) -> str
     return ""
 
 
+def get_meta(key: str, default: str | None = None) -> str | None:
+    """读取 storage_meta 元数据。"""
+    _ensure_sqlite()
+    with _LOCK, closing(_sqlite_conn()) as conn:
+        row = conn.execute("SELECT value FROM storage_meta WHERE key=? LIMIT 1", (key,)).fetchone()
+        if row and row["value"] is not None:
+            return str(row["value"])
+        return default
 
+
+def set_meta(key: str, value: str) -> None:
+    """写入或更新 storage_meta 元数据。"""
+    _ensure_sqlite()
+    with _LOCK, closing(_sqlite_conn()) as conn:
+        conn.execute("INSERT OR REPLACE INTO storage_meta (key, value) VALUES (?, ?)", (key, str(value)))
+        conn.commit()
