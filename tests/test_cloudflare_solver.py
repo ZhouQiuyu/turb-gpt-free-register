@@ -174,6 +174,46 @@ class TestCloudflareSolver(unittest.TestCase):
         self.assertTrue(mock_box.click.called)
         self.assertTrue(any("质询" in m for m in emit_messages))
 
+    def test_reject_auth_openai_header_coordinate_click_falls_back_to_frames(self):
+        """验证在 auth.openai.com 页面上若误匹配顶部标题区域 (y <= 240)，被拒绝点击并平滑回退到真实 Frame 复选框。"""
+        mock_frame = MagicMock()
+        mock_frame.url = "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/h/b/turnstile/if/ov2/av0/rcv0/0/mndu3/0x4AAAAAAADnPIDROrmt1Wwj/light/normal"
+
+        mock_box = MagicMock()
+        mock_box.is_visible.return_value = True
+        mock_box.count.return_value = 1
+        mock_box_locator = MagicMock()
+        mock_box_locator.first = mock_box
+        mock_frame.locator.return_value = mock_box_locator
+
+        mock_page = MagicMock()
+        # 模拟 evaluate 误报了页面顶部标题区域坐标（如 y=150）
+        mock_page.evaluate.return_value = {"x": 272, "y": 150, "w": 280, "h": 50, "source": "div"}
+        mock_page.frames = [mock_frame]
+        mock_page.url = "https://auth.openai.com/api/accounts/authorize?client_id=123"
+
+        driver = MagicMock()
+        driver.page = mock_page
+        driver.title = "Just a moment..."
+        driver.current_url = "https://auth.openai.com/api/accounts/authorize?client_id=123"
+        driver.execute_script.return_value = False
+
+        # 模拟点击后第二次检查时标题恢复正常且 frame 销毁（跳转放行）
+        def mock_title_effect():
+            if mock_box.click.called:
+                mock_page.frames = []
+                driver.current_url = "https://auth.openai.com/log-in"
+                return "Sign in"
+            return "Just a moment..."
+
+        type(driver).title = property(lambda self: mock_title_effect())
+
+        res = solve_cloudflare_challenge_if_present(driver, max_wait=5.0)
+        self.assertTrue(res)
+        # 顶部坐标应被安全守卫拦截（不触发鼠标点击），而 frame 复选框被成功点击
+        self.assertFalse(mock_page.mouse.click.called)
+        self.assertTrue(mock_box.click.called)
+
 
 if __name__ == "__main__":
     unittest.main()

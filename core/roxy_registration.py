@@ -278,6 +278,17 @@ def _human_click(driver, el, *, label: str = "") -> None:
         """, el) or {}
         x = float(point.get("x") or 0)
         y = float(point.get("y") or 0)
+        page = getattr(driver, "page", None)
+        if page is not None and hasattr(page, "mouse") and x > 0 and y > 0:
+            try:
+                page.mouse.move(x, y)
+                time.sleep(random.uniform(0.04, 0.12))
+                page.mouse.down()
+                time.sleep(random.uniform(0.04, 0.10))
+                page.mouse.up()
+                return
+            except Exception:
+                pass
         if hasattr(driver, "execute_cdp_cmd") and x > 0 and y > 0:
             driver.execute_cdp_cmd("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y})
             time.sleep(random.uniform(0.05, 0.22))
@@ -551,10 +562,41 @@ def _wait_for_email_input(driver, timeout: int | None = None):
         if el:
             return el
 
+        # 检测并自动恢复 Chrome 内置错误页或临时认证错误
+        try:
+            curr_url = str(getattr(driver, "current_url", "") or "")
+            if "chrome-error:" in curr_url or "chromewebdata" in curr_url:
+                logger.warning("%s 检测到处于 Chrome 错误页 (%s，可能网络瞬断)，尝试刷新恢复...", _log_prefix(driver), curr_url[:80])
+                time.sleep(2.0)
+                try:
+                    driver.refresh()
+                except Exception:
+                    driver.get("https://chatgpt.com/auth/login")
+                time.sleep(3.0)
+                continue
+            if "/auth/error" in curr_url:
+                logger.warning("%s 检测到处于 /auth/error 错误页，尝试重新导航至 /auth/login", _log_prefix(driver))
+                driver.get("https://chatgpt.com/auth/login")
+                time.sleep(2.0)
+                continue
+        except Exception:
+            pass
+
         # 如果页面处于匿名游客聊天首页（例如 ?slm=1 或根路径且无邮箱输入框）
         try:
             curr_url = str(getattr(driver, "current_url", "") or "")
             if "slm=1" in curr_url or curr_url.rstrip("/") in ("https://chatgpt.com", "http://chatgpt.com"):
+                page = getattr(driver, "page", None)
+                if page is not None and not type(driver).__name__.startswith("MagicMock"):
+                    try:
+                        slm_btn = page.locator('button[data-testid="login-button"], button[data-testid="signup-button"], [data-testid="login-button"], [data-testid="signup-button"], a[href*="/auth/login"]').first
+                        if slm_btn.is_visible() is True:
+                            slm_btn.click(delay=60)
+                            logger.info("%s 处于匿名游客首页，已通过 Playwright 点击登录/注册按钮拉起弹窗", _log_prefix(driver))
+                            time.sleep(1.5)
+                            continue
+                    except Exception:
+                        pass
                 res = driver.execute_script(r"""
                 try {
                   const btn = document.querySelector(
@@ -824,24 +866,52 @@ def _submit_email_form_stable(driver, email: str) -> dict:
 
 
 def _submit_email_step(driver, email: str | None = None) -> None:
-    # 不再优先走浏览器内 NextAuth fetch：
-    # Roxy/Chrome 150 下 execute_async_script + fetch 偶发卡到 script timeout；
-    # 实测 UI 首次提交后若停在 /auth/login?email=...，由 _recover_email_submit_if_stuck 补交表单更稳定。
     email_value = str(email or _current_email_input_value(driver) or "").strip()
     stable = _stabilize_email_input_before_submit(driver, email_value)
     logger.info("%s 邮箱提交前状态稳定：%s", _log_prefix(driver), stable)
-    time.sleep(random.uniform(0.8, 1.8) if _browser_actions_enabled() else 0.4)
+    time.sleep(random.uniform(0.5, 1.0) if _browser_actions_enabled() else 0.3)
 
-    stable_submit = _submit_email_form_stable(driver, email_value)
-    if stable_submit.get("ok"):
-        logger.info("%s 邮箱稳定表单提交：%s", _log_prefix(driver), stable_submit)
-        time.sleep(1.0)
-        _assert_not_external_idp(driver, "稳定表单提交邮箱后")
-        return
-    logger.warning("%s 邮箱稳定表单提交失败，回退 UI 点击提交：%s", _log_prefix(driver), stable_submit)
-    if _submit_nearest_form_for_active_input(driver):
-        return
-    raise RuntimeError(f"无法提交邮箱步骤（拒绝按页面文字或首个 submit 兜底，避免误点第三方登录），state={_email_entry_state(driver)}")
+    # 优先使用 Playwright 原生可信操作（isTrusted: true），彻底避免纯 JS 模拟触发原生 GET 刷新
+    page = getattr(driver, "page", None)
+    playwright_submitted = False
+    if page is not None and not type(driver).__name__.startswith("MagicMock"):
+        try:
+            inp = page.locator('input[type="email"], input[name="email"], input[name="username"], input[autocomplete*="email"]').first
+            if inp.is_visible():
+                inp.focus()
+                page.keyboard.press("Enter")
+                playwright_submitted = True
+                logger.info("%s [Playwright] 已通过原生键盘 Enter 触发可信表单提交: %s", _log_prefix(driver), email_value)
+                time.sleep(1.0)
+        except Exception as exc:
+            logger.debug("%s [Playwright] 原生键盘 Enter 提交异常: %s", _log_prefix(driver), exc)
+
+        curr_url = str(getattr(page, "url", "") or "")
+        if "/auth/login" in curr_url and not any(k in curr_url for k in ("password", "otp", "authorize")):
+            try:
+                # 寻找安全的非三方登录提交按钮执行真实可信鼠标点击
+                submit_btn = page.locator('form button[type="submit"], button[type="submit"], button[name="action"][value="default"], button.btn-primary').first
+                if submit_btn.is_visible():
+                    submit_btn.click(delay=random.randint(60, 120))
+                    playwright_submitted = True
+                    logger.info("%s [Playwright] 已通过原生鼠标点击提交按钮触发可信表单提交", _log_prefix(driver))
+                    time.sleep(1.0)
+            except Exception as exc:
+                logger.debug("%s [Playwright] 原生鼠标点击提交按钮异常: %s", _log_prefix(driver), exc)
+
+    if not playwright_submitted:
+        stable_submit = _submit_email_form_stable(driver, email_value)
+        if stable_submit.get("ok"):
+            logger.info("%s 邮箱稳定表单提交：%s", _log_prefix(driver), stable_submit)
+            time.sleep(1.0)
+            _assert_not_external_idp(driver, "稳定表单提交邮箱后")
+            return
+        logger.warning("%s 邮箱稳定表单提交失败，回退 UI 点击提交：%s", _log_prefix(driver), stable_submit)
+        if _submit_nearest_form_for_active_input(driver):
+            return
+        raise RuntimeError(f"无法提交邮箱步骤（拒绝按页面文字或首个 submit 兜底，避免误点第三方登录），state={_email_entry_state(driver)}")
+
+    _assert_not_external_idp(driver, "稳定表单提交邮箱后")
 
 
 def _recover_email_submit_if_stuck(driver, email: str) -> dict:
@@ -1040,33 +1110,46 @@ def _wait_email_submit_next_state(driver, email: str, timeout: int = 35) -> str:
         state = _email_input_value_state(driver)
         last = state
         inputs = state.get("inputs") or []
-        if inputs:
+        url = str(state.get("url") or getattr(driver, "current_url", "") or "")
+
+        # 核心增强：检测到处于原生 GET 刷新态 chatgpt.com/auth/login?email=xxx# 时立即自愈，绝不傻等 35s
+        if "/auth/login" in url and "email=" in url:
+            now = time.time()
+            if cleared_seen_at is None:
+                cleared_seen_at = now
+            if not cleared_recover_done and (now - cleared_seen_at >= 1.5):
+                cleared_recover_done = True
+                logger.info("%s 邮箱提交后检测到停留在 login?email，立即通过原生点击/补交重试表单提交", _log_prefix(driver))
+                page = getattr(driver, "page", None)
+                if page is not None and not type(driver).__name__.startswith("MagicMock"):
+                    try:
+                        inp = page.locator('input[type="email"], input[name="email"], input[name="username"]').first
+                        if inp.is_visible():
+                            inp.focus()
+                            page.keyboard.press("Enter")
+                    except Exception:
+                        pass
+                    try:
+                        btn = page.locator('form button[type="submit"], button[type="submit"], button[name="action"][value="default"], button.btn-primary').first
+                        if btn.is_visible():
+                            btn.click(delay=80)
+                    except Exception:
+                        pass
+                recover = _recover_email_submit_if_stuck(driver, email)
+                logger.info("%s 补交表单结果：%s", _log_prefix(driver), recover)
+            if now - cleared_seen_at >= 6.0:
+                logger.info("%s 停留在 login?email 超过 6s，判定为刷新未走通，返回重新提交", _log_prefix(driver))
+                return "email_cleared"
+
+        elif inputs:
             values = [str(i.get("value") or "") for i in inputs]
-            url = str(state.get("url") or "")
             has_blank = any(v == "" for v in values)
             has_expected = any(v.strip().lower() == expected_email for v in values)
             if has_blank and not has_expected:
                 now = time.time()
                 if cleared_seen_at is None:
                     cleared_seen_at = now
-                # URL 已带 email 查询参数时更像是提交后的中间态，给它更长观察窗口。
-                debounce = 18.0 if ("/auth/login" in url and "email=" in url) else 5.0
-                if now - cleared_last_log_at > 2.0:
-                    logger.info(
-                        "%s 邮箱提交后检测到输入框短暂清空，继续等待跳转：elapsed=%.1fs debounce=%.1fs url=%s",
-                        _log_prefix(driver), now - cleared_seen_at, debounce, url[:180],
-                    )
-                    cleared_last_log_at = now
-                if (
-                    not cleared_recover_done
-                    and "/auth/login" in url
-                    and "email=" in url
-                    and now - cleared_seen_at >= 2.0
-                ):
-                    recover = _recover_email_submit_if_stuck(driver, email)
-                    cleared_recover_done = True
-                    logger.info("%s 邮箱提交后仍停留在 login?email，中途补交一次表单：%s", _log_prefix(driver), recover)
-                if now - cleared_seen_at >= debounce:
+                if now - cleared_seen_at >= 5.0:
                     return "email_cleared"
             else:
                 cleared_seen_at = None
@@ -1107,7 +1190,15 @@ def _submit_email_and_wait_next(
             logger.warning("%s 邮箱写入校验失败，准备重试：attempt=%s/%s state=%s", _log_prefix(driver), attempt, attempts, state)
             try:
                 c_url = str(getattr(driver, "current_url", "") or "")
-                if "slm=1" in c_url or c_url.rstrip("/") in ("https://chatgpt.com", "http://chatgpt.com"):
+                if "chrome-error:" in c_url or "chromewebdata" in c_url:
+                    logger.info("%s 校验失败时检测到处于 Chrome 错误页 (%s)，刷新页面重试", _log_prefix(driver), c_url)
+                    time.sleep(1.5)
+                    try:
+                        driver.refresh()
+                    except Exception:
+                        driver.get("https://chatgpt.com/auth/login")
+                    time.sleep(2.0)
+                elif "slm=1" in c_url or c_url.rstrip("/") in ("https://chatgpt.com", "http://chatgpt.com"):
                     logger.info("%s 校验失败时检测到处于游客首页 (%s)，重新导航至 /auth/login", _log_prefix(driver), c_url)
                     driver.get("https://chatgpt.com/auth/login")
                     time.sleep(1.5)

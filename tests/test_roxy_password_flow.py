@@ -101,3 +101,25 @@ class RoxyPasswordFlowTests(unittest.TestCase):
             self.assertEqual(el, fake_input)
             self.assertTrue(state["clicked_login"])
 
+    def test_wait_for_email_input_heals_when_on_chrome_error_page(self):
+        driver = MagicMock()
+        driver.current_url = "chrome-error://chromewebdata/"
+        fake_input = MagicMock()
+        state = {"refreshed": False}
+
+        def fake_refresh():
+            state["refreshed"] = True
+            driver.current_url = "https://chatgpt.com/auth/login"
+
+        driver.refresh.side_effect = fake_refresh
+
+        def fake_find_input(drv):
+            return fake_input if state["refreshed"] else None
+
+        with patch.object(roxy, "_find_visible_email_input_js", side_effect=fake_find_input), \
+             patch.object(roxy, "solve_cloudflare_challenge_if_present", return_value=False), \
+             patch("time.sleep", return_value=None):
+            el = roxy._wait_for_email_input(driver, timeout=5)
+            self.assertEqual(el, fake_input)
+            self.assertTrue(state["refreshed"])
+

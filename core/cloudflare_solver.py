@@ -268,12 +268,21 @@ def solve_cloudflare_challenge_if_present(
                         try {
                             const isExcluded = (el, r) => {
                                 if (!r || r.width === 0 || r.height === 0) return true;
-                                // 排除视口底部页脚/版权区域（例如 y > 650 或底部 100px 以内）
+                                // 排除视口底部页脚/版权区域（例如 y > 650 或底部 90px 以内）以及顶部极端区域
                                 if (r.y > 650 || r.bottom > (window.innerHeight - 90)) return true;
                                 if (r.y < 40) return true;
-                                if (el.closest && el.closest('footer, .footer, #footer, [role="contentinfo"]')) return true;
+                                if (el.closest && el.closest('footer, .footer, #footer, [role="contentinfo"], header, .header, #header')) return true;
+                                // 严禁匹配标题或排版标签
+                                const tag = (el.tagName || '').toUpperCase();
+                                if (['H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'P', 'B', 'STRONG'].includes(tag)) return true;
+                                if (el.querySelector && el.querySelector('h1, h2, h3, h4, h5, h6')) return true;
                                 const text = (el.innerText || '').toLowerCase();
-                                if (text.includes('ray id') || text.includes('quyen rieng tu') || text.includes('quyền riêng tư') || text.includes('privacy') || text.includes('dieu khoan') || text.includes('điều khoản')) return true;
+                                // 严禁匹配含有页面域名、安全验证说明大段文字的容器（如 <div>auth.openai.com</div>）
+                                if (text.includes('auth.openai.com') || text.includes('chatgpt.com') || text.includes('openai.com') ||
+                                    text.includes('xác minh bảo mật') || text.includes('dịch vụ bảo mật') || text.includes('security check') ||
+                                    text.includes('just a moment') || text.includes('chờ một chút') || text.includes('đang xác minh') ||
+                                    text.includes('performing security') || text.includes('ray id') || text.includes('quyen rieng tu') ||
+                                    text.includes('quyền riêng tư') || text.includes('privacy') || text.includes('dieu khoan') || text.includes('điều khoản')) return true;
                                 return false;
                             };
 
@@ -281,154 +290,182 @@ def solve_cloudflare_challenge_if_present(
                                 return r.width >= 240 && r.width <= 360 && r.height >= 40 && r.height <= 100;
                             };
 
-                            // 1. 优先定位明确属于 Turnstile 的 iframe（支持穿透 Shadow DOM）
-                            const iframes = [];
-                            const stage = document.querySelector('#challenge-stage, #cf-stage, .ctp-checkbox-container');
-                            if (stage) {
-                                if (stage.shadowRoot) {
-                                    iframes.push(...stage.shadowRoot.querySelectorAll('iframe'));
+                            // 1. 递归穿透所有 Shadow DOM 深度收集所有 iframe
+                            const allIframes = [];
+                            const queue = [document];
+                            while (queue.length > 0) {
+                                const node = queue.shift();
+                                if (!node) continue;
+                                if (node.querySelectorAll) {
+                                    allIframes.push(...node.querySelectorAll('iframe'));
+                                    const all = node.querySelectorAll('*');
+                                    for (const el of all) {
+                                        if (el.shadowRoot) queue.push(el.shadowRoot);
+                                    }
                                 }
-                                iframes.push(...stage.querySelectorAll('iframe'));
                             }
-                            iframes.push(...document.querySelectorAll(
-                                'iframe[src*="challenges.cloudflare.com"], iframe[src*="challenge-platform"], iframe[src*="turnstile"], iframe[src*="cdn-cgi"]'
-                            ));
 
-                            for (const ifr of iframes) {
+                            // 优先检查含有 Cloudflare/Turnstile 特征 src 的 iframe
+                            for (const ifr of allIframes) {
+                                const src = (ifr.getAttribute('src') || '').toLowerCase();
+                                const isTurnstileSrc = src.includes('challenges.cloudflare.com') || src.includes('challenge-platform') || src.includes('turnstile') || src.includes('cdn-cgi');
                                 const r = ifr.getBoundingClientRect();
-                                if (isValidWidgetSize(r) && !isExcluded(ifr, r)) {
+                                if (isTurnstileSrc && r.width > 0 && r.height > 0 && !isExcluded(ifr, r)) {
                                     ifr.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
                                     const r2 = ifr.getBoundingClientRect();
                                     return { x: r2.x, y: r2.y, w: r2.width, h: r2.height, source: 'iframe' };
                                 }
                             }
 
-                            // 2. 检查 #challenge-stage 或 ctp 容器自身尺寸
-                            if (stage) {
+                            // 其次按标准 300x65 尺寸检查所有 iframe
+                            for (const ifr of allIframes) {
+                                const r = ifr.getBoundingClientRect();
+                                if (isValidWidgetSize(r) && !isExcluded(ifr, r)) {
+                                    ifr.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
+                                    const r2 = ifr.getBoundingClientRect();
+                                    return { x: r2.x, y: r2.y, w: r2.width, h: r2.height, source: 'iframe-size' };
+                                }
+                            }
+
+                            // 2. 检查含有 Turnstile 专属标识的容器（穿透 Shadow DOM）
+                            const stageCandidates = [];
+                            const sQueue = [document];
+                            while (sQueue.length > 0) {
+                                const node = sQueue.shift();
+                                if (!node || !node.querySelectorAll) continue;
+                                stageCandidates.push(...node.querySelectorAll('#challenge-stage, #cf-stage, .ctp-checkbox-container, [data-theme], [data-turnstile], [data-sitekey], .cf-turnstile, #cf-turnstile'));
+                                const all = node.querySelectorAll('*');
+                                for (const el of all) {
+                                    if (el.shadowRoot) sQueue.push(el.shadowRoot);
+                                }
+                            }
+
+                            for (const stage of stageCandidates) {
                                 const r = stage.getBoundingClientRect();
                                 if (isValidWidgetSize(r) && !isExcluded(stage, r)) {
                                     stage.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
                                     const r2 = stage.getBoundingClientRect();
                                     return { x: r2.x, y: r2.y, w: r2.width, h: r2.height, source: 'stage' };
                                 }
-                            }
-
-                            // 3. 广度后备：在非页脚的主体区域查找匹配 300x65 规格的容器
-                            const mainElements = [...document.querySelectorAll('#challenge-stage *, main *, .main-content *, div')];
-                            for (const el of mainElements) {
-                                const r = el.getBoundingClientRect();
-                                if (Math.abs(r.width - 300) <= 35 && Math.abs(r.height - 65) <= 25) {
-                                    if (!isExcluded(el, r)) {
-                                        el.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
-                                        const r2 = el.getBoundingClientRect();
-                                        return { x: r2.x, y: r2.y, w: r2.width, h: r2.height, source: 'div' };
+                                if (r.width > 360) {
+                                    for (const child of stage.querySelectorAll('div, span')) {
+                                        const cr = child.getBoundingClientRect();
+                                        if (isValidWidgetSize(cr) && !isExcluded(child, cr)) {
+                                            child.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
+                                            const cr2 = child.getBoundingClientRect();
+                                            return { x: cr2.x, y: cr2.y, w: cr2.width, h: cr2.height, source: 'stage-child' };
+                                        }
                                     }
                                 }
                             }
                         } catch (_) {}
                         return null;
                     }""")
+                    curr_url = str(getattr(page, "url", "") or "").lower()
                     if isinstance(widget, dict) and widget.get("w", 0) >= 200 and widget.get("y", 9999) <= 650:
-                        cx = widget["x"] + 28.0 + random.uniform(-2.0, 2.0)
-                        cy = widget["y"] + min(42.0, widget.get("h", 65.0) * 0.5) + random.uniform(-2.0, 2.0)
-                        logger.info("%s [Cloudflare] 触发人类拟真轨迹坐标点击 Turnstile 容器: (%.1f, %.1f) [来源=%s]", prefix, cx, cy, widget.get("source", "unknown"))
-                        if emit_fn and not clicked:
-                            try:
-                                emit_fn("发现 Cloudflare Turnstile 验证框，正在模拟拟真轨迹点击…")
-                            except Exception:
-                                pass
-                        start_x = random.uniform(150, 350)
-                        start_y = random.uniform(150, 350)
-                        human_curve_move(page, start_x, start_y, cx, cy, steps=10)
-                        time.sleep(random.uniform(0.12, 0.25))
-                        mouse = getattr(page, "mouse", None)
-                        if mouse is not None:
-                            if hasattr(mouse, "down") and hasattr(mouse, "up"):
-                                mouse.down()
-                                time.sleep(random.uniform(0.08, 0.15))
-                                mouse.up()
-                            elif hasattr(mouse, "click"):
-                                mouse.click(cx, cy)
-                        last_coord_click_at = now
-                        coord_click_count += 1
-                        clicked = True
-                        round_clicked = True
-                        time.sleep(1.8)
+                        # 守卫：在 auth.openai.com 页面严防顶部标题误击（Turnstile 位于 y ≈ 370，绝不可能在 y <= 240）
+                        if "auth.openai.com" in curr_url and widget.get("y", 0) <= 240:
+                            logger.warning("%s [Cloudflare] 拒绝点击顶部标题区坐标 (y=%.1f <= 240 url=%s)，防范误击 domain 标题", prefix, widget.get("y", 0), curr_url[:80])
+                        else:
+                            cx = widget["x"] + 28.0 + random.uniform(-2.0, 2.0)
+                            cy = widget["y"] + min(42.0, widget.get("h", 65.0) * 0.5) + random.uniform(-2.0, 2.0)
+                            logger.info("%s [Cloudflare] 触发人类拟真轨迹坐标点击 Turnstile 容器: (%.1f, %.1f) [来源=%s]", prefix, cx, cy, widget.get("source", "unknown"))
+                            if emit_fn and not clicked:
+                                try:
+                                    emit_fn("发现 Cloudflare Turnstile 验证框，正在模拟拟真轨迹点击…")
+                                except Exception:
+                                    pass
+                            start_x = random.uniform(150, 350)
+                            start_y = random.uniform(150, 350)
+                            human_curve_move(page, start_x, start_y, cx, cy, steps=10)
+                            time.sleep(random.uniform(0.12, 0.25))
+                            mouse = getattr(page, "mouse", None)
+                            if mouse is not None:
+                                if hasattr(mouse, "down") and hasattr(mouse, "up"):
+                                    mouse.down()
+                                    time.sleep(random.uniform(0.08, 0.15))
+                                    mouse.up()
+                                elif hasattr(mouse, "click"):
+                                    mouse.click(cx, cy)
+                            last_coord_click_at = now
+                            coord_click_count += 1
+                            clicked = True
+                            round_clicked = True
+                            time.sleep(1.5)
 
-                        # 协同 frame_locator 穿透：只要存在可见复选框即协同点击
-                        for if_sel in (
-                            "#challenge-stage iframe",
-                            "#cf-stage iframe",
-                            "iframe[src*='challenge-platform']",
-                            "iframe[src*='challenges.cloudflare.com']",
-                            "iframe[src*='turnstile']",
-                            "iframe",
-                        ):
-                            try:
-                                fl = page.frame_locator(if_sel)
-                                for cb_sel in _CB_SELECTORS:
-                                    box = fl.locator(cb_sel).first
-                                    if box.is_visible():
-                                        box.click(delay=random.randint(80, 150))
-                                        logger.info("%s [Cloudflare] 协同 frame_locator(%s) 点击复选框", prefix, if_sel)
-                                        break
-                            except Exception:
-                                pass
+                            # 协同 frame_locator 穿透：只要存在可见复选框即协同点击
+                            for if_sel in (
+                                "#challenge-stage iframe",
+                                "#cf-stage iframe",
+                                "iframe[src*='challenge-platform']",
+                                "iframe[src*='challenges.cloudflare.com']",
+                                "iframe[src*='turnstile']",
+                                "iframe",
+                            ):
+                                try:
+                                    fl = page.frame_locator(if_sel)
+                                    for cb_sel in _CB_SELECTORS:
+                                        box = fl.locator(cb_sel).first
+                                        if box.is_visible():
+                                            box.click(delay=random.randint(80, 150))
+                                            logger.info("%s [Cloudflare] 协同 frame_locator(%s) 点击复选框", prefix, if_sel)
+                                            break
+                                except Exception:
+                                    pass
                 except Exception as exc:
                     logger.debug("%s [Cloudflare] 几何容器坐标点击异常: %s", prefix, exc)
 
-            # 层级 1：若未通过坐标点击，遍历 Playwright Page 的 frames 寻找可见复选框
-            if not round_clicked:
-                try:
-                    frames = list(getattr(page, "frames", []) or [])
-                    for frame in frames:
-                        f_url = str(getattr(frame, "url", "") or "").lower()
-                        # 识别候选 Frame：非主框架，或包含 challenge / turnstile / cdn-cgi / about 等
-                        is_candidate = (
-                            frame != getattr(page, "main_frame", None)
-                            or any(k in f_url for k in ("challenges.cloudflare.com", "challenge-platform", "turnstile", "cdn-cgi", "about:"))
-                        )
-                        if not is_candidate:
-                            continue
+            # 层级 1：遍历 Playwright Page 的 frames 寻找可见复选框（始终执行深度协同穿透）
+            try:
+                frames = list(getattr(page, "frames", []) or [])
+                for frame in frames:
+                    f_url = str(getattr(frame, "url", "") or "").lower()
+                    # 识别候选 Frame：非主框架，或包含 challenge / turnstile / cdn-cgi / about 等
+                    is_candidate = (
+                        frame != getattr(page, "main_frame", None)
+                        or any(k in f_url for k in ("challenges.cloudflare.com", "challenge-platform", "turnstile", "cdn-cgi", "about:"))
+                    )
+                    if not is_candidate:
+                        continue
 
-                        # 检查是否已勾选（正在提交或已放行）
+                    # 检查是否已勾选（正在提交或已放行）
+                    try:
+                        if frame.locator("input[type='checkbox']:checked, .ctp-checkbox-checked, #success").count() > 0:
+                            time.sleep(1.0)
+                            continue
+                    except Exception:
+                        pass
+
+                    for cb_sel in _CB_SELECTORS:
                         try:
-                            if frame.locator("input[type='checkbox']:checked, .ctp-checkbox-checked, #success").count() > 0:
-                                time.sleep(1.0)
-                                continue
+                            box = frame.locator(cb_sel).first
+                            if box.is_visible():
+                                logger.info("%s [Cloudflare] 发现 Turnstile 复选框 (%s, frame=%s)，正在模拟点击…", prefix, cb_sel, f_url[:60])
+                                if emit_fn and not clicked:
+                                    try:
+                                        emit_fn("发现 Cloudflare Turnstile 复选框，正在模拟点击…")
+                                    except Exception:
+                                        pass
+                                try:
+                                    box.scroll_into_view_if_needed(timeout=1500)
+                                except Exception:
+                                    pass
+                                try:
+                                    box.hover(timeout=1500)
+                                    time.sleep(random.uniform(0.1, 0.25))
+                                except Exception:
+                                    pass
+                                box.click(delay=random.randint(80, 160))
+                                clicked = True
+                                round_clicked = True
+                                time.sleep(2.0)
+                                break
                         except Exception:
                             pass
-
-                        for cb_sel in _CB_SELECTORS:
-                            try:
-                                box = frame.locator(cb_sel).first
-                                if box.is_visible():
-                                    logger.info("%s [Cloudflare] 发现 Turnstile 复选框 (%s, frame=%s)，正在模拟点击…", prefix, cb_sel, f_url[:60])
-                                    if emit_fn and not clicked:
-                                        try:
-                                            emit_fn("发现 Cloudflare Turnstile 复选框，正在模拟点击…")
-                                        except Exception:
-                                            pass
-                                    try:
-                                        box.scroll_into_view_if_needed(timeout=1500)
-                                    except Exception:
-                                        pass
-                                    try:
-                                        box.hover(timeout=1500)
-                                        time.sleep(random.uniform(0.1, 0.25))
-                                    except Exception:
-                                        pass
-                                    box.click(delay=random.randint(80, 160))
-                                    clicked = True
-                                    round_clicked = True
-                                    time.sleep(2.0)
-                                    break
-                            except Exception:
-                                pass
-                        if round_clicked:
-                            break
-                except Exception as exc:
-                    logger.debug("%s [Cloudflare] Playwright Frame 遍历异常：%s", prefix, exc)
+                    if round_clicked:
+                        break
+            except Exception as exc:
+                logger.debug("%s [Cloudflare] Playwright Frame 遍历异常：%s", prefix, exc)
 
             # 层级 2：使用 frame_locator 强穿透
             if not round_clicked:
