@@ -13,6 +13,7 @@ from core.account_export import save_account_data, post_register_dwell
 from core.browser_data_saver import BrowserDataSaver
 from core.browser_traffic import PlaywrightTrafficTracker
 from core.cloakbrowser_driver import build_cloak_driver
+from core.cloudflare_solver import solve_cloudflare_challenge_if_present
 from core.email_provider import acquire_email_after_input, wait_for_otp, resolve_email_source
 from core.humanize import delay as human_delay
 
@@ -62,6 +63,7 @@ def run_cloak_registration(
         driver.get("https://chatgpt.com/auth/login")
         human_delay("navigate")
         _maybe_accept(driver)
+        solve_cloudflare_challenge_if_present(driver, max_wait=20.0)
         _check_manual_stop()
 
         def _email_supplier_after_input() -> str:
@@ -89,6 +91,9 @@ def run_cloak_registration(
         if _is_signup_password_page(driver) and not openai_password:
             openai_password = _fill_password_page_if_present(driver, email, timeout=20)
             _check_manual_stop()
+
+        # 进入 OTP 验证前，穿透可能存在的验证码页 Cloudflare 二次质询，触发验证码邮件下发
+        solve_cloudflare_challenge_if_present(driver, max_wait=15.0)
 
         current_otp = otp_code
         max_otp_attempts = 3

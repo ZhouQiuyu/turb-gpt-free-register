@@ -15,6 +15,7 @@ from config import twofa as _twofa_cfg
 from core.account_export import save_account_data, post_register_dwell
 from core.browser_data_saver import BrowserDataSaver
 from core.browser_traffic import SeleniumTrafficTracker
+from core.cloudflare_solver import is_cloudflare_challenge, solve_cloudflare_challenge_if_present
 from core.email_provider import acquire_email_after_input, wait_for_otp, resolve_email_source
 from core.humanize import delay as human_delay
 from core.roxybrowser_client import RoxyBrowserClient, RoxyOpenResult
@@ -532,6 +533,9 @@ def _wait_for_email_input(driver, timeout: int | None = None):
     last_state = None
     clicked_email_option = False
     while time.time() < end:
+        if solve_cloudflare_challenge_if_present(driver, max_wait=15.0):
+            time.sleep(1.0)
+            continue
         el = _find_visible_email_input_js(driver)
         if el:
             return el
@@ -973,6 +977,9 @@ def _wait_email_submit_next_state(driver, email: str, timeout: int = 18) -> str:
     cleared_recover_done = False
     expected_email = str(email or "").strip().lower()
     while time.time() < end:
+        if solve_cloudflare_challenge_if_present(driver, max_wait=15.0):
+            time.sleep(1.0)
+            continue
         if _has_access_token(driver):
             return "logged_in"
         if _is_login_password_page(driver):
@@ -1069,6 +1076,9 @@ def _type_otp(driver, code: str, timeout: int = 15) -> None:
     end = time.time() + max(int(timeout or 0), 3)
     last_err = None
     while time.time() < end:
+        if solve_cloudflare_challenge_if_present(driver, max_wait=15.0):
+            time.sleep(1.0)
+            continue
         # 单输入框
         for selector in [
             "input[autocomplete='one-time-code']",
@@ -1159,6 +1169,7 @@ def _is_email_verification_page(driver) -> bool:
 
 def _clear_otp_inputs(driver) -> None:
     try:
+        solve_cloudflare_challenge_if_present(driver, max_wait=10.0)
         driver.execute_script(r"""
         const visible = el => !!(el && (el.offsetWidth || el.offsetHeight || el.getClientRects().length));
         const inputs = [...document.querySelectorAll('input')].filter(visible).filter(el => {
@@ -1225,6 +1236,9 @@ def _wait_after_email_otp_submit(driver, timeout: int = 30) -> str:
     last = {}
     while time.time() < end:
         time.sleep(0.5)
+        if solve_cloudflare_challenge_if_present(driver, max_wait=10.0):
+            time.sleep(1.0)
+            continue
         if not _is_email_verification_page(driver):
             return 'accepted'
         last = _email_otp_page_state(driver)
@@ -1752,6 +1766,9 @@ def _fill_password_page_if_present(driver, email: str, timeout: int = 25) -> str
     last = {}
     clicked_continue_password = False
     while time.time() < end:
+        if solve_cloudflare_challenge_if_present(driver, max_wait=10.0):
+            time.sleep(1.0)
+            continue
         if _is_email_verification_page(driver):
             if clicked_continue_password:
                 # 已点击过“使用密码继续”，处于页面跳转过渡期，等待跳转至密码设置页
@@ -1963,6 +1980,8 @@ def _complete_profile_page(driver, name: str, birthday: str, timeout: int = 45) 
     last_snapshot = {}
     while time.time() < end:
         time.sleep(1)
+        if solve_cloudflare_challenge_if_present(driver, max_wait=10.0):
+            continue
         if _has_access_token(driver):
             logger.info('%s 已检测到登录态，资料页可能已跳过', _log_prefix(driver))
             return False

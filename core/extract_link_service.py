@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Any
 
 from core import db
+from core.cloudflare_solver import solve_cloudflare_challenge_if_present
 from core.geo_utils import format_country_badge, get_country_badge_info
 
 logger = logging.getLogger(__name__)
@@ -94,33 +95,9 @@ def extract_checkout_url_with_cloak(
                 _emit("已成功登录并进入 ChatGPT！")
                 break
 
-            # 2. 检查 Cloudflare 质询
-            is_cf_challenge = False
-            if any(w in title for w in ["しばらくお待ちください", "Just a moment", "Attention Required"]):
-                is_cf_challenge = True
-            elif "cloudflare" in cur_url.lower():
-                is_cf_challenge = True
-
-            if is_cf_challenge:
-                if not cf_challenge_logged:
-                    cf_challenge_logged = True
-                    _emit("检测到 Cloudflare 人机安全质询，正在自动尝试穿透/等待放行…")
-                try:
-                    for frame in getattr(driver.page, "frames", []):
-                        f_url = str(getattr(frame, "url", "") or "").lower()
-                        if "challenges.cloudflare.com" in f_url or "cloudflare" in f_url:
-                            box = frame.locator("input[type='checkbox'], .ctp-checkbox-label, #cf-stage").first
-                            if box.is_visible():
-                                _emit("发现 Cloudflare 人机复选框，正在模拟点击…")
-                                box.click()
-                                time.sleep(2.0)
-                                break
-                except Exception:
-                    pass
-                time.sleep(2.0)
+            # 2. 检查并穿透 Cloudflare 质询
+            if solve_cloudflare_challenge_if_present(driver, max_wait=15.0, emit_fn=_emit):
                 continue
-            else:
-                cf_challenge_logged = False
 
             # 3. 处于邮箱输入页面
             if not email_submitted:
