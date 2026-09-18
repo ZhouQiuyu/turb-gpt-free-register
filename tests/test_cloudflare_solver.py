@@ -100,6 +100,43 @@ class TestCloudflareSolver(unittest.TestCase):
         self.assertTrue(mock_page.mouse.down.called or mock_page.mouse.click.called)
         self.assertTrue(any("拟真轨迹" in m or "质询" in m for m in emit_messages))
 
+    def test_reject_footer_coordinate_click_falls_back_to_frames(self):
+        # 模拟 evaluate 误命中页面底部页脚 (y=824 > 650)，必须被排除，并顺利回退到 Frame 穿透
+        mock_box = MagicMock()
+        mock_box.is_visible.return_value = True
+
+        mock_frame = MagicMock()
+        mock_frame.url = "https://challenges.cloudflare.com/cdn-cgi/challenge-platform/turnstile"
+        mock_frame.locator.return_value.count.return_value = 0
+        mock_frame.locator.return_value.first = mock_box
+
+        mock_page = MagicMock()
+        # evaluate 返回了落在底部的页脚坐标
+        mock_page.evaluate.return_value = {"x": 562.0, "y": 824.0, "w": 315.0, "h": 56.0, "source": "div"}
+        mock_page.frames = [mock_frame]
+
+        driver = MagicMock()
+        driver.page = mock_page
+        driver.title = "Just a moment..."
+        driver.current_url = "https://chatgpt.com/auth/login"
+        driver.execute_script.return_value = False
+
+        def mock_title_effect():
+            if mock_box.click.called:
+                mock_page.frames = []
+                return "ChatGPT"
+            return "Just a moment..."
+
+        type(driver).title = property(lambda self: mock_title_effect())
+
+        emit_messages = []
+        res = solve_cloudflare_challenge_if_present(driver, max_wait=5.0, emit_fn=emit_messages.append)
+        self.assertTrue(res)
+        # 证实：坐标点击绝没有在页脚执行 mouse.down
+        self.assertFalse(mock_page.mouse.down.called)
+        # 证实：顺畅回退到了真实的 Turnstile Frame 执行点击
+        self.assertTrue(mock_box.click.called)
+
     def test_solve_click_turnstile_box(self):
         # 初始处于质询状态
         mock_box = MagicMock()

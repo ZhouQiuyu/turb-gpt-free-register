@@ -266,37 +266,72 @@ def solve_cloudflare_challenge_if_present(
                 try:
                     widget = page.evaluate(r"""() => {
                         try {
-                            const candidates = [...document.querySelectorAll('.main-wrapper, .main-content, .data, div[style*="grid"], [id*="widget"], iframe')];
-                            let targetEl = null;
-                            for (const el of candidates) {
-                                const r = el.getBoundingClientRect();
-                                if (r.width >= 250 && r.width <= 350 && r.height >= 45 && r.height <= 110) {
-                                    targetEl = el;
-                                    break;
+                            const isExcluded = (el, r) => {
+                                if (!r || r.width === 0 || r.height === 0) return true;
+                                // 排除视口底部页脚/版权区域（例如 y > 650 或底部 100px 以内）
+                                if (r.y > 650 || r.bottom > (window.innerHeight - 90)) return true;
+                                if (r.y < 40) return true;
+                                if (el.closest && el.closest('footer, .footer, #footer, [role="contentinfo"]')) return true;
+                                const text = (el.innerText || '').toLowerCase();
+                                if (text.includes('ray id') || text.includes('quyen rieng tu') || text.includes('quyền riêng tư') || text.includes('privacy') || text.includes('dieu khoan') || text.includes('điều khoản')) return true;
+                                return false;
+                            };
+
+                            const isValidWidgetSize = (r) => {
+                                return r.width >= 240 && r.width <= 360 && r.height >= 40 && r.height <= 100;
+                            };
+
+                            // 1. 优先定位明确属于 Turnstile 的 iframe（支持穿透 Shadow DOM）
+                            const iframes = [];
+                            const stage = document.querySelector('#challenge-stage, #cf-stage, .ctp-checkbox-container');
+                            if (stage) {
+                                if (stage.shadowRoot) {
+                                    iframes.push(...stage.shadowRoot.querySelectorAll('iframe'));
+                                }
+                                iframes.push(...stage.querySelectorAll('iframe'));
+                            }
+                            iframes.push(...document.querySelectorAll(
+                                'iframe[src*="challenges.cloudflare.com"], iframe[src*="challenge-platform"], iframe[src*="turnstile"], iframe[src*="cdn-cgi"]'
+                            ));
+
+                            for (const ifr of iframes) {
+                                const r = ifr.getBoundingClientRect();
+                                if (isValidWidgetSize(r) && !isExcluded(ifr, r)) {
+                                    ifr.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
+                                    const r2 = ifr.getBoundingClientRect();
+                                    return { x: r2.x, y: r2.y, w: r2.width, h: r2.height, source: 'iframe' };
                                 }
                             }
-                            if (!targetEl) {
-                                const allDivs = [...document.querySelectorAll('div')];
-                                for (const el of allDivs) {
-                                    const r = el.getBoundingClientRect();
-                                    if (Math.abs(r.width - 300) < 35 && Math.abs(r.height - 65) < 35) {
-                                        targetEl = el;
-                                        break;
+
+                            // 2. 检查 #challenge-stage 或 ctp 容器自身尺寸
+                            if (stage) {
+                                const r = stage.getBoundingClientRect();
+                                if (isValidWidgetSize(r) && !isExcluded(stage, r)) {
+                                    stage.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
+                                    const r2 = stage.getBoundingClientRect();
+                                    return { x: r2.x, y: r2.y, w: r2.width, h: r2.height, source: 'stage' };
+                                }
+                            }
+
+                            // 3. 广度后备：在非页脚的主体区域查找匹配 300x65 规格的容器
+                            const mainElements = [...document.querySelectorAll('#challenge-stage *, main *, .main-content *, div')];
+                            for (const el of mainElements) {
+                                const r = el.getBoundingClientRect();
+                                if (Math.abs(r.width - 300) <= 35 && Math.abs(r.height - 65) <= 25) {
+                                    if (!isExcluded(el, r)) {
+                                        el.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
+                                        const r2 = el.getBoundingClientRect();
+                                        return { x: r2.x, y: r2.y, w: r2.width, h: r2.height, source: 'div' };
                                     }
                                 }
-                            }
-                            if (targetEl) {
-                                targetEl.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
-                                const r2 = targetEl.getBoundingClientRect();
-                                return {x: r2.x, y: r2.y, w: r2.width, h: r2.height};
                             }
                         } catch (_) {}
                         return null;
                     }""")
-                    if isinstance(widget, dict) and widget.get("w", 0) >= 200:
+                    if isinstance(widget, dict) and widget.get("w", 0) >= 200 and widget.get("y", 9999) <= 650:
                         cx = widget["x"] + 28.0 + random.uniform(-2.0, 2.0)
                         cy = widget["y"] + min(42.0, widget.get("h", 65.0) * 0.5) + random.uniform(-2.0, 2.0)
-                        logger.info("%s [Cloudflare] 触发人类拟真轨迹坐标点击 Turnstile 容器: (%.1f, %.1f)", prefix, cx, cy)
+                        logger.info("%s [Cloudflare] 触发人类拟真轨迹坐标点击 Turnstile 容器: (%.1f, %.1f) [来源=%s]", prefix, cx, cy, widget.get("source", "unknown"))
                         if emit_fn and not clicked:
                             try:
                                 emit_fn("发现 Cloudflare Turnstile 验证框，正在模拟拟真轨迹点击…")
@@ -320,19 +355,25 @@ def solve_cloudflare_challenge_if_present(
                         round_clicked = True
                         time.sleep(1.8)
 
-                        # 若连续坐标点击 >= 2 次仍未放行，交替补充 frame_locator 事件穿透
-                        if coord_click_count >= 2:
-                            for if_sel in ("iframe[src*='challenge-platform']", "iframe[src*='challenges.cloudflare.com']", "iframe"):
-                                try:
-                                    fl = page.frame_locator(if_sel)
-                                    for cb_sel in _CB_SELECTORS:
-                                        box = fl.locator(cb_sel).first
-                                        if box.is_visible():
-                                            box.click(delay=random.randint(80, 150))
-                                            logger.info("%s [Cloudflare] 交叉尝试 frame_locator(%s) 协同点击复选框", prefix, if_sel)
-                                            break
-                                except Exception:
-                                    pass
+                        # 协同 frame_locator 穿透：只要存在可见复选框即协同点击
+                        for if_sel in (
+                            "#challenge-stage iframe",
+                            "#cf-stage iframe",
+                            "iframe[src*='challenge-platform']",
+                            "iframe[src*='challenges.cloudflare.com']",
+                            "iframe[src*='turnstile']",
+                            "iframe",
+                        ):
+                            try:
+                                fl = page.frame_locator(if_sel)
+                                for cb_sel in _CB_SELECTORS:
+                                    box = fl.locator(cb_sel).first
+                                    if box.is_visible():
+                                        box.click(delay=random.randint(80, 150))
+                                        logger.info("%s [Cloudflare] 协同 frame_locator(%s) 点击复选框", prefix, if_sel)
+                                        break
+                            except Exception:
+                                pass
                 except Exception as exc:
                     logger.debug("%s [Cloudflare] 几何容器坐标点击异常: %s", prefix, exc)
 
@@ -432,7 +473,7 @@ def solve_cloudflare_challenge_if_present(
                         if_el = page.locator(if_sel).first
                         if if_el.is_visible():
                             bbox = if_el.bounding_box()
-                            if bbox and bbox.get("width", 0) > 40 and bbox.get("height", 0) > 30:
+                            if bbox and bbox.get("width", 0) > 40 and bbox.get("height", 0) > 30 and bbox.get("y", 9999) <= 650:
                                 # Turnstile 勾选框固定在 widget 左侧约 28px、垂直居中位置
                                 cx = bbox["x"] + min(30.0, bbox["width"] * 0.15)
                                 cy = bbox["y"] + (bbox["height"] / 2.0)

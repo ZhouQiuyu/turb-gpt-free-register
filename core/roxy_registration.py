@@ -536,6 +536,16 @@ def _wait_for_email_input(driver, timeout: int | None = None):
         if solve_cloudflare_challenge_if_present(driver, max_wait=45.0):
             time.sleep(1.0)
             continue
+        # 如果遇到迎新/协议遮罩弹窗（如 dismiss-welcome, close-button），自动尝试关闭以暴露下层表单
+        try:
+            driver.execute_script(r"""
+            try {
+              const btn = document.querySelector('button.close-button, a[data-testid="dismiss-welcome"], [aria-label*="close" i], [aria-label*="dismiss" i]');
+              if (btn && (btn.offsetWidth || btn.offsetHeight)) btn.click();
+            } catch (_) {}
+            """)
+        except Exception:
+            pass
         el = _find_visible_email_input_js(driver)
         if el:
             return el
