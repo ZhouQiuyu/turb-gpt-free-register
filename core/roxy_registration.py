@@ -546,9 +546,39 @@ def _wait_for_email_input(driver, timeout: int | None = None):
             """)
         except Exception:
             pass
+        # 检查并优先返回可见的邮箱输入框
         el = _find_visible_email_input_js(driver)
         if el:
             return el
+
+        # 如果页面处于匿名游客聊天首页（例如 ?slm=1 或根路径且无邮箱输入框）
+        try:
+            curr_url = str(getattr(driver, "current_url", "") or "")
+            if "slm=1" in curr_url or curr_url.rstrip("/") in ("https://chatgpt.com", "http://chatgpt.com"):
+                res = driver.execute_script(r"""
+                try {
+                  const btn = document.querySelector(
+                    'button[data-testid="login-button"], button[data-testid="signup-button"], [data-testid="login-button"], [data-testid="signup-button"], button.login-button, button.signup-button, a[href*="/auth/login"]'
+                  );
+                  if (btn && (btn.offsetWidth || btn.offsetHeight)) {
+                    btn.click();
+                    return 'clicked';
+                  }
+                  return 'none';
+                } catch (_) { return 'err'; }
+                """)
+                if res == "clicked":
+                    logger.info("%s 处于匿名游客首页，已点击登录/注册按钮拉起弹窗", _log_prefix(driver))
+                    time.sleep(1.5)
+                    continue
+                elif (end - time.time()) <= 15:
+                    logger.info("%s 处于匿名游客首页且未找到登录按钮，重新导航至 /auth/login", _log_prefix(driver))
+                    driver.get("https://chatgpt.com/auth/login")
+                    time.sleep(2.0)
+                    continue
+        except Exception:
+            pass
+
         last_state = _email_entry_state(driver)
         if not clicked_email_option and _click_email_entry_option(driver):
             clicked_email_option = True
@@ -1075,6 +1105,14 @@ def _submit_email_and_wait_next(
         values = [str(i.get("value") or "") for i in (state.get("inputs") or [])]
         if not any(v.strip().lower() == current_email.lower() for v in values):
             logger.warning("%s 邮箱写入校验失败，准备重试：attempt=%s/%s state=%s", _log_prefix(driver), attempt, attempts, state)
+            try:
+                c_url = str(getattr(driver, "current_url", "") or "")
+                if "slm=1" in c_url or c_url.rstrip("/") in ("https://chatgpt.com", "http://chatgpt.com"):
+                    logger.info("%s 校验失败时检测到处于游客首页 (%s)，重新导航至 /auth/login", _log_prefix(driver), c_url)
+                    driver.get("https://chatgpt.com/auth/login")
+                    time.sleep(1.5)
+            except Exception:
+                pass
             time.sleep(0.8)
             continue
         logger.info("%s 已填写邮箱并校验通过：%s", _log_prefix(driver), current_email)

@@ -76,3 +76,28 @@ class RoxyPasswordFlowTests(unittest.TestCase):
             driver.find_elements.side_effect = lambda by, sel: [fake_input] if not state["on_password"] else []
             roxy._type_otp(driver, "123456", timeout=5)
             mock_type.assert_called_once_with(driver, fake_input, "123456", clear=True)
+
+    def test_wait_for_email_input_heals_when_on_anonymous_chat_home(self):
+        driver = MagicMock()
+        driver.current_url = "https://chatgpt.com/?slm=1"
+
+        fake_input = MagicMock()
+        state = {"clicked_login": False}
+
+        def fake_find_input(drv):
+            return fake_input if state["clicked_login"] else None
+
+        def fake_execute_script(script, *args):
+            if "login-button" in script:
+                state["clicked_login"] = True
+                return "clicked"
+            return None
+
+        driver.execute_script.side_effect = fake_execute_script
+
+        with patch.object(roxy, "_find_visible_email_input_js", side_effect=fake_find_input), \
+             patch.object(roxy, "solve_cloudflare_challenge_if_present", return_value=False):
+            el = roxy._wait_for_email_input(driver, timeout=5)
+            self.assertEqual(el, fake_input)
+            self.assertTrue(state["clicked_login"])
+
