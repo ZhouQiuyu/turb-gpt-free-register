@@ -3172,15 +3172,57 @@ function pillV2(status) {
   else if (s === 'pending' || s === 'cancelled' || s === 'stopped') cls = 'jobs-v2-pill--muted';
   return `<span class="jobs-v2-pill ${cls}">${esc(map[s]||s||'-')}</span>`;
 }
-function formatDateTime(v) {
+const _BEIJING_DTF = new Intl.DateTimeFormat('zh-CN', {
+  timeZone: 'Asia/Shanghai',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+});
+
+function formatDateTime(v, options = {}) {
   if (v == null || v === '') return '-';
-  const d = v instanceof Date ? v : new Date(v);
-  if (Number.isNaN(d.getTime())) {
-    const s = String(v).replace('T', ' ').replace(/\.\d+.*$/, '').replace(/Z$/, '').replace(/[+-]\d{2}:\d{2}$/, '');
-    return s || '-';
+  try {
+    let d;
+    if (v instanceof Date) {
+      d = v;
+    } else if (typeof v === 'number') {
+      d = new Date(v < 1e11 ? v * 1000 : v);
+    } else {
+      let s = String(v).trim();
+      if (!s || s === '-') return '-';
+      const num = Number(s);
+      if (!Number.isNaN(num) && num > 1e8 && !s.includes('-') && !s.includes(':')) {
+        d = new Date(num < 1e11 ? num * 1000 : num);
+      } else {
+        if (!s.endsWith('Z') && !/[+-]\d{2}(:\d{2})?$/.test(s)) {
+          s = s.replace(' ', 'T') + '+08:00';
+        }
+        d = new Date(s);
+      }
+      if (Number.isNaN(d.getTime())) {
+        const clean = String(v).replace('T', ' ').replace(/\.\d+.*$/, '').replace(/Z$/, '').replace(/[+-]\d{2}:\d{2}$/, '');
+        return clean || '-';
+      }
+    }
+    const parts = _BEIJING_DTF.formatToParts(d);
+    const get = (type) => parts.find(p => p.type === type)?.value || '00';
+    const year = get('year');
+    const month = get('month');
+    const day = get('day');
+    const hour = get('hour');
+    const minute = get('minute');
+    const second = get('second');
+    if (options.dateOnly) {
+      return `${year}-${month}-${day}`;
+    }
+    return `${year}-${month}-${day} ${hour}:${minute}:${second}`;
+  } catch (e) {
+    return String(v).replace('T', ' ');
   }
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 function formatTraffic(t) {
   if (!t || !t.available) return '-';
@@ -3823,18 +3865,8 @@ function _codexAgentCell(r) {
 }
 function _fmtPlanTime(v, dateOnly = false) {
   if (!v) return '';
-  try {
-    const d = new Date(v);
-    if (Number.isNaN(d.getTime())) {
-      const raw = String(v).replace('T', ' ').replace(/(\+00:00|Z)$/, '');
-      return dateOnly ? raw.slice(0, 10) : raw;
-    }
-    const pad = n => String(n).padStart(2, '0');
-    const day = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
-    return dateOnly ? day : `${day} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  } catch(e) {
-    return String(v);
-  }
+  const s = formatDateTime(v, { dateOnly: dateOnly });
+  return s === '-' ? '' : s;
 }
 function _billingLabel(v) {
   const x = (v || '').toString().toLowerCase();
@@ -3879,7 +3911,7 @@ function _planCell(r) {
   const ok = r.plan_check_ok;
   const err = r.plan_check_error || '';
   const plan = (r.current_plan_type || r.plan_type || '-').toString();
-  const checked = r.plan_checked_at ? `查询: ${esc(r.plan_checked_at)}` : '未查询实时套餐';
+  const checked = r.plan_checked_at ? `查询: ${esc(formatDateTime(r.plan_checked_at))}` : '未查询实时套餐';
   const route = (r.plan_check_network_route || '').toString();
   const routeLabel = route === 'proxy' ? `网络: 代理${r.plan_check_proxy_used ? ` (${r.plan_check_proxy_used})` : ''}` :
     route === 'direct_fallback' ? `网络: 直连回退${r.plan_check_proxy_fallback_reason ? ` (${r.plan_check_proxy_fallback_reason})` : ''}` :
@@ -3890,7 +3922,7 @@ function _planCell(r) {
     const queued = r.plan_check_status === 'queued';
     const label = automatic ? (queued ? '自动查询排队中' : '自动查询中') : (queued ? '查询排队中' : '查询中');
     const stamp = queued ? r.plan_check_queued_at : r.plan_check_started_at;
-    const detail = stamp ? `${queued ? '入队' : '开始'}: ${esc(stamp)}` : '';
+    const detail = stamp ? `${queued ? '入队' : '开始'}: ${esc(formatDateTime(stamp))}` : '';
     return `<span class="pill status-running" title="${detail}">${label}</span>`;
   }
   if (err || r.plan_check_status === 'failed') {
@@ -3899,7 +3931,7 @@ function _planCell(r) {
     const lastPromo = _plusTrialSummary(r);
     const lastPlan = hasLastSuccess ? `${plan}${lastPromo ? `/${lastPromo}` : ''}` : '';
     const lastText = lastPlan ? `（上次: ${lastPlan}）` : '';
-    const lastTitle = hasLastSuccess ? `上次成功: ${esc(r.plan_last_success_at)}` : '';
+    const lastTitle = hasLastSuccess ? `上次成功: ${esc(formatDateTime(r.plan_last_success_at))}` : '';
     return `<div class="extract-link-cell"><span class="pill status-failed" title="${[esc(reason), lastTitle].filter(Boolean).join('；')}">查询失败${esc(lastText)}</span><div class="extract-link-error" title="${esc(reason)}">${esc(reason)}</div></div>`;
   }
   const lower = plan.toLowerCase();
@@ -3929,9 +3961,9 @@ function _planCell(r) {
   if (discount) parts.push(discount);
   const text = parts.length ? `${plan}（${parts.join('/')}）` : plan;
   const detail = [title];
-  if (expireRaw) detail.push(`到期时间: ${expireRaw}`);
-  if (r.plan_renews_at) detail.push(`续费时间: ${r.plan_renews_at}`);
-  if (r.discount_expires_at) detail.push(`折扣结束: ${r.discount_expires_at}`);
+  if (expireRaw) detail.push(`到期时间: ${formatDateTime(expireRaw)}`);
+  if (r.plan_renews_at) detail.push(`续费时间: ${formatDateTime(r.plan_renews_at)}`);
+  if (r.discount_expires_at) detail.push(`折扣结束: ${formatDateTime(r.discount_expires_at)}`);
   if (r.discount_promo_campaign_id) detail.push(`优惠: ${r.discount_promo_campaign_id}`);
   return `<span class="pill ${cls}" title="${esc(detail.join('；'))}">${esc(text)}</span>`;
 }
@@ -3999,7 +4031,7 @@ function _codexAction(r) {
 function _tokenCellV2(r) {
   const live = r.live_check_status || '';
   const liveErr = r.live_check_error || '';
-  const liveAt = r.live_checked_at || '';
+  const liveAt = r.live_checked_at ? formatDateTime(r.live_checked_at) : '';
   let liveHtml = '';
   const liveFp = r.live_check_fingerprint_text || '';
   if (live === 'live') liveHtml = `<div class="acc-v2-sub" title="${esc([liveAt, liveFp].filter(Boolean).join('\n'))}">查活: 正常${liveFp ? ` · ${esc(liveFp)}` : ''}</div>`;
@@ -4073,7 +4105,7 @@ function renderAccounts() {
       <td class="col-note" title="${esc(r.note || '')}">${r.note ? esc(short(r.note, 80)) : '<span class="acc-v2-muted">-</span>'}</td>
       <td class="col-small">${_totpCellV2(r)}</td>
       <td class="col-status">${_codexCellV2(r)}</td>
-      <td class="col-time" title="${esc(r.created_at || '-')}">${esc(r.created_at || '-')}</td>
+      <td class="col-time" title="${esc(formatDateTime(r.created_at))}">${esc(formatDateTime(r.created_at))}</td>
       <td class="col-actions">
         <div class="acc-v2-actions">
           <button type="button" class="good acc-v2-btn-extract-link" data-extract-link="${esc(r.id)}" title="使用账号属地代理原生提链">🔗 提链</button>
@@ -5626,8 +5658,8 @@ function renderOutlook() {
       <td class="col-source">${esc(poolLabel(r.source))}</td>
       <td class="col-status">${pill(r.status)}</td>
       <td class="col-token">${_outlookTokenCell(r)}</td>
-      <td class="col-time" title="${esc(r.imported_at || r.created_at || '-')}">${esc(r.imported_at || r.created_at || '-')}</td>
-      <td class="col-time" title="${esc(r.used_at || '-')}">${esc(r.used_at || '-')}</td>
+      <td class="col-time" title="${esc(formatDateTime(r.imported_at || r.created_at))}">${esc(formatDateTime(r.imported_at || r.created_at))}</td>
+      <td class="col-time" title="${esc(formatDateTime(r.used_at))}">${esc(formatDateTime(r.used_at))}</td>
       <td class="col-actions">
         <div class="acc-v2-actions">
           ${cbtn('复制邮箱', r.copy_line, 'primary')}
@@ -6009,7 +6041,7 @@ function _codexUpdateSelectedHint() {
 function _codexStatusBadge(r) {
   const exported = (r.exported_count || 0) > 0;
   return exported
-    ? `<span class="pill status-used" title="导出 ${esc(r.exported_count)} 次，最近 ${esc(r.exported_at || '-')}">已导出</span>`
+    ? `<span class="pill status-used" title="导出 ${esc(r.exported_count)} 次，最近 ${esc(formatDateTime(r.exported_at))}">已导出</span>`
     : `<span class="pill status-available">未导出</span>`;
 }
 function closeCodexV2MoreMenus() {
@@ -6065,8 +6097,8 @@ function renderCodex() {
       <td class="col-plan">${esc(r.plan || '-')}</td>
       <td class="col-status">${_codexStatusBadge(r)}</td>
       <td class="col-account" title="${esc(r.account_id || '-')}">${esc(r.account_id || '-')}</td>
-      <td class="col-time" title="${esc(r.mtime || '-')}">${esc(r.mtime || '-')}</td>
-      <td class="col-time" title="${esc(r.expired || '-')}">${esc(r.expired || '-')}</td>
+      <td class="col-time" title="${esc(formatDateTime(r.mtime))}">${esc(formatDateTime(r.mtime))}</td>
+      <td class="col-time" title="${esc(formatDateTime(r.expired))}">${esc(formatDateTime(r.expired))}</td>
       <td class="col-actions">
         <div class="acc-v2-actions">
           <button type="button" class="primary" data-codex-download="${esc(r.filename)}" title="从 SQLite 下载 JSON/回执">下载凭证</button>

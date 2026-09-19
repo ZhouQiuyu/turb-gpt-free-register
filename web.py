@@ -81,6 +81,14 @@ def main() -> None:
     parser.add_argument("--verbose", action="store_true", help="详细日志")
     args = parser.parse_args()
 
+    os.environ.setdefault("TZ", "Asia/Shanghai")
+    import time
+    if hasattr(time, "tzset"):
+        try:
+            time.tzset()
+        except Exception:
+            pass
+
     _setup_logging(args.verbose)
     logger = logging.getLogger(__name__)
 

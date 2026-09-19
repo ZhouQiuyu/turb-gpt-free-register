@@ -72,6 +72,14 @@ def load_env(*, override: bool = False) -> Path:
     else:
         # 仍然允许系统环境变量生效
         load_dotenv(override=override)
+    import time
+    if "TZ" not in os.environ:
+        os.environ["TZ"] = "Asia/Shanghai"
+    if hasattr(time, "tzset"):
+        try:
+            time.tzset()
+        except Exception:
+            pass
     _LOADED = True
     return _ENV_PATH
 
