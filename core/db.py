@@ -193,6 +193,8 @@ def _ensure_sqlite() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_proxy_pool_status ON proxy_pool(status, id DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_proxy_pool_latency ON proxy_pool(latency_status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_proxy_pool_quality ON proxy_pool(quality_status)")
+        _SQLITE_READY = True
+        _SQLITE_READY_PATH = active_path
         migration_done = conn.execute(
             "SELECT 1 FROM storage_meta WHERE key='legacy_import_completed' LIMIT 1"
         ).fetchone()
@@ -1921,6 +1923,25 @@ def update_account_liveness(acc_id: int, result: dict | None = None) -> bool:
                 row["live_check_fingerprint"] = result.get("fingerprint")
             row["live_check_error"] = None
 
+        row["copy_line"] = _account_line(row)
+        _save_accounts(rows)
+        return True
+
+
+def update_account_session(acc_id: int, access_token: str, account_id: str | None = None) -> bool:
+    """更新账号的最新 access_token 与 account_id。"""
+    with _LOCK:
+        rows = _load_accounts()
+        row = next((r for r in rows if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        token = str(access_token or "").strip()
+        if token:
+            row["access_token"] = token
+            row["token_expired"] = False
+        if account_id:
+            row["account_id"] = str(account_id).strip()
+        row["updated_at"] = _now()
         row["copy_line"] = _account_line(row)
         _save_accounts(rows)
         return True

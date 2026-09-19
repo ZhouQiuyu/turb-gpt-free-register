@@ -23,12 +23,23 @@ class TestNativeExtractLink(unittest.TestCase):
             "_LEGACY_OUTLOOK_JSON": root / "legacy-outlook.json",
             "_LEGACY_JOBS_JSON": root / "legacy-jobs.json",
             "_LEGACY_SQLITE": root / "legacy.db",
+            "_DEFAULT_SQLITE_PATH": root / "turb.sqlite3",
+            "_SQLITE_PATH": root / "turb.sqlite3",
             "_CODEX_DIR": root / "codex",
             "_CODEX_AGENT_DIR": root / "agent",
             "_LEGACY_CODEX_EXPORT_STATE": root / "state.json",
             "_SQLITE_READY": False,
             "_SQLITE_READY_PATH": None,
         }
+
+    def test_get_currency_for_country(self):
+        self.assertEqual(extract_link_service.get_currency_for_country("JP"), "JPY")
+        self.assertEqual(extract_link_service.get_currency_for_country("jp"), "JPY")
+        self.assertEqual(extract_link_service.get_currency_for_country("KR"), "KRW")
+        self.assertEqual(extract_link_service.get_currency_for_country("GB"), "GBP")
+        self.assertEqual(extract_link_service.get_currency_for_country("DE"), "EUR")
+        self.assertEqual(extract_link_service.get_currency_for_country("US"), "USD")
+        self.assertEqual(extract_link_service.get_currency_for_country("VN"), "USD")
 
     def test_geo_utils_flag_and_badge(self):
         self.assertEqual(geo_utils.get_country_flag("JP"), "🇯🇵")
@@ -233,6 +244,116 @@ class TestNativeExtractLink(unittest.TestCase):
             self.assertIn("JP", updated_acc["extract_link_error"])
             self.assertIn("暂无该属地活跃代理", updated_acc["extract_link_error"])
             self.assertIn("已自动跳过提链", updated_acc["extract_link_error"])
+
+    def test_update_account_session(self):
+        with tempfile.TemporaryDirectory() as td, patch.multiple(db, **self.storage(Path(td))):
+            db._ensure_sqlite()
+            acc_id = db.insert_account(
+                email="session_user@example.com",
+                access_token="old_token",
+            )
+            acc = db.get_account(acc_id)
+            self.assertEqual(acc["access_token"], "old_token")
+
+            ok = db.update_account_session(acc_id, access_token="new_token_123", account_id="acc_999")
+            self.assertTrue(ok)
+
+            updated = db.get_account(acc_id)
+            self.assertEqual(updated["access_token"], "new_token_123")
+            self.assertEqual(updated["account_id"], "acc_999")
+            self.assertFalse(updated["token_expired"])
+
+    def test_execute_js_checkout_success(self):
+        mock_driver = MagicMock()
+        mock_driver.execute_async_script.return_value = {
+            "ok": True,
+            "status": 200,
+            "data": {
+                "url": "https://checkout.stripe.com/c/pay/cs_test_12345",
+                "checkout_session_id": "cs_test_12345",
+            },
+        }
+        res = extract_link_service._execute_js_checkout(
+            mock_driver,
+            access_token="tok_123",
+            account_id="acc_123",
+            country="JP",
+            currency="JPY",
+        )
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["url"], "https://checkout.stripe.com/c/pay/cs_test_12345")
+
+    def test_execute_js_checkout_already_paid(self):
+        mock_driver = MagicMock()
+        mock_driver.execute_async_script.return_value = {
+            "ok": False,
+            "status": 400,
+            "data": {"detail": "User is already paid on an active_subscription"},
+        }
+        res = extract_link_service._execute_js_checkout(
+            mock_driver,
+            access_token="tok_123",
+            account_id="acc_123",
+            country="JP",
+            currency="JPY",
+        )
+        self.assertTrue(res.get("already_paid"))
+
+    def test_execute_js_checkout_401_unauthorized(self):
+        mock_driver = MagicMock()
+        mock_driver.execute_async_script.return_value = {
+            "ok": False,
+            "status": 401,
+            "data": {"detail": "Token expired or invalid"},
+        }
+        res = extract_link_service._execute_js_checkout(
+            mock_driver,
+            access_token="tok_expired",
+            account_id="acc_123",
+            country="JP",
+            currency="JPY",
+        )
+        self.assertFalse(res["ok"])
+        self.assertTrue(res.get("unauthorized"))
+        self.assertEqual(res.get("status"), 401)
+
+    @patch("core.cloakbrowser_driver.build_cloak_driver")
+    @patch("core.extract_link_service.solve_cloudflare_challenge_if_present")
+    def test_extract_checkout_url_with_cloak_session_first(self, mock_solve_cf, mock_build_driver):
+        mock_driver = MagicMock()
+        mock_build_driver.return_value = (mock_driver, None)
+        mock_driver.execute_async_script.return_value = {
+            "ok": True,
+            "status": 200,
+            "data": {
+                "url": "https://checkout.stripe.com/c/pay/cs_direct_success",
+                "checkout_session_id": "cs_direct_success",
+            },
+        }
+        mock_solve_cf.return_value = False
+
+        account = {
+            "id": 1,
+            "email": "direct@example.com",
+            "access_token": "valid_token",
+            "account_id": "acc_direct",
+            "country_code": "JP",
+            "token_expired": False,
+        }
+
+        logs = []
+        res = extract_link_service.extract_checkout_url_with_cloak(
+            account=account,
+            proxy_url="socks5h://127.0.0.1:1080",
+            log_cb=lambda m: logs.append(m),
+        )
+
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["url"], "https://checkout.stripe.com/c/pay/cs_direct_success")
+        mock_driver.get.assert_called_with("https://chatgpt.com/")
+        # Ensure it didn't navigate to login page
+        for call in mock_driver.get.call_args_list:
+            self.assertNotIn("auth/login", call[0][0])
 
 
 if __name__ == "__main__":
