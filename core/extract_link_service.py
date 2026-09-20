@@ -610,18 +610,22 @@ def extract_checkout_url_with_cloak(
                     continue
 
                 # 1.5. 检测并恢复 OpenAI 认证页 500 / Route Error / 不明なエラーが発生しました
-                is_route_error = driver.execute_script("""
-                    const t = (document.body ? document.body.innerText : '').toLowerCase();
-                    if (t.includes('route error') || t.includes('500 internal server') || t.includes('不明なエラーが発生しました')) {
-                        const btn = [...document.querySelectorAll('button')].find(b => /try again|もう一度試す/i.test(b.innerText || ''));
-                        if (btn && (btn.offsetWidth || btn.offsetHeight)) {
-                            btn.click();
-                            return 'clicked_try_again';
+                is_route_error = None
+                try:
+                    is_route_error = driver.execute_script("""
+                        const t = (document.body ? document.body.innerText : '').toLowerCase();
+                        if (t.includes('route error') || t.includes('500 internal server') || t.includes('不明なエラーが発生しました')) {
+                            const btn = [...document.querySelectorAll('button')].find(b => /try again|もう一度試す/i.test(b.innerText || ''));
+                            if (btn && (btn.offsetWidth || btn.offsetHeight)) {
+                                btn.click();
+                                return 'clicked_try_again';
+                            }
+                            return 'need_refresh';
                         }
-                        return 'need_refresh';
-                    }
-                    return null;
-                """)
+                        return null;
+                    """)
+                except Exception:
+                    is_route_error = None
                 if is_route_error:
                     _emit(f"检测到 OpenAI 认证页临时异常 ({is_route_error})，正在自动重试恢复…")
                     time.sleep(2.0)
@@ -700,13 +704,17 @@ def extract_checkout_url_with_cloak(
 
                 # 5. 处于密码输入页面
                 if email_submitted:
-                    has_password_input = driver.execute_script("""
-                        const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
-                          && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'
-                          && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
-                        const pwd = document.querySelector('input[type="password"], input[name="password"], input[autocomplete="current-password"]');
-                        return !!(pwd && visible(pwd));
-                    """)
+                    has_password_input = False
+                    try:
+                        has_password_input = driver.execute_script("""
+                            const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+                              && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'
+                              && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
+                            const pwd = document.querySelector('input[type="password"], input[name="password"], input[autocomplete="current-password"]');
+                            return !!(pwd && visible(pwd));
+                        """)
+                    except Exception:
+                        has_password_input = False
                     if has_password_input:
                         if password:
                             _emit("检测到密码输入框，正在输入密码…")
@@ -796,9 +804,12 @@ def extract_checkout_url_with_cloak(
                 # 7. 处于邮箱验证码 (OTP) 页面 (严格排除 MFA 页面及已跳转至主站页面的情况)
                 is_otp_page = ("email-verification" in cur_url or "auth.openai.com/u/email-verification" in cur_url)
                 if not is_otp_page and not is_mfa_page and "chatgpt.com" not in cur_url:
-                    is_otp_page = bool(driver.execute_script("""
-                        return !!document.querySelector('input[name="code"], input[autocomplete="one-time-code"], input[data-testid="otp-input"]');
-                    """))
+                    try:
+                        is_otp_page = bool(driver.execute_script("""
+                            return !!document.querySelector('input[name="code"], input[autocomplete="one-time-code"], input[data-testid="otp-input"]');
+                        """))
+                    except Exception:
+                        is_otp_page = False
 
                 if is_otp_page and (time.time() - last_otp_submit_ts > 30.0):
                     _emit("等待接收邮箱验证码 (OTP)…")

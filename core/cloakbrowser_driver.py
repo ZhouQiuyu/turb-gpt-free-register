@@ -476,14 +476,24 @@ class CloakSeleniumDriver:
                 const __cloak_done = (v) => { clearTimeout(timer); resolve(v); };
                 try { fn(...args, __cloak_done); } catch (e) { clearTimeout(timer); resolve({ok:false, error:String(e)}); }
               });
-            }"""
-            if first_el is not None:
-                result = first_el._eval(element_wrapper, {"script": script, "args": serial_args})
-            else:
-                result = self.page.evaluate(wrapper, {"script": script, "args": serial_args})
-            if isinstance(result, dict) and result.get("__cloak_timeout"):
-                raise TimeoutError("execute_async_script timeout")
-            return result
+            for attempt in range(3):
+                try:
+                    if first_el is not None:
+                        result = first_el._eval(element_wrapper, {"script": script, "args": serial_args})
+                    else:
+                        result = self.page.evaluate(wrapper, {"script": script, "args": serial_args})
+                    if isinstance(result, dict) and result.get("__cloak_timeout"):
+                        raise TimeoutError("execute_async_script timeout")
+                    return result
+                except Exception as e:
+                    err_msg = str(e)
+                    if any(k in err_msg for k in ["Execution context was destroyed", "Cannot find context with specified id"]) and attempt < 2:
+                        time.sleep(0.5)
+                        continue
+                    if any(k in err_msg for k in ["Execution context was destroyed", "Cannot find context with specified id"]):
+                        logger.debug("[CloakDriver] 页面导航导致执行上下文销毁: %s", err_msg)
+                        return None
+                    raise
 
         # Selenium 脚本经常以 `return ...` 为主体；用 Function 保持语义。
         wrapper = """({script, args}) => {
@@ -495,12 +505,22 @@ class CloakSeleniumDriver:
           const fn = new Function(...args.map((_, i) => 'a' + i), payload.script);
           return fn(...args);
         }"""
-        if first_el is not None:
-            handle = first_el._eval_handle(element_wrapper, {"script": script, "args": serial_args})
-        else:
-            handle = self.page.evaluate_handle(wrapper, {"script": script, "args": serial_args})
-        return self._unwrap_js_result(self.page, handle)
-
+        for attempt in range(3):
+            try:
+                if first_el is not None:
+                    handle = first_el._eval_handle(element_wrapper, {"script": script, "args": serial_args})
+                else:
+                    handle = self.page.evaluate_handle(wrapper, {"script": script, "args": serial_args})
+                return self._unwrap_js_result(self.page, handle)
+            except Exception as e:
+                err_msg = str(e)
+                if any(k in err_msg for k in ["Execution context was destroyed", "Cannot find context with specified id"]) and attempt < 2:
+                    time.sleep(0.5)
+                    continue
+                if any(k in err_msg for k in ["Execution context was destroyed", "Cannot find context with specified id"]):
+                    logger.debug("[CloakDriver] 页面导航导致执行上下文销毁: %s", err_msg)
+                    return None
+                raise
 
 def _normalize_proxy(proxy: str | None) -> str | None:
     proxy = str(proxy or "").strip()
