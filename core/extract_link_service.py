@@ -122,13 +122,46 @@ def _human_extract_checkout_url(
 
     # 3. 定位并点击侧边栏 / 菜单「Claim offer / Upgrade / オファー / 特典」按钮
     _emit("正在寻找并点击侧边栏 / 菜单「Claim offer / Upgrade / オファー」入口…")
-    # 3. 检查是否已经处于定价 / 优惠弹窗
-    has_dialog = driver.execute_script("""
-        const d = document.querySelector('div[role="dialog"], [data-testid="pricing-modal"], [data-testid="all-plans-modal"], div[aria-modal="true"]');
-        return !!(d && (d.offsetWidth || d.offsetHeight));
-    """)
+    def _find_plus_trial_btn():
+        return driver.execute_script(r"""
+            const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+            const buttons = [...document.querySelectorAll('button, div[role="button"], a[role="button"]')].filter(visible);
 
-    if not has_dialog and not stripe_url:
+            // 优先匹配包含明确优惠 / 试用动作的按钮（中英日越全覆盖，且坚决排除 Go / Pro / Team / 当前套餐）
+            const plusBtn = buttons.find(b => {
+                const t = (b.innerText || '').trim().toLowerCase();
+                if (/(?:^|\s)(?:go|pro|team|business|enterprise)(?:\s|$)/.test(t) && !t.includes('plus')) {
+                    return false;
+                }
+                if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('miễn phí')) {
+                    return false;
+                }
+                return /dùng thử ưu đãi đặc biệt|ưu đãi đặc biệt|dùng thử plus|nâng cấp lên plus|claim special offer|special offer|try special offer|claim offer|upgrade to plus|plus を試す|無料で試す|plus にアップグレード|特別オファー|オファーを受け取る|特典を受け取る|オファーを利用|特典を利用|オファー|特典|try for free|try plus|get plus|get offer|claim/i.test(t);
+            }) || buttons.find(b => {
+                const t = (b.innerText || '').trim().toLowerCase();
+                if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('miễn phí')) return false;
+                return /plus|ưu đãi|オファー|特典|offer/i.test(t);
+            });
+
+            if (plusBtn) {
+                plusBtn.scrollIntoView({ block: 'center' });
+                const r = plusBtn.getBoundingClientRect();
+                return {
+                    ok: true,
+                    text: plusBtn.innerText.trim(),
+                    x: r.left + r.width / 2,
+                    y: r.top + r.height / 2
+                };
+            }
+            return { ok: false, all_buttons: buttons.map(b => b.innerText.trim()).filter(Boolean) };
+        """)
+
+    # 3. 优先检查当前页面是否已由 URL (#pricing) 直接唤起定价/试用弹窗
+    btn_info = _find_plus_trial_btn()
+    logger.info("[提链-拟人化] 初次检测页面试用确认按钮: %s", btn_info)
+
+    # 4. 若弹窗未自动出现，寻找并点击侧边栏 / 菜单「Claim offer / Upgrade / オファー」入口
+    if not btn_info.get("ok") and not stripe_url:
         _emit("正在寻找并点击侧边栏 / 菜单「Claim offer / Upgrade / オファー」入口…")
         upgrade_info = driver.execute_script("""
             const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight);
@@ -197,22 +230,13 @@ def _human_extract_checkout_url(
                 page.mouse.up()
             time.sleep(2.5)
 
+        btn_info = _find_plus_trial_btn()
+
     if stripe_url:
         return {"ok": True, "url": stripe_url, "checkout_session_id": stripe_url.split("/")[-1]}
 
-    # 4. 若弹窗仍未打开，点击左下角个人信息/用户菜单唤出菜单，并点击升级项
-    modal_opened = False
-    for _ in range(3):
-        has_dialog = driver.execute_script("""
-            const d = document.querySelector('div[role="dialog"], [data-testid="pricing-modal"], [data-testid="all-plans-modal"], div[aria-modal="true"]');
-            return !!(d && (d.offsetWidth || d.offsetHeight));
-        """)
-        if has_dialog:
-            modal_opened = True
-            break
-        time.sleep(1.0)
-
-    if not modal_opened and not stripe_url:
+    # 4.5. 若弹窗仍未打开，点击左下角个人信息/用户菜单唤出菜单，并点击升级项
+    if not btn_info.get("ok") and not stripe_url:
         _emit("未见直接弹窗，正在展开左下角账户菜单以触发升级入口…")
         profile_btn_info = driver.execute_script("""
             const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight);
@@ -272,51 +296,16 @@ def _human_extract_checkout_url(
                     page.mouse.up()
             time.sleep(3.0)
 
-    # 保存弹窗截图供排查
-    try:
-        driver.save_screenshot("/tmp/extract_modal.png")
-    except Exception:
-        pass
+        btn_info = _find_plus_trial_btn()
 
     # 5. 在定价 / 优惠弹窗中点击确认按钮 (执行真实鼠标坐标点击，触发 React 与 isTrusted 事件)
     if not stripe_url:
         _emit("正在定价/优惠弹窗中点击 Plus 试用确认按钮…")
-        btn_info = driver.execute_script(r"""
-            const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight);
-            const dialog = document.querySelector('div[role="dialog"], div[aria-modal="true"]') || document.body;
-            const buttons = [...dialog.querySelectorAll('button')].filter(visible);
-
-            // 优先匹配包含明确优惠 / 试用动作的按钮（中英日越全覆盖，且坚决排除 Go / Pro / Team）
-            const plusBtn = buttons.find(b => {
-                const t = (b.innerText || '').trim().toLowerCase();
-                if (/(?:^|\s)(?:go|pro|team|business|enterprise)(?:\s|$)/.test(t) && !t.includes('plus')) {
-                    return false;
-                }
-                if (t.includes('lên go') || t.includes('lên pro')) {
-                    return false;
-                }
-                return /dùng thử ưu đãi đặc biệt|ưu đãi đặc biệt|dùng thử plus|nâng cấp lên plus|claim special offer|special offer|try special offer|claim offer|upgrade to plus|plus を試す|無料で試す|plus にアップグレード|特別オファー|オファーを受け取る|特典を受け取る|オファーを利用|特典を利用|オファー|特典|try for free|try plus|get plus|get offer|claim/i.test(t);
-            }) || buttons.find(b => {
-                const t = (b.innerText || '').trim().toLowerCase();
-                if (t.includes('lên go') || t.includes('lên pro')) return false;
-                return /plus|ưu đãi|オファー|特典|offer/i.test(t);
-            }) || dialog.querySelector('button.btn-primary, button[data-testid*="upgrade"], button[data-testid*="claim"]');
-
-            if (plusBtn) {
-                plusBtn.scrollIntoView({ block: 'center' });
-                const r = plusBtn.getBoundingClientRect();
-                return {
-                    ok: true,
-                    text: plusBtn.innerText.trim(),
-                    x: r.left + r.width / 2,
-                    y: r.top + r.height / 2
-                };
-            }
-
-            return { ok: false, all_buttons: buttons.map(b => b.innerText.trim()).filter(Boolean) };
-        """)
+        if not btn_info.get("ok"):
+            btn_info = _find_plus_trial_btn()
         logger.info("[提链-拟人化] 弹窗内确认按钮定位: %s", btn_info)
         if btn_info and btn_info.get("ok") and btn_info.get("x") and btn_info.get("y"):
+            _emit(f"已锁定 Plus 试用确认按钮【{btn_info.get('text')}】，正在模拟真实鼠标点击…")
             x = float(btn_info["x"])
             y = float(btn_info["y"])
             if page and hasattr(page, "mouse") and x > 0 and y > 0:
@@ -328,9 +317,9 @@ def _human_extract_checkout_url(
                 page.mouse.up()
             else:
                 driver.execute_script("""
-                    const dialog = document.querySelector('div[role="dialog"], div[aria-modal="true"]') || document.body;
-                    const btn = dialog.querySelector('button');
-                    if (btn) btn.click();
+                    const buttons = [...document.querySelectorAll('button, div[role="button"]')];
+                    const b = buttons.find(el => /dùng thử|plus|claim|offer/i.test(el.innerText || ''));
+                    if (b) b.click();
                 """)
 
     # 6. 等待捕获 Stripe Checkout 链接 (Sentinel PoW 计算需 40~90s)
