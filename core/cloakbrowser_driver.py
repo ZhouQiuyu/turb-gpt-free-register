@@ -476,6 +476,7 @@ class CloakSeleniumDriver:
                 const __cloak_done = (v) => { clearTimeout(timer); resolve(v); };
                 try { fn(...args, __cloak_done); } catch (e) { clearTimeout(timer); resolve({ok:false, error:String(e)}); }
               });
+            }"""
             for attempt in range(3):
                 try:
                     if first_el is not None:
