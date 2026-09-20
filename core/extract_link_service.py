@@ -507,14 +507,17 @@ def extract_checkout_url_with_cloak(
     driver = None
     try:
         driver, _ = build_cloak_driver(proxy=proxy_url)
-        driver.set_page_load_timeout(60)
+        driver.set_page_load_timeout(90)
 
         # -------------------------------------------------------------
         # 阶段一：会话直通（若存在存量未过期 access_token）
         # -------------------------------------------------------------
         if access_token and not token_expired:
             _emit("检测到存量会话凭证，正在打开 ChatGPT 建立指纹与边缘环境…")
-            driver.get("https://chatgpt.com/")
+            try:
+                driver.get("https://chatgpt.com/")
+            except Exception as e:
+                logger.warning("访问 chatgpt.com 发生警告: %s", e)
             time.sleep(2.0)
             solve_cloudflare_challenge_if_present(driver, max_wait=15.0, emit_fn=_emit)
 
@@ -560,7 +563,15 @@ def extract_checkout_url_with_cloak(
             from core.email_provider import wait_for_otp
 
             _emit(f"正在打开 ChatGPT 登录页以建立新会话 ({email})…")
-            driver.get("https://chatgpt.com/auth/login")
+            for attempt in range(3):
+                try:
+                    driver.get("https://chatgpt.com/auth/login")
+                    break
+                except Exception as e:
+                    logger.warning("访问登录页超时/重试 (%d/3): %s", attempt + 1, e)
+                    if attempt == 2:
+                        raise e
+                    time.sleep(2.0)
             time.sleep(2.5)
 
             otp_after_ts = time.time() - 2.0
