@@ -124,6 +124,36 @@ def _human_extract_checkout_url(
     _emit("正在寻找并点击侧边栏 / 菜单「Claim offer / Upgrade / オファー」入口…")
     upgrade_info = driver.execute_script("""
         const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight);
+        const allButtons = [...document.querySelectorAll('button, a, div[role="button"]')].filter(visible);
+
+        // 1. 优先直接匹配页面上所有包含专属优惠/试用关键词的按钮 (中英日越)
+        const targetBtn = allButtons.find(b => {
+            const t = (b.innerText || '').trim().toLowerCase();
+            return (
+                t.includes('nhận ưu đãi') ||
+                t.includes('claim offer') ||
+                t.includes('オファーを受け取る') ||
+                t.includes('特典を受け取る') ||
+                t.includes('claim') ||
+                t.includes('offer') ||
+                t.includes('ưu đãi') ||
+                t.includes('特典') ||
+                t.includes('オファー') ||
+                t.includes('upgrade to plus') ||
+                t.includes('plus にアップグレード') ||
+                t.includes('nâng cấp lên plus') ||
+                t.includes('upgrade') ||
+                t.includes('アップグレード') ||
+                t.includes('nâng cấp')
+            ) && !t.includes('login') && !t.includes('signin') && !t.includes('lên go') && !t.includes('lên pro');
+        });
+        if (targetBtn) {
+            targetBtn.scrollIntoView({ block: 'center' });
+            const r = targetBtn.getBoundingClientRect();
+            return { ok: true, text: targetBtn.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
+        }
+
+        // 2. 备用常见选择器
         const selectors = [
             'button[aria-label*="Claim offer"]',
             'button[aria-label*="オファー"]',
@@ -135,11 +165,7 @@ def _human_extract_checkout_url(
             'button[data-testid="upgrade-button"]',
             'button[data-testid="pricing-button"]',
             'button[data-testid="sidebar-upgrade-button"]',
-            'a[href*="/pricing"]',
-            'div[data-testid="accounts-profile-button"]',
-            'div[data-testid="profile-button"]',
-            'button[aria-label*="Profile"]',
-            'button[aria-label*="Settings"]'
+            'a[href*="/pricing"]'
         ];
         for (const sel of selectors) {
             const el = document.querySelector(sel);
@@ -148,29 +174,6 @@ def _human_extract_checkout_url(
                 const r = el.getBoundingClientRect();
                 return { ok: true, selector: sel, text: el.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
             }
-        }
-        const allButtons = [...document.querySelectorAll('button, a, div[role="button"]')].filter(visible);
-        const targetBtn = allButtons.find(b => {
-            const t = (b.innerText || '').toLowerCase();
-            return (
-                t.includes('claim offer') ||
-                t.includes('claim') ||
-                t.includes('offer') ||
-                t.includes('nhận ưu đãi') ||
-                t.includes('ưu đãi') ||
-                t.includes('nâng cấp') ||
-                t.includes('特典') ||
-                t.includes('オファー') ||
-                t.includes('upgrade') ||
-                t.includes('アップグレード') ||
-                t.includes('plus') ||
-                t.includes('プラン')
-            ) && !t.includes('login') && !t.includes('signin');
-        });
-        if (targetBtn) {
-            targetBtn.scrollIntoView({ block: 'center' });
-            const r = targetBtn.getBoundingClientRect();
-            return { ok: true, text: targetBtn.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
         }
         return { ok: false };
     """)
@@ -248,7 +251,7 @@ def _human_extract_checkout_url(
     # 5. 在定价 / 优惠弹窗中点击确认按钮 (执行真实鼠标坐标点击，触发 React 与 isTrusted 事件)
     if not stripe_url:
         _emit("正在定价/优惠弹窗中点击 Plus 试用确认按钮…")
-        btn_info = driver.execute_script("""
+        btn_info = driver.execute_script(r"""
             const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight);
             const dialog = document.querySelector('div[role="dialog"], div[aria-modal="true"]') || document.body;
             const buttons = [...dialog.querySelectorAll('button')].filter(visible);
