@@ -156,13 +156,20 @@ def _human_extract_checkout_url(
             return { ok: false, all_buttons: buttons.map(b => b.innerText.trim()).filter(Boolean) };
         """)
 
-    # 3. 优先检查当前页面是否已由 URL (#pricing) 直接唤起定价/试用弹窗
-    btn_info = _find_plus_trial_btn()
-    logger.info("[提链-拟人化] 初次检测页面试用确认按钮: %s", btn_info)
+    # 3. 循环等待并定位试用确认按钮（代理环境下 SPA 页面加载与渲染需要 10~30 秒）
+    _emit("等待 ChatGPT 渲染定价与优惠弹窗…")
+    btn_info = {"ok": False}
+    t_find_end = time.time() + 30.0
+    while time.time() < t_find_end:
+        btn_info = _find_plus_trial_btn()
+        if btn_info.get("ok"):
+            logger.info("[提链-拟人化] 成功检测到试用确认按钮: %s", btn_info)
+            break
+        time.sleep(2.0)
 
-    # 4. 若弹窗未自动出现，寻找并点击侧边栏 / 菜单「Claim offer / Upgrade / オファー」入口
+    # 4. 若等待 30 秒仍未自动出现弹窗，尝试寻找侧边栏或左下角菜单
     if not btn_info.get("ok") and not stripe_url:
-        _emit("正在寻找并点击侧边栏 / 菜单「Claim offer / Upgrade / オファー」入口…")
+        _emit("未见直接弹窗，正在寻找侧边栏「Claim offer / Upgrade」或展开账户菜单…")
         upgrade_info = driver.execute_script("""
             const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight);
             const allButtons = [...document.querySelectorAll('button, a, div[role="button"]')].filter(visible);
@@ -296,31 +303,49 @@ def _human_extract_checkout_url(
                     page.mouse.up()
             time.sleep(3.0)
 
+            # 点击菜单后循环等待弹窗渲染
+            t_menu_wait = time.time() + 15.0
+            while time.time() < t_menu_wait:
+                btn_info = _find_plus_trial_btn()
+                if btn_info.get("ok"):
+                    break
+                time.sleep(1.5)
+
+    if stripe_url:
+        return {"ok": True, "url": stripe_url, "checkout_session_id": stripe_url.split("/")[-1]}
+
+    # 5. 执行拟人化真实鼠标点击
+    if not btn_info.get("ok"):
         btn_info = _find_plus_trial_btn()
 
-    # 5. 在定价 / 优惠弹窗中点击确认按钮 (执行真实鼠标坐标点击，触发 React 与 isTrusted 事件)
-    if not stripe_url:
-        _emit("正在定价/优惠弹窗中点击 Plus 试用确认按钮…")
-        if not btn_info.get("ok"):
-            btn_info = _find_plus_trial_btn()
-        logger.info("[提链-拟人化] 弹窗内确认按钮定位: %s", btn_info)
-        if btn_info and btn_info.get("ok") and btn_info.get("x") and btn_info.get("y"):
-            _emit(f"已锁定 Plus 试用确认按钮【{btn_info.get('text')}】，正在模拟真实鼠标点击…")
-            x = float(btn_info["x"])
-            y = float(btn_info["y"])
-            if page and hasattr(page, "mouse") and x > 0 and y > 0:
-                logger.info("[提链-拟人化] 执行真实鼠标轨迹点击按钮 '%s' at (%s, %s)", btn_info.get("text"), x, y)
-                page.mouse.move(x, y)
-                time.sleep(0.1)
-                page.mouse.down()
-                time.sleep(0.08)
-                page.mouse.up()
-            else:
-                driver.execute_script("""
-                    const buttons = [...document.querySelectorAll('button, div[role="button"]')];
-                    const b = buttons.find(el => /dùng thử|plus|claim|offer/i.test(el.innerText || ''));
-                    if (b) b.click();
-                """)
+    if not btn_info.get("ok"):
+        try:
+            from pathlib import Path
+            screenshots_dir = Path("/app/注册日志/screenshots")
+            screenshots_dir.mkdir(parents=True, exist_ok=True)
+            shot_path = screenshots_dir / f"extract_no_btn_{int(time.time())}.png"
+            driver.save_screenshot(str(shot_path))
+            logger.info("[提链-拟人化] 未能定位试用按钮，现场快照已保存至 %s", shot_path)
+        except Exception:
+            pass
+        return {"ok": False, "error": f"未能定位到 Plus 试用确认按钮，当前按钮: {btn_info.get('all_buttons')}"}
+
+    _emit(f"已锁定 Plus 试用确认按钮【{btn_info.get('text')}】，正在模拟真实鼠标点击…")
+    x = float(btn_info["x"])
+    y = float(btn_info["y"])
+    logger.info("[提链-拟人化] 执行真实鼠标轨迹点击按钮 '%s' at (%s, %s)", btn_info.get("text"), x, y)
+    if page and hasattr(page, "mouse") and x > 0 and y > 0:
+        page.mouse.move(x, y)
+        time.sleep(0.1)
+        page.mouse.down()
+        time.sleep(0.08)
+        page.mouse.up()
+    else:
+        driver.execute_script("""
+            const buttons = [...document.querySelectorAll('button, div[role="button"]')];
+            const b = buttons.find(el => /dùng thử|plus|claim|offer/i.test(el.innerText || ''));
+            if (b) b.click();
+        """)
 
     # 6. 等待捕获 Stripe Checkout 链接 (Sentinel PoW 计算需 40~90s)
     _emit("等待官方生成 Stripe 结账链接 (含 Sentinel 人机对抗计算，最长等待 120 秒)…")
