@@ -583,7 +583,7 @@ def extract_checkout_url_with_cloak(
             last_logged_url = ""
             last_totp_submit_time = 0.0
 
-            t_end = time.time() + 150
+            t_end = time.time() + 240
             while time.time() < t_end:
                 cur_url = str(driver.current_url or "")
                 title = str(driver.title or "")
@@ -835,6 +835,22 @@ def extract_checkout_url_with_cloak(
                         _click_continue(driver)
                     except Exception:
                         pass
+                    # 强力兜底：通过 JS 主动点击包含 Tiếp tục/Continue/続行 的提交按钮或触发 form submit
+                    try:
+                        driver.execute_script("""
+                            const btn = [...document.querySelectorAll('button')].find(b => {
+                                const t = (b.innerText || '').toLowerCase();
+                                return /continue|続行|继续|tiếp tục|next|submit/i.test(t) || b.type === 'submit';
+                            });
+                            if (btn && (btn.offsetWidth || btn.offsetHeight)) {
+                                btn.click();
+                            } else {
+                                const form = document.querySelector('form');
+                                if (form) form.requestSubmit ? form.requestSubmit() : form.submit();
+                            }
+                        """)
+                    except Exception:
+                        pass
                     last_otp_submit_ts = time.time()
                     otp_submitted = True
                     time.sleep(3.0)
@@ -844,7 +860,7 @@ def extract_checkout_url_with_cloak(
 
             if not access_token:
                 _emit("正在读取 ChatGPT 真实登录会话凭证…")
-                session_info = _fetch_chatgpt_session(driver, timeout=30, auto_jump_wait=15)
+                session_info = _fetch_chatgpt_session(driver, timeout=45, auto_jump_wait=30)
                 access_token = session_info.get("accessToken")
                 account_id = (session_info.get("account") or {}).get("id") or account_id
 

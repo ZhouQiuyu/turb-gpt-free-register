@@ -1436,10 +1436,11 @@ def _click_continue(driver) -> None:
         "//button[contains(., 'Continue')]",
         "//button[contains(., '続行')]",
         "//button[contains(., '继续')]",
+        "//button[contains(., 'Tiếp tục')]",
         "//button[contains(., 'Sign up')]",
         "//button[contains(., 'Create')]",
         "//button[contains(., 'Next')]",
-    ], timeout=20)
+    ], timeout=10)
 
 
 def _maybe_accept(driver) -> None:
