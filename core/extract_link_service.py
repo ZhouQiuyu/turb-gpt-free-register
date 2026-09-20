@@ -128,6 +128,9 @@ def _human_extract_checkout_url(
             'button[aria-label*="Claim offer"]',
             'button[aria-label*="オファー"]',
             'button[aria-label*="特典"]',
+            'button[aria-label*="Nhận ưu đãi"]',
+            'button[aria-label*="ưu đãi"]',
+            'button[aria-label*="Nâng cấp"]',
             'button[aria-label*="アップグレード"]',
             'button[data-testid="upgrade-button"]',
             'button[data-testid="pricing-button"]',
@@ -153,6 +156,9 @@ def _human_extract_checkout_url(
                 t.includes('claim offer') ||
                 t.includes('claim') ||
                 t.includes('offer') ||
+                t.includes('nhận ưu đãi') ||
+                t.includes('ưu đãi') ||
+                t.includes('nâng cấp') ||
                 t.includes('特典') ||
                 t.includes('オファー') ||
                 t.includes('upgrade') ||
@@ -206,6 +212,9 @@ def _human_extract_checkout_url(
                 return (
                     t.includes('claim offer') ||
                     t.includes('claim') ||
+                    t.includes('nhận ưu đãi') ||
+                    t.includes('ưu đãi') ||
+                    t.includes('nâng cấp') ||
                     t.includes('upgrade') ||
                     t.includes('アップグレード') ||
                     t.includes('plus') ||
@@ -244,10 +253,10 @@ def _human_extract_checkout_url(
             const dialog = document.querySelector('div[role="dialog"], div[aria-modal="true"]') || document.body;
             const buttons = [...dialog.querySelectorAll('button')].filter(visible);
 
-            // 优先匹配包含明确优惠 / 试用动作的按钮（中日英全覆盖）
+            // 优先匹配包含明确优惠 / 试用动作的按钮（中英日越全覆盖）
             const plusBtn = buttons.find(b => {
                 const t = (b.innerText || '').trim();
-                return /claim offer|claim special offer|special offer|upgrade to plus|plus を試す|無料で試す|plus にアップグレード|特別オファー|オファーを受け取る|特典を受け取る|オファーを利用|特典を利用|オファー|特典|try for free|try plus|get plus|upgrade|continue|get offer|claim/i.test(t);
+                return /claim offer|claim special offer|special offer|upgrade to plus|plus を試す|無料で試す|plus にアップグレード|特別オファー|オファーを受け取る|特典を受け取る|オファーを利用|特典を利用|オファー|特典|nhận ưu đãi|ưu đãi đặc biệt|ưu đãi|nâng cấp lên plus|thử miễn phí|nâng cấp|try for free|try plus|get plus|upgrade|continue|get offer|claim/i.test(t);
             }) || dialog.querySelector('button.btn-primary, button[data-testid*="upgrade"], button[data-testid*="claim"]');
 
             if (plusBtn) {
@@ -688,36 +697,7 @@ def extract_checkout_url_with_cloak(
                             time.sleep(2.0)
                             continue
 
-                # 6. 处于邮箱验证码 (OTP) 页面
-                is_otp_page = ("email-verification" in cur_url or "auth.openai.com/u/email-verification" in cur_url)
-                if not is_otp_page:
-                    is_otp_page = bool(driver.execute_script("""
-                        return !!document.querySelector('input[name="code"], input[autocomplete="one-time-code"], input[data-testid="otp-input"]');
-                    """))
-
-                if is_otp_page and (time.time() - last_otp_submit_ts > 30.0):
-                    _emit("等待接收邮箱验证码 (OTP)…")
-                    try:
-                        otp_code = wait_for_otp(email, after_ts=otp_after_ts, max_wait=40, force_service=True)
-                    except Exception as exc:
-                        exc_str = str(exc)
-                        if "D0004" in exc_str:
-                            raise RuntimeError(f"该账号关联的临时邮箱已过服务商保留期 (MailNest D0004)，无法接收验证码: {email}") from exc
-                        raise
-                    _emit("收到邮箱验证码，正在模拟输入…")
-                    _clear_otp_inputs(driver)
-                    _type_otp(driver, otp_code)
-                    time.sleep(1.0)
-                    try:
-                        _click_continue(driver)
-                    except Exception:
-                        pass
-                    last_otp_submit_ts = time.time()
-                    otp_submitted = True
-                    time.sleep(3.0)
-                    continue
-
-                # 7. 处于 TOTP 2FA 双因子验证挑战页面
+                # 6. 处于 TOTP 2FA 双因子验证挑战页面 (必须优先于 OTP 检测，因 MFA 挑战页面同样包含 one-time-code 输入框)
                 is_mfa_page = False
                 if any(k in cur_url.lower() for k in ["mfa", "challenge", "authenticator"]):
                     is_mfa_page = True
@@ -781,6 +761,42 @@ def extract_checkout_url_with_cloak(
                         time.sleep(2.0)
                     continue
 
+                # 7. 处于邮箱验证码 (OTP) 页面 (严格排除 MFA 页面及已跳转至主站页面的情况)
+                is_otp_page = ("email-verification" in cur_url or "auth.openai.com/u/email-verification" in cur_url)
+                if not is_otp_page and not is_mfa_page and "chatgpt.com" not in cur_url:
+                    is_otp_page = bool(driver.execute_script("""
+                        return !!document.querySelector('input[name="code"], input[autocomplete="one-time-code"], input[data-testid="otp-input"]');
+                    """))
+
+                if is_otp_page and (time.time() - last_otp_submit_ts > 30.0):
+                    _emit("等待接收邮箱验证码 (OTP)…")
+                    try:
+                        otp_code = wait_for_otp(email, after_ts=otp_after_ts, max_wait=40, force_service=True)
+                    except Exception as exc:
+                        exc_str = str(exc)
+                        if "D0004" in exc_str:
+                            raise RuntimeError(f"该账号关联的临时邮箱已过服务商保留期 (MailNest D0004)，无法接收验证码: {email}") from exc
+                        raise
+
+                    # 检查等待期间页面是否已经自动跳转完成登录
+                    cur_now = str(getattr(driver, "current_url", "") or "")
+                    if "chatgpt.com" in cur_now and "login" not in cur_now and "auth.openai.com" not in cur_now:
+                        _emit("页面已在等待期间自动完成登录跳转，跳过验证码输入…")
+                        continue
+
+                    _emit("收到邮箱验证码，正在模拟输入…")
+                    _clear_otp_inputs(driver)
+                    _type_otp(driver, otp_code)
+                    time.sleep(1.0)
+                    try:
+                        _click_continue(driver)
+                    except Exception:
+                        pass
+                    last_otp_submit_ts = time.time()
+                    otp_submitted = True
+                    time.sleep(3.0)
+                    continue
+
                 time.sleep(1.5)
 
             if not access_token:
@@ -824,16 +840,21 @@ def _run_extract(*, account_id: int, trigger: str = "manual") -> dict:
         return {"ok": False, "error": "账号不存在"}
 
     email = acc.get("email") or f"ID #{account_id}"
-    country_code = str(acc.get("country_code") or "").strip().upper()
+    original_country_code = str(acc.get("country_code") or "").strip().upper()
+    country_code = original_country_code or "JP"
 
-    # 用户明确指令：存量国别未知的账号（页面显示未知），一律先尝试使用日本代理
-    if not country_code:
-        country_code = "JP"
+    # 优先匹配同属地活跃代理；对于未标记国别的存量账号，优先 JP，若无活跃 JP 代理则平滑降级至任意活跃代理
+    matching_proxy = db.pick_proxy_by_country(country_code, strict=bool(original_country_code))
+    if not matching_proxy and not original_country_code:
+        matching_proxy = db.pick_proxy_by_country(country_code, strict=False)
+
+    if matching_proxy:
+        p_info = db.find_proxy_by_url(matching_proxy)
+        if p_info and p_info.get("country_code"):
+            country_code = str(p_info.get("country_code")).strip().upper()
 
     country_badge = format_country_badge(country_code, fallback_country=acc.get("country") or "")
 
-    # 严格匹配同属地活跃代理 (strict=True 绝不跨区回退)
-    matching_proxy = db.pick_proxy_by_country(country_code, strict=True)
     if not matching_proxy:
         msg = f"账号属地为【{country_badge}】，但代理池中暂无该属地活跃代理。为防风控拦截，已自动跳过提链。"
         logger.warning("[提链调度] 账号 %s %s", email, msg)
