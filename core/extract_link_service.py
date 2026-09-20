@@ -585,6 +585,14 @@ def extract_checkout_url_with_cloak(
                 if "error" in cur_url and "rate_limit" in cur_url:
                     raise RuntimeError("OpenAI 登录验证码发送过于频繁 (rate_limit_exceeded)，请稍后重试")
 
+                # 0.5. 检测并恢复网络错误页 (chrome-error / neterror)
+                if "chrome-error://" in cur_url or "about:neterror" in cur_url:
+                    _emit("检测到浏览器网络连接偶发异常 (chrome-error)，正在自动刷新恢复…")
+                    time.sleep(2.0)
+                    driver.refresh()
+                    time.sleep(3.0)
+                    continue
+
                 # 1. 穿透 Cloudflare 质询
                 if solve_cloudflare_challenge_if_present(driver, max_wait=15.0, emit_fn=_emit):
                     time.sleep(1.0)
