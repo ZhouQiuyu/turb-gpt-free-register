@@ -36,13 +36,22 @@ def get_currency_for_country(country: str) -> str:
     return "USD"
 
 
-def _execute_js_checkout(driver, access_token: str, account_id: str, country: str, currency: str) -> dict[str, Any]:
+def _execute_js_checkout(
+    driver: Any,
+    access_token: str,
+    account_id: str,
+    country: str,
+    currency: str,
+    promo_campaign_id: str = "",
+) -> dict[str, Any]:
+    """在当前已建立好边缘/盾环境的浏览器中，通过真实前端上下文发起原生 checkout 请求。"""
     js_checkout = """
     const done = arguments[arguments.length - 1];
     const token = arguments[0];
     const accountId = arguments[1];
     const country = arguments[2] || 'JP';
     const currency = arguments[3] || 'USD';
+    const promoCampaignId = arguments[4] || '';
 
     const body = {
         entry_point: 'all_plans_pricing_modal',
@@ -51,18 +60,19 @@ def _execute_js_checkout(driver, access_token: str, account_id: str, country: st
         billing_details: {
             country: country,
             currency: currency
-        },
-        promo_campaign: {
-            promo_campaign_id: 'plus-1-month-free',
-            is_coupon_from_query_param: false
         }
     };
 
+    if (promoCampaignId && promoCampaignId !== 'none') {
+        body.promo_campaign = {
+            promo_campaign_id: promoCampaignId,
+            is_coupon_from_query_param: false
+        };
+    }
+
     const headers = {
         'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + token,
-        'x-openai-target-path': '/backend-api/payments/checkout',
-        'x-openai-target-route': '/backend-api/payments/checkout'
+        'Authorization': 'Bearer ' + token
     };
     if (accountId) {
         headers['chatgpt-account-id'] = accountId;
@@ -89,11 +99,11 @@ def _execute_js_checkout(driver, access_token: str, account_id: str, country: st
         done({ ok: false, error: String(err) });
     });
     """
-    res = driver.execute_async_script(js_checkout, access_token, str(account_id or ""), country, currency)
-    if not res or not res.get("ok"):
-        # 尝试 custom 模式兜底
+    res = driver.execute_async_script(js_checkout, access_token, str(account_id or ""), country, currency, promo_campaign_id)
+    if not res or (not res.get("ok") and res.get("status") not in (400, 401)):
+        # 仅在非明确业务拦截时尝试 custom 模式兜底
         js_custom = js_checkout.replace("'checkout_ui_mode': 'hosted'", "'checkout_ui_mode': 'custom'")
-        res = driver.execute_async_script(js_custom, access_token, str(account_id or ""), country, currency)
+        res = driver.execute_async_script(js_custom, access_token, str(account_id or ""), country, currency, promo_campaign_id)
 
     if not res or not isinstance(res, dict):
         return {"ok": False, "error": "JS checkout returned invalid response"}
@@ -183,6 +193,11 @@ def extract_checkout_url_with_cloak(
     totp_secret = str(account.get("totp_secret") or "").strip()
     origin_country = str(account.get("country_code") or "JP").strip().upper() or "JP"
     currency = get_currency_for_country(origin_country)
+    promo_campaign_id = str(
+        account.get("plus_trial_campaign_id")
+        or account.get("promo_campaign_id")
+        or ""
+    ).strip()
     password = str(account.get("password") or account.get("account_password") or account.get("openai_password") or "").strip()
 
     # 本地校验 JWT 是否已过期
@@ -206,7 +221,7 @@ def extract_checkout_url_with_cloak(
             solve_cloudflare_challenge_if_present(driver, max_wait=15.0, emit_fn=_emit)
 
             _emit(f"正在通过真实浏览器环境发起【{origin_country}】原生结账申请…")
-            chk_res = _execute_js_checkout(driver, access_token, account_id, origin_country, currency)
+            chk_res = _execute_js_checkout(driver, access_token, account_id, origin_country, currency, promo_campaign_id=promo_campaign_id)
 
             # 1. 成功出链
             if chk_res.get("ok") and chk_res.get("url"):
@@ -475,7 +490,7 @@ def extract_checkout_url_with_cloak(
                 raise RuntimeError("指纹浏览器未能获取到有效 accessToken，登录未完成")
 
             _emit(f"指纹环境已鉴权，正在向 OpenAI 发起【{origin_country}】原生结账申请…")
-            chk_res = _execute_js_checkout(driver, access_token, account_id, origin_country, currency)
+            chk_res = _execute_js_checkout(driver, access_token, account_id, origin_country, currency, promo_campaign_id=promo_campaign_id)
             if chk_res.get("ok") and chk_res.get("url"):
                 return chk_res
             if chk_res.get("already_paid"):
@@ -501,14 +516,8 @@ def _run_extract(*, account_id: int, trigger: str = "manual") -> dict:
     email = acc.get("email") or f"ID #{account_id}"
     country_code = str(acc.get("country_code") or "").strip().upper()
 
-    # 若账号缺失属地代码，尝试从历史 proxy_used 反查
-    if not country_code and acc.get("proxy_used"):
-        p_info = db.find_proxy_by_url(acc["proxy_used"])
-        if p_info and p_info.get("country_code"):
-            country_code = p_info["country_code"].upper()
-
+    # 用户明确指令：存量国别未知的账号（页面显示未知），一律先尝试使用日本代理
     if not country_code:
-        # 存量默认兜底按日本试用处理
         country_code = "JP"
 
     country_badge = format_country_badge(country_code, fallback_country=acc.get("country") or "")
@@ -537,9 +546,12 @@ def _run_extract(*, account_id: int, trigger: str = "manual") -> dict:
         "message": f"正在通过【{country_badge}】代理启动指纹浏览器提链…",
     })
 
+    acc_for_extract = dict(acc)
+    acc_for_extract["country_code"] = country_code
+
     try:
         res = extract_checkout_url_with_cloak(
-            account=acc,
+            account=acc_for_extract,
             proxy_url=matching_proxy,
             log_cb=lambda msg: db.update_account_extract(account_id, {
                 "ok": False,
