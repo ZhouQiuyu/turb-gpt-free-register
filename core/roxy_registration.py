@@ -547,11 +547,11 @@ def _wait_for_email_input(driver, timeout: int | None = None):
         if solve_cloudflare_challenge_if_present(driver, max_wait=45.0):
             time.sleep(1.0)
             continue
-        # 如果遇到迎新/协议遮罩弹窗（如 dismiss-welcome, close-button），自动尝试关闭以暴露下层表单
+        # 如果遇到迎新/协议遮罩弹窗（如 close-button），自动尝试关闭以暴露下层表单
         try:
             driver.execute_script(r"""
             try {
-              const btn = document.querySelector('button.close-button, a[data-testid="dismiss-welcome"], [aria-label*="close" i], [aria-label*="dismiss" i]');
+              const btn = document.querySelector('button.close-button, [aria-label*="close" i], [aria-label*="dismiss" i]');
               if (btn && (btn.offsetWidth || btn.offsetHeight)) btn.click();
             } catch (_) {}
             """)
@@ -647,7 +647,7 @@ def _submit_nearest_form_for_active_input(driver) -> bool:
     const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
       && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'
       && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
-    const input = [...document.querySelectorAll('input[type="email"],input[name="email"],input[name="username"],input[autocomplete="email"]')]
+    const input = [...document.querySelectorAll('input[type="email"],input[name="email"],input[name="username"],input[autocomplete="email"],#email,input#email-input')]
       .find(visible);
     if (!input) return {ok:false, reason:'missing_email_input'};
     const value = String(input.value || '').trim();

@@ -67,9 +67,16 @@ def _execute_js_checkout(driver, access_token: str, account_id: str, country: st
     if (accountId) {
         headers['chatgpt-account-id'] = accountId;
     }
+    try {
+        const deviceId = localStorage.getItem('oai-device-id') || (document.cookie.match(/oai-device-id=([^;]+)/) || [])[1];
+        if (deviceId) {
+            headers['oai-device-id'] = deviceId;
+        }
+    } catch (_) {}
 
     fetch('https://chatgpt.com/backend-api/payments/checkout', {
         method: 'POST',
+        credentials: 'include',
         headers: headers,
         body: JSON.stringify(body)
     })
@@ -315,11 +322,26 @@ def extract_checkout_url_with_cloak(
                         _emit("正在提交账号邮箱…")
                         _type_email_address(driver, email, timeout=10)
                         time.sleep(0.8)
-                        _submit_nearest_form_for_active_input(driver)
-                        email_submitted = True
-                        otp_after_ts = time.time() - 2.0
-                        time.sleep(2.0)
-                        continue
+                        submitted = _submit_nearest_form_for_active_input(driver)
+                        if not submitted:
+                            try:
+                                clicked = driver.execute_script("""
+                                    const btn = document.querySelector('form button[type="submit"], button.btn-primary');
+                                    if (btn && (btn.offsetWidth || btn.offsetHeight)) {
+                                        btn.click();
+                                        return true;
+                                    }
+                                    return false;
+                                """)
+                                if clicked:
+                                    submitted = True
+                            except Exception:
+                                pass
+                        if submitted:
+                            email_submitted = True
+                            otp_after_ts = time.time() - 2.0
+                            time.sleep(2.0)
+                            continue
                     elif "auth.openai.com" in cur_url and not any(k in cur_url for k in ["login/password", "email-verification", "mfa", "challenge"]):
                         email_submitted = True
 
