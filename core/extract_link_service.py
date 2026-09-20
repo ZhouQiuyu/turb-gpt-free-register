@@ -551,29 +551,24 @@ def extract_checkout_url_with_cloak(
             time.sleep(2.0)
             solve_cloudflare_challenge_if_present(driver, max_wait=15.0, emit_fn=_emit)
 
-            _emit(f"正在通过真实浏览器环境发起【{origin_country}】原生结账申请…")
-            chk_res = _execute_js_checkout(driver, access_token, account_id, origin_country, currency, promo_campaign_id=promo_campaign_id)
+            # 校验浏览器当前是否已持有有效登录会话 (通过 /api/auth/session)
+            session_data = None
+            try:
+                session_data = _read_chatgpt_session_once(driver)
+            except Exception:
+                pass
 
-            # 1. 成功出链
-            if chk_res.get("ok") and chk_res.get("url"):
-                _emit("原生结账链接提取成功！")
-                return chk_res
-
-            # 2. 账号已是 Plus
-            if chk_res.get("already_paid"):
-                _emit("账号已是 Plus 会员")
-                return chk_res
-
-            # 3. 若返回 401，说明 token 实际已过期/被注销，准备进入阶段二登录流
-            if chk_res.get("unauthorized") or chk_res.get("status") == 401:
-                _emit("存量会话凭据已失效 (401)，正在切换至浏览器登录自愈流…")
-                access_token = ""
+            if session_data and session_data.get("accessToken"):
+                _emit(f"存量会话有效，正在通过拟人化操作向 OpenAI 发起【{origin_country}】原生试用提链…")
+                chk_res = _human_extract_checkout_url(driver, promo_campaign_id=promo_campaign_id, emit_fn=_emit, timeout=120.0)
+                if chk_res.get("ok") and chk_res.get("url"):
+                    return chk_res
+                if chk_res.get("already_paid"):
+                    return chk_res
+                _emit("存量会话拟人化提链未直接出链，进入登录自愈流…")
             else:
-                err_text = str(chk_res.get("error") or "")
-                if "already" in err_text.lower():
-                    return {"ok": True, "already_paid": True, "message": "账号已是 Plus 会员"}
-                _emit(f"会话直通申请未成功 ({err_text[:80]})，切换至完整登录重试…")
-                access_token = ""
+                _emit("存量会话在当前浏览器环境中未就绪，切换至完整登录流程…")
+            access_token = ""
 
         # -------------------------------------------------------------
         # 阶段二：浏览器完整登录自愈流 (自愈登录状态机)
@@ -833,10 +828,11 @@ def extract_checkout_url_with_cloak(
 
                 # 7. 处于邮箱验证码 (OTP) 页面 (严格排除 MFA 页面及已跳转至主站页面的情况)
                 is_otp_page = ("email-verification" in cur_url or "auth.openai.com/u/email-verification" in cur_url)
-                if not is_otp_page and not is_mfa_page and "chatgpt.com" not in cur_url:
+                if not is_otp_page and not is_mfa_page:
                     try:
                         is_otp_page = bool(driver.execute_script("""
-                            return !!document.querySelector('input[name="code"], input[autocomplete="one-time-code"], input[data-testid="otp-input"]');
+                            const inps = [...document.querySelectorAll('input[name="code"], input[autocomplete="one-time-code"], input[data-testid="otp-input"], input[inputmode="numeric"]')];
+                            return inps.some(el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length));
                         """))
                     except Exception:
                         is_otp_page = False
@@ -895,6 +891,16 @@ def extract_checkout_url_with_cloak(
                 account_id = (session_info.get("account") or {}).get("id") or account_id
 
             if not access_token:
+                try:
+                    from pathlib import Path
+                    screenshots_dir = Path("/app/注册日志/screenshots")
+                    screenshots_dir.mkdir(parents=True, exist_ok=True)
+                    shot_path = screenshots_dir / f"login_fail_{email}_{int(time.time())}.png"
+                    driver.save_screenshot(str(shot_path))
+                    cur = str(getattr(driver, "current_url", "") or "")
+                    logger.info("[提链] 登录未完成，现场快照已保存至 %s (url=%s)", shot_path, cur)
+                except Exception:
+                    pass
                 raise RuntimeError("指纹浏览器未能获取到有效 accessToken，登录未完成")
 
             _emit(f"指纹环境已鉴权，正在通过拟人化操作向 OpenAI 发起【{origin_country}】原生试用提链…")
@@ -904,16 +910,29 @@ def extract_checkout_url_with_cloak(
             if chk_res.get("already_paid"):
                 return chk_res
 
-            _emit("拟人化未直接出链，尝试通过页面上下文协议兜底…")
-            chk_res = _execute_js_checkout(driver, access_token, account_id, origin_country, currency, promo_campaign_id=promo_campaign_id)
-            if chk_res.get("ok") and chk_res.get("url"):
-                return chk_res
-            if chk_res.get("already_paid"):
-                return chk_res
-            err_msg = str(chk_res.get("data") or chk_res.get("error") or "")
-            if "already" in err_msg.lower() or "active_subscription" in err_msg.lower():
-                return {"ok": True, "already_paid": True, "url": None, "message": "账号已是 Plus 会员"}
-            raise RuntimeError(f"结账申请返回异常: {str(chk_res)[:200]}")
+            # 拟人化提链未出链，保存现场截图并报错，坚决不退回协议请求
+            try:
+                from pathlib import Path
+                screenshots_dir = Path("/app/注册日志/screenshots")
+                screenshots_dir.mkdir(parents=True, exist_ok=True)
+                shot_path = screenshots_dir / f"extract_fail_{email}_{int(time.time())}.png"
+                driver.save_screenshot(str(shot_path))
+                logger.info("[提链] 拟人化提链失败，现场快照已保存至 %s", shot_path)
+            except Exception:
+                pass
+            raise RuntimeError(f"指纹浏览器拟人化提链未能成功捕获 Stripe 链接: {str(chk_res)[:200]}")
+    except Exception as exc:
+        try:
+            if driver:
+                from pathlib import Path
+                screenshots_dir = Path("/app/注册日志/screenshots")
+                screenshots_dir.mkdir(parents=True, exist_ok=True)
+                shot_path = screenshots_dir / f"extract_error_{email}_{int(time.time())}.png"
+                driver.save_screenshot(str(shot_path))
+                logger.info("[提链] 提链异常，现场快照已保存至 %s", shot_path)
+        except Exception:
+            pass
+        raise
     finally:
         if driver:
             try:

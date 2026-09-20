@@ -1851,6 +1851,9 @@ def _click_passwordless_signup_if_present(driver) -> dict:
             text.includes('メールでコード') ||
             text.includes('ワンタイムコード') ||
             text.includes('認証コード') ||
+            text.includes('mã một lần') ||
+            text.includes('mã xác minh') ||
+            (text.includes('mã') && text.includes('một lần')) ||
             text.includes('useonetimeregistrationcode') ||
             text.includes('useaone-timecodetosignup') ||
             text.includes('useaone-timecodetoregister') ||
