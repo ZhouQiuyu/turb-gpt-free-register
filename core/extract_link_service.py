@@ -122,7 +122,7 @@ def _human_extract_checkout_url(
 
     # 3. 定位并点击侧边栏 / 菜单「Claim offer / Upgrade / オファー / 特典」按钮
     _emit("正在寻找并点击侧边栏 / 菜单「Claim offer / Upgrade / オファー」入口…")
-    upgrade_clicked = driver.execute_script("""
+    upgrade_info = driver.execute_script("""
         const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight);
         const selectors = [
             'button[aria-label*="Claim offer"]',
@@ -142,8 +142,8 @@ def _human_extract_checkout_url(
             const el = document.querySelector(sel);
             if (el && visible(el)) {
                 el.scrollIntoView({ block: 'center' });
-                el.click();
-                return { ok: true, selector: sel, text: el.innerText.trim() };
+                const r = el.getBoundingClientRect();
+                return { ok: true, selector: sel, text: el.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
             }
         }
         const allButtons = [...document.querySelectorAll('button, a, div[role="button"]')].filter(visible);
@@ -163,12 +163,21 @@ def _human_extract_checkout_url(
         });
         if (targetBtn) {
             targetBtn.scrollIntoView({ block: 'center' });
-            targetBtn.click();
-            return { ok: true, text: targetBtn.innerText.trim() };
+            const r = targetBtn.getBoundingClientRect();
+            return { ok: true, text: targetBtn.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
         }
         return { ok: false };
     """)
-    logger.info("[提链-拟人化] 点击升级/优惠入口结果: %s", upgrade_clicked)
+    logger.info("[提链-拟人化] 定位升级/优惠入口: %s", upgrade_info)
+    if upgrade_info and upgrade_info.get("ok") and upgrade_info.get("x") and upgrade_info.get("y"):
+        x = float(upgrade_info["x"])
+        y = float(upgrade_info["y"])
+        if page and hasattr(page, "mouse") and x > 0 and y > 0:
+            page.mouse.move(x, y)
+            time.sleep(0.08)
+            page.mouse.down()
+            time.sleep(0.06)
+            page.mouse.up()
 
     time.sleep(2.5)
     if stripe_url:
@@ -189,8 +198,9 @@ def _human_extract_checkout_url(
 
     if not modal_opened and not stripe_url:
         # 尝试在个人菜单中点击 Upgrade / Claim 项
-        menu_clicked = driver.execute_script("""
-            const menuItems = [...document.querySelectorAll('[role="menuitem"], button, div')];
+        menu_info = driver.execute_script("""
+            const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight);
+            const menuItems = [...document.querySelectorAll('[role="menuitem"], button, div')].filter(visible);
             const upgradeItem = menuItems.find(el => {
                 const t = (el.innerText || '').toLowerCase();
                 return (
@@ -204,18 +214,32 @@ def _human_extract_checkout_url(
                 ) && !t.includes('login');
             });
             if (upgradeItem) {
-                upgradeItem.click();
-                return { ok: true, text: upgradeItem.innerText.trim() };
+                upgradeItem.scrollIntoView({ block: 'center' });
+                const r = upgradeItem.getBoundingClientRect();
+                return { ok: true, text: upgradeItem.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
             }
             return { ok: false };
         """)
-        logger.info("[提链-拟人化] 个人菜单点击结果: %s", menu_clicked)
+        logger.info("[提链-拟人化] 个人菜单定位结果: %s", menu_info)
+        if menu_info and menu_info.get("ok") and menu_info.get("x") and menu_info.get("y"):
+            if page and hasattr(page, "mouse"):
+                page.mouse.move(float(menu_info["x"]), float(menu_info["y"]))
+                time.sleep(0.08)
+                page.mouse.down()
+                time.sleep(0.06)
+                page.mouse.up()
         time.sleep(2.5)
 
-    # 5. 在定价 / 优惠弹窗中点击确认按钮 (兼容中日英全语种)
+    # 保存弹窗截图供排查
+    try:
+        driver.save_screenshot("/tmp/extract_modal.png")
+    except Exception:
+        pass
+
+    # 5. 在定价 / 优惠弹窗中点击确认按钮 (执行真实鼠标坐标点击，触发 React 与 isTrusted 事件)
     if not stripe_url:
         _emit("正在定价/优惠弹窗中点击 Plus 试用确认按钮…")
-        btn_clicked = driver.execute_script("""
+        btn_info = driver.execute_script("""
             const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight);
             const dialog = document.querySelector('div[role="dialog"], div[aria-modal="true"]') || document.body;
             const buttons = [...dialog.querySelectorAll('button')].filter(visible);
@@ -224,24 +248,38 @@ def _human_extract_checkout_url(
             const plusBtn = buttons.find(b => {
                 const t = (b.innerText || '').trim();
                 return /claim offer|claim special offer|special offer|upgrade to plus|plus を試す|無料で試す|plus にアップグレード|特別オファー|オファーを受け取る|特典を受け取る|オファーを利用|特典を利用|オファー|特典|try for free|try plus|get plus|upgrade|continue|get offer|claim/i.test(t);
-            });
+            }) || dialog.querySelector('button.btn-primary, button[data-testid*="upgrade"], button[data-testid*="claim"]');
+
             if (plusBtn) {
                 plusBtn.scrollIntoView({ block: 'center' });
-                plusBtn.click();
-                return { ok: true, text: plusBtn.innerText.trim() };
-            }
-
-            // 兜底匹配弹窗中的 primary 按钮
-            const primaryBtn = dialog.querySelector('button.btn-primary, button[data-testid*="upgrade"], button[data-testid*="claim"]');
-            if (primaryBtn && visible(primaryBtn)) {
-                primaryBtn.scrollIntoView({ block: 'center' });
-                primaryBtn.click();
-                return { ok: true, text: primaryBtn.innerText.trim(), reason: 'primary_button' };
+                const r = plusBtn.getBoundingClientRect();
+                return {
+                    ok: true,
+                    text: plusBtn.innerText.trim(),
+                    x: r.left + r.width / 2,
+                    y: r.top + r.height / 2
+                };
             }
 
             return { ok: false, all_buttons: buttons.map(b => b.innerText.trim()).filter(Boolean) };
         """)
-        logger.info("[提链-拟人化] 弹窗内确认按钮点击结果: %s", btn_clicked)
+        logger.info("[提链-拟人化] 弹窗内确认按钮定位: %s", btn_info)
+        if btn_info and btn_info.get("ok") and btn_info.get("x") and btn_info.get("y"):
+            x = float(btn_info["x"])
+            y = float(btn_info["y"])
+            if page and hasattr(page, "mouse") and x > 0 and y > 0:
+                logger.info("[提链-拟人化] 执行真实鼠标轨迹点击按钮 '%s' at (%s, %s)", btn_info.get("text"), x, y)
+                page.mouse.move(x, y)
+                time.sleep(0.1)
+                page.mouse.down()
+                time.sleep(0.08)
+                page.mouse.up()
+            else:
+                driver.execute_script("""
+                    const dialog = document.querySelector('div[role="dialog"], div[aria-modal="true"]') || document.body;
+                    const btn = dialog.querySelector('button');
+                    if (btn) btn.click();
+                """)
 
     # 6. 等待捕获 Stripe Checkout 链接 (Sentinel PoW 计算需 40~90s)
     _emit("等待官方生成 Stripe 结账链接 (含 Sentinel 人机对抗计算，最长等待 120 秒)…")
