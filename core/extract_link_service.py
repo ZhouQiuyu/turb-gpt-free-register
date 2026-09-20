@@ -568,6 +568,27 @@ def extract_checkout_url_with_cloak(
                     time.sleep(1.0)
                     continue
 
+                # 1.5. 检测并恢复 OpenAI 认证页 500 / Route Error / 不明なエラーが発生しました
+                is_route_error = driver.execute_script("""
+                    const t = (document.body ? document.body.innerText : '').toLowerCase();
+                    if (t.includes('route error') || t.includes('500 internal server') || t.includes('不明なエラーが発生しました')) {
+                        const btn = [...document.querySelectorAll('button')].find(b => /try again|もう一度試す/i.test(b.innerText || ''));
+                        if (btn && (btn.offsetWidth || btn.offsetHeight)) {
+                            btn.click();
+                            return 'clicked_try_again';
+                        }
+                        return 'need_refresh';
+                    }
+                    return null;
+                """)
+                if is_route_error:
+                    _emit(f"检测到 OpenAI 认证页临时异常 ({is_route_error})，正在自动重试恢复…")
+                    time.sleep(2.0)
+                    if is_route_error == "need_refresh":
+                        driver.refresh()
+                    time.sleep(3.0)
+                    continue
+
                 # 2. 真实登录态判定 (严禁仅凭 cur_url 包含 chatgpt.com 判断！)
                 session_data = None
                 try:
