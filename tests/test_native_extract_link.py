@@ -317,20 +317,20 @@ class TestNativeExtractLink(unittest.TestCase):
         self.assertTrue(res.get("unauthorized"))
         self.assertEqual(res.get("status"), 401)
 
+    @patch("core.extract_link_service._human_extract_checkout_url")
+    @patch("core.extract_link_service._read_chatgpt_session_once")
     @patch("core.cloakbrowser_driver.build_cloak_driver")
     @patch("core.extract_link_service.solve_cloudflare_challenge_if_present")
-    def test_extract_checkout_url_with_cloak_session_first(self, mock_solve_cf, mock_build_driver):
+    def test_extract_checkout_url_with_cloak_session_first(self, mock_solve_cf, mock_build_driver, mock_read_session, mock_human_extract):
         mock_driver = MagicMock()
         mock_build_driver.return_value = (mock_driver, None)
-        mock_driver.execute_async_script.return_value = {
-            "ok": True,
-            "status": 200,
-            "data": {
-                "url": "https://checkout.stripe.com/c/pay/cs_direct_success",
-                "checkout_session_id": "cs_direct_success",
-            },
-        }
         mock_solve_cf.return_value = False
+        mock_read_session.return_value = {"accessToken": "valid_token", "account": {"id": "acc_direct"}}
+        mock_human_extract.return_value = {
+            "ok": True,
+            "url": "https://checkout.stripe.com/c/pay/cs_direct_success",
+            "checkout_session_id": "cs_direct_success",
+        }
 
         account = {
             "id": 1,
@@ -351,6 +351,7 @@ class TestNativeExtractLink(unittest.TestCase):
         self.assertTrue(res["ok"])
         self.assertEqual(res["url"], "https://checkout.stripe.com/c/pay/cs_direct_success")
         mock_driver.get.assert_called_with("https://chatgpt.com/")
+        mock_human_extract.assert_called_once()
         # Ensure it didn't navigate to login page
         for call in mock_driver.get.call_args_list:
             self.assertNotIn("auth/login", call[0][0])

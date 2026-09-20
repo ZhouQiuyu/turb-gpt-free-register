@@ -15,7 +15,19 @@ from typing import Any
 
 from core import db
 from core.cloudflare_solver import solve_cloudflare_challenge_if_present
+from core.email_provider import wait_for_otp
 from core.geo_utils import format_country_badge, get_country_badge_info
+from core.roxy_registration import (
+    _clear_otp_inputs,
+    _click_continue,
+    _click_passwordless_signup_if_present,
+    _fetch_chatgpt_session,
+    _find_visible_email_input_js,
+    _read_chatgpt_session_once,
+    _submit_nearest_form_for_active_input,
+    _type_email_address,
+    _type_otp,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +123,10 @@ def _human_extract_checkout_url(
     try:
         driver.execute_script("""
             const btns = [...document.querySelectorAll('button')];
-            const gotIt = btns.find(b => /got it|了解|閉じる|dismiss|close/i.test(b.innerText || ''));
+            const gotIt = btns.find(b => {
+                const t = (b.innerText || '').trim().toLowerCase();
+                return /^(got it|了解|閉じる|dismiss|close|đóng|bỏ qua)$/i.test(t);
+            });
             if (gotIt && (gotIt.offsetWidth || gotIt.offsetHeight)) {
                 gotIt.click();
             }
@@ -120,88 +135,123 @@ def _human_extract_checkout_url(
     except Exception:
         pass
 
-    # 3. 定位并点击侧边栏 / 菜单「Claim offer / Upgrade / オファー / 特典」按钮
-    _emit("正在寻找并点击侧边栏 / 菜单「Claim offer / Upgrade / オファー」入口…")
-    def _find_plus_trial_btn():
+    # 3. 定义精准定位函数：弹窗内试用确认动作按钮 vs 外部唤起入口按钮
+    def _find_modal_action_btn():
+        """
+        在已弹出的定价弹窗中定位真实的 Plus 试用提交/确认按钮。
+        关键区分：
+        - 弹窗内动作按钮：【特別オファーを利用する】/【Dùng thử ưu đãi đặc biệt】/【Claim special offer】
+        - 外部侧边栏入口：【オファーを受け取る】/【Nhận ưu đãi】/【Claim offer】
+        坚决排除 Free / Go / Pro 套餐按钮，且排除外部“受け取る/nhận”类入口按钮。
+        """
         return driver.execute_script(r"""
-            const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
-            const buttons = [...document.querySelectorAll('button, div[role="button"], a[role="button"]')].filter(visible);
+            const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || (el.getClientRects && el.getClientRects().length));
+            const allButtons = [...document.querySelectorAll('button, div[role="button"], a[role="button"]')].filter(visible);
 
-            // 优先匹配包含明确优惠 / 试用动作的按钮（中英日越全覆盖，且坚决排除 Go / Pro / Team / 当前套餐）
-            const plusBtn = buttons.find(b => {
-                const t = (b.innerText || '').trim().toLowerCase();
-                if (/(?:^|\s)(?:go|pro|team|business|enterprise)(?:\s|$)/.test(t) && !t.includes('plus')) {
-                    return false;
+            // 1. 优先在 dialog / modal 弹窗容器内寻找
+            const dialogs = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], [data-state="open"], .modal')].filter(visible);
+            for (const dialog of dialogs) {
+                const dialogBtns = [...dialog.querySelectorAll('button, div[role="button"], a[role="button"]')].filter(visible);
+                const btn = dialogBtns.find(b => {
+                    const t = (b.innerText || '').trim().toLowerCase();
+                    if (/閉じる|close|cancel|hủy|bỏ qua/i.test(t)) return false;
+                    if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中のプラン') || t.includes('current plan')) return false;
+                    if (/(?:^|\s)(?:go|pro|team|business|enterprise)(?:\s|$)/.test(t) && !t.includes('plus')) return false;
+
+                    // 精准动作关键词 (JP/VN/EN)
+                    return /特別オファーを利用|オファーを利用|特典を利用|利用する|plus を試す|無料で試す|dùng thử ưu đãi đặc biệt|dùng thử plus|ưu đãi đặc biệt|claim special offer|try special offer|try plus|start trial|claim offer/i.test(t);
+                }) || dialogBtns.find(b => {
+                    // 弹窗内 ChatGPT Plus 卡片内部的按钮
+                    const card = b.closest('div, section');
+                    const cardText = card ? (card.innerText || '').toLowerCase() : '';
+                    const t = (b.innerText || '').trim().toLowerCase();
+                    if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中のプラン')) return false;
+                    return (cardText.includes('chatgpt plus') || cardText.includes('plus')) &&
+                           /利用|dùng thử|try|claim|start|get/i.test(t);
+                }) || dialogBtns.find(b => {
+                    // 弹窗内主要蓝色/高亮按钮 (非当前套餐和关闭)
+                    const style = window.getComputedStyle(b);
+                    const bg = style.backgroundColor || '';
+                    const t = (b.innerText || '').trim().toLowerCase();
+                    if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中のプラン')) return false;
+                    const isBlue = bg.includes('37, 99, 235') || bg.includes('16, 163, 127') || (bg.includes('rgb(') && !bg.includes('255, 255, 255') && !bg.includes('0, 0, 0'));
+                    return isBlue && /オファー|特典|plus|ưu đãi|trial|offer/i.test(t);
+                });
+
+                if (btn) {
+                    btn.scrollIntoView({ block: 'center' });
+                    const r = btn.getBoundingClientRect();
+                    return {
+                        ok: true,
+                        in_dialog: true,
+                        text: btn.innerText.trim(),
+                        x: r.left + r.width / 2,
+                        y: r.top + r.height / 2
+                    };
                 }
-                if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('miễn phí')) {
-                    return false;
-                }
-                return /dùng thử ưu đãi đặc biệt|ưu đãi đặc biệt|dùng thử plus|nâng cấp lên plus|claim special offer|special offer|try special offer|claim offer|upgrade to plus|plus を試す|無料で試す|plus にアップグレード|特別オファー|オファーを受け取る|特典を受け取る|オファーを利用|特典を利用|オファー|特典|try for free|try plus|get plus|get offer|claim/i.test(t);
-            }) || buttons.find(b => {
+            }
+
+            // 2. 若无 dialog 容器标示，全局检索具有明确提交语义的按钮 (严格排除单纯的“受け取る/nhận”侧边栏入口)
+            const globalBtn = allButtons.find(b => {
                 const t = (b.innerText || '').trim().toLowerCase();
-                if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('miễn phí')) return false;
-                return /plus|ưu đãi|オファー|特典|offer/i.test(t);
+                if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中のプラン') || t.includes('current plan')) return false;
+                if (/閉じる|close|cancel|hủy|bỏ qua/i.test(t)) return false;
+                // 重点：必须是“利用/Dùng thử/Try/Special offer”，排除纯侧栏入口
+                return /特別オファーを利用|オファーを利用|特典を利用|plus を試す|無料で試す|dùng thử ưu đãi đặc biệt|dùng thử plus|claim special offer|try special offer/i.test(t);
             });
 
-            if (plusBtn) {
-                plusBtn.scrollIntoView({ block: 'center' });
-                const r = plusBtn.getBoundingClientRect();
+            if (globalBtn) {
+                globalBtn.scrollIntoView({ block: 'center' });
+                const r = globalBtn.getBoundingClientRect();
                 return {
                     ok: true,
-                    text: plusBtn.innerText.trim(),
+                    in_dialog: false,
+                    text: globalBtn.innerText.trim(),
                     x: r.left + r.width / 2,
                     y: r.top + r.height / 2
                 };
             }
-            return { ok: false, all_buttons: buttons.map(b => b.innerText.trim()).filter(Boolean) };
+
+            return { ok: false, all_buttons: allButtons.map(b => b.innerText.trim()).filter(Boolean) };
         """)
 
-    # 3. 循环等待并定位试用确认按钮（代理环境下 SPA 页面加载与渲染需要 10~30 秒）
-    _emit("等待 ChatGPT 渲染定价与优惠弹窗…")
-    btn_info = {"ok": False}
-    t_find_end = time.time() + 30.0
-    while time.time() < t_find_end:
-        btn_info = _find_plus_trial_btn()
-        if btn_info.get("ok"):
-            logger.info("[提链-拟人化] 成功检测到试用确认按钮: %s", btn_info)
-            break
-        time.sleep(2.0)
-
-    # 4. 若等待 30 秒仍未自动出现弹窗，尝试寻找侧边栏或左下角菜单
-    if not btn_info.get("ok") and not stripe_url:
-        _emit("未见直接弹窗，正在寻找侧边栏「Claim offer / Upgrade」或展开账户菜单…")
-        upgrade_info = driver.execute_script("""
+    def _find_pricing_entry_btn():
+        """
+        在页面主界面/侧边栏中定位唤出定价弹窗的入口按钮。
+        例如侧边栏的「オファーを受け取る」/「Nhận ưu đãi」/「アップグレード」/「Upgrade」。
+        """
+        return driver.execute_script(r"""
             const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight);
             const allButtons = [...document.querySelectorAll('button, a, div[role="button"]')].filter(visible);
 
-            // 1. 优先直接匹配页面上所有包含专属优惠/试用关键词的按钮 (中英日越)
-            const targetBtn = allButtons.find(b => {
+            // 1. 匹配侧边栏横幅/专属优惠入口 (中英日越)
+            const entryBtn = allButtons.find(b => {
                 const t = (b.innerText || '').trim().toLowerCase();
+                if (t.includes('login') || t.includes('signin') || t.includes('lên go') || t.includes('lên pro')) return false;
                 return (
-                    t.includes('nhận ưu đãi') ||
-                    t.includes('claim offer') ||
                     t.includes('オファーを受け取る') ||
                     t.includes('特典を受け取る') ||
-                    t.includes('claim') ||
-                    t.includes('offer') ||
-                    t.includes('ưu đãi') ||
-                    t.includes('特典') ||
-                    t.includes('オファー') ||
-                    t.includes('upgrade to plus') ||
+                    t.includes('nhận ưu đãi') ||
+                    t.includes('claim offer') ||
+                    t.includes('get offer') ||
+                    t.includes('特別オファー') ||
+                    t.includes('ưu đãi đặc biệt') ||
                     t.includes('plus にアップグレード') ||
+                    t.includes('upgrade to plus') ||
                     t.includes('nâng cấp lên plus') ||
-                    t.includes('upgrade') ||
                     t.includes('アップグレード') ||
+                    t.includes('upgrade') ||
                     t.includes('nâng cấp')
-                ) && !t.includes('login') && !t.includes('signin') && !t.includes('lên go') && !t.includes('lên pro');
+                );
             });
-            if (targetBtn) {
-                targetBtn.scrollIntoView({ block: 'center' });
-                const r = targetBtn.getBoundingClientRect();
-                return { ok: true, text: targetBtn.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
+
+            if (entryBtn) {
+                entryBtn.scrollIntoView({ block: 'center' });
+                const r = entryBtn.getBoundingClientRect();
+                return { ok: true, text: entryBtn.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
             }
 
-            // 2. 备用常见选择器
+            // 2. 选择器备用匹配
             const selectors = [
                 'button[aria-label*="Claim offer"]',
                 'button[aria-label*="オファー"]',
@@ -220,29 +270,53 @@ def _human_extract_checkout_url(
                 if (el && visible(el)) {
                     el.scrollIntoView({ block: 'center' });
                     const r = el.getBoundingClientRect();
-                    return { ok: true, selector: sel, text: el.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
+                    return { ok: true, text: el.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
                 }
             }
             return { ok: false };
         """)
-        logger.info("[提链-拟人化] 定位升级/优惠入口: %s", upgrade_info)
-        if upgrade_info and upgrade_info.get("ok") and upgrade_info.get("x") and upgrade_info.get("y"):
-            x = float(upgrade_info["x"])
-            y = float(upgrade_info["y"])
+
+    # 4. 阶段一：等待并确认定价弹窗是否已展开
+    _emit("等待 ChatGPT 渲染定价与优惠弹窗…")
+    btn_info = {"ok": False}
+    t_find_end = time.time() + 15.0
+    while time.time() < t_find_end:
+        btn_info = _find_modal_action_btn()
+        if btn_info.get("ok"):
+            logger.info("[提链-拟人化] 定价弹窗已就绪，检测到确认按钮: %s", btn_info)
+            break
+        time.sleep(1.5)
+
+    # 5. 阶段二：若弹窗未自动弹出，点击侧边栏 / 菜单「Claim offer / Upgrade」唤出弹窗
+    if not btn_info.get("ok") and not stripe_url:
+        _emit("未见直接弹窗，正在寻找侧边栏「Claim offer / Upgrade / オファー」入口…")
+        entry_info = _find_pricing_entry_btn()
+        logger.info("[提链-拟人化] 定位侧边栏升级/优惠入口: %s", entry_info)
+        if entry_info.get("ok") and entry_info.get("x") and entry_info.get("y"):
+            _emit(f"点击侧边栏入口【{entry_info.get('text')}】唤出定价弹窗…")
+            x = float(entry_info["x"])
+            y = float(entry_info["y"])
             if page and hasattr(page, "mouse") and x > 0 and y > 0:
                 page.mouse.move(x, y)
                 time.sleep(0.08)
                 page.mouse.down()
                 time.sleep(0.06)
                 page.mouse.up()
-            time.sleep(2.5)
+            time.sleep(3.0)
 
-        btn_info = _find_plus_trial_btn()
+            # 点击侧边栏后，循环等待弹窗及确认按钮渲染
+            t_modal_wait = time.time() + 20.0
+            while time.time() < t_modal_wait:
+                btn_info = _find_modal_action_btn()
+                if btn_info.get("ok"):
+                    logger.info("[提链-拟人化] 点击侧边栏入口后成功唤出弹窗，锁定确认按钮: %s", btn_info)
+                    break
+                time.sleep(1.5)
 
     if stripe_url:
         return {"ok": True, "url": stripe_url, "checkout_session_id": stripe_url.split("/")[-1]}
 
-    # 4.5. 若弹窗仍未打开，点击左下角个人信息/用户菜单唤出菜单，并点击升级项
+    # 6. 阶段三：若仍未弹出，尝试左下角个人信息/用户菜单
     if not btn_info.get("ok") and not stripe_url:
         _emit("未见直接弹窗，正在展开左下角账户菜单以触发升级入口…")
         profile_btn_info = driver.execute_script("""
@@ -269,7 +343,6 @@ def _human_extract_checkout_url(
                 page.mouse.up()
             time.sleep(1.5)
 
-            # 在展开的个人菜单中点击 Upgrade / Nâng cấp / Claim 项
             menu_info = driver.execute_script("""
                 const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight);
                 const menuItems = [...document.querySelectorAll('[role="menuitem"], div[role="button"], button, a')].filter(visible);
@@ -303,10 +376,9 @@ def _human_extract_checkout_url(
                     page.mouse.up()
             time.sleep(3.0)
 
-            # 点击菜单后循环等待弹窗渲染
             t_menu_wait = time.time() + 15.0
             while time.time() < t_menu_wait:
-                btn_info = _find_plus_trial_btn()
+                btn_info = _find_modal_action_btn()
                 if btn_info.get("ok"):
                     break
                 time.sleep(1.5)
@@ -314,9 +386,9 @@ def _human_extract_checkout_url(
     if stripe_url:
         return {"ok": True, "url": stripe_url, "checkout_session_id": stripe_url.split("/")[-1]}
 
-    # 5. 执行拟人化真实鼠标点击
+    # 7. 阶段四：定位到试用确认按钮，执行真实鼠标轨迹点击
     if not btn_info.get("ok"):
-        btn_info = _find_plus_trial_btn()
+        btn_info = _find_modal_action_btn()
 
     if not btn_info.get("ok"):
         try:
@@ -333,24 +405,25 @@ def _human_extract_checkout_url(
     _emit(f"已锁定 Plus 试用确认按钮【{btn_info.get('text')}】，正在模拟真实鼠标点击…")
     x = float(btn_info["x"])
     y = float(btn_info["y"])
-    logger.info("[提链-拟人化] 执行真实鼠标轨迹点击按钮 '%s' at (%s, %s)", btn_info.get("text"), x, y)
+    logger.info("[提链-拟人化] 执行真实鼠标轨迹点击试用确认按钮 '%s' at (%s, %s)", btn_info.get("text"), x, y)
     if page and hasattr(page, "mouse") and x > 0 and y > 0:
         page.mouse.move(x, y)
-        time.sleep(0.1)
+        time.sleep(0.12)
         page.mouse.down()
         time.sleep(0.08)
         page.mouse.up()
     else:
         driver.execute_script("""
             const buttons = [...document.querySelectorAll('button, div[role="button"]')];
-            const b = buttons.find(el => /dùng thử|plus|claim|offer/i.test(el.innerText || ''));
+            const b = buttons.find(el => /特別オファーを利用|dùng thử|claim.*offer|try.*offer/i.test(el.innerText || ''));
             if (b) b.click();
         """)
 
-    # 6. 等待捕获 Stripe Checkout 链接 (Sentinel PoW 计算需 40~90s)
+    # 8. 阶段五：等待捕获 Stripe Checkout 链接 (Sentinel PoW 计算需 30~80s)
     _emit("等待官方生成 Stripe 结账链接 (含 Sentinel 人机对抗计算，最长等待 120 秒)…")
     logger.info("[提链-拟人化] 开始等待 Stripe 链接生成 (最长 120s)…")
     wait_start = time.time()
+    reclick_attempted = False
     while time.time() - wait_start < timeout:
         if stripe_url:
             break
@@ -358,6 +431,21 @@ def _human_extract_checkout_url(
         if "checkout.stripe.com" in cur:
             stripe_url = cur
             break
+
+        # 兜底：若 10 秒后未见任何网络请求或跳转且按钮仍可点击，轻微偏移再次模拟点击
+        if not reclick_attempted and (time.time() - wait_start > 10.0) and not checkout_response_data:
+            check_again = _find_modal_action_btn()
+            if check_again.get("ok") and check_again.get("x") and check_again.get("y"):
+                logger.info("[提链-拟人化] 首次点击可能未被触发，尝试轻微偏移再次点击确认按钮...")
+                _emit("正在确保试用确认点击已触发…")
+                if page and hasattr(page, "mouse"):
+                    page.mouse.move(float(check_again["x"]) + 2, float(check_again["y"]) + 2)
+                    time.sleep(0.1)
+                    page.mouse.down()
+                    time.sleep(0.08)
+                    page.mouse.up()
+            reclick_attempted = True
+
         time.sleep(1.0)
 
     if not stripe_url:
@@ -373,6 +461,16 @@ def _human_extract_checkout_url(
         err_msg = str(checkout_response_data.get("error") or checkout_response_data.get("detail") or "")
         if "already" in err_msg.lower() or "active_subscription" in err_msg.lower():
             return {"ok": True, "already_paid": True, "message": "账号已是 Plus 会员"}
+
+    try:
+        from pathlib import Path
+        screenshots_dir = Path("/app/注册日志/screenshots")
+        screenshots_dir.mkdir(parents=True, exist_ok=True)
+        shot_path = screenshots_dir / f"extract_fail_{int(time.time())}.png"
+        driver.save_screenshot(str(shot_path))
+        logger.info("[提链-拟人化] 未能出链，现场快照已保存至 %s", shot_path)
+    except Exception:
+        pass
 
     logger.warning("[提链-拟人化] 未能通过拟人化操作捕获到链接，当前 URL: %s, 响应: %s", getattr(driver, "current_url", ""), checkout_response_data)
     return {"ok": False, "error": "未能通过拟人化操作捕获到 Stripe 结账链接"}
@@ -588,19 +686,6 @@ def extract_checkout_url_with_cloak(
         # 阶段二：浏览器完整登录自愈流 (自愈登录状态机)
         # -------------------------------------------------------------
         if not access_token:
-            from core.roxy_registration import (
-                _find_visible_email_input_js,
-                _type_email_address,
-                _submit_nearest_form_for_active_input,
-                _clear_otp_inputs,
-                _type_otp,
-                _click_continue,
-                _click_passwordless_signup_if_present,
-                _fetch_chatgpt_session,
-                _read_chatgpt_session_once,
-            )
-            from core.email_provider import wait_for_otp
-
             _emit(f"正在打开 ChatGPT 登录页以建立新会话 ({email})…")
             for attempt in range(3):
                 try:
