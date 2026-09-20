@@ -87,19 +87,23 @@ def _human_extract_checkout_url(
         page.on("response", handle_response)
         page.on("framenavigated", handle_framenavigated)
 
-    # 1. 确保进入 ChatGPT 主界面
+    # 1. 确保进入 ChatGPT 主界面 (若有活动直接带参唤起定价弹窗)
     cur_url = str(getattr(driver, "current_url", "") or "")
-    if "chatgpt.com" not in cur_url or "auth" in cur_url:
-        _emit("正在导航进入 ChatGPT 主界面…")
-        for attempt in range(3):
-            try:
-                driver.get("https://chatgpt.com/")
+    target_home_url = "https://chatgpt.com/"
+    if promo_campaign_id and promo_campaign_id != "none":
+        target_home_url = f"https://chatgpt.com/?promo_campaign={promo_campaign_id}#pricing"
+
+    _emit(f"正在导航进入 ChatGPT 主界面 ({target_home_url})…")
+    logger.info("[提链-拟人化] 导航进入: %s", target_home_url)
+    for attempt in range(3):
+        try:
+            driver.get(target_home_url)
+            break
+        except Exception as e:
+            if attempt == 2:
                 break
-            except Exception as e:
-                if attempt == 2:
-                    break
-                time.sleep(2.0)
-        time.sleep(3.0)
+            time.sleep(2.0)
+    time.sleep(3.5)
 
     solve_cloudflare_challenge_if_present(driver, max_wait=10.0, emit_fn=_emit)
 
@@ -116,12 +120,15 @@ def _human_extract_checkout_url(
     except Exception:
         pass
 
-    # 3. 定位并点击侧边栏 / 菜单「Claim offer / Upgrade」按钮
-    _emit("正在寻找并点击侧边栏 / 菜单「Claim offer / Upgrade」入口…")
-    driver.execute_script("""
+    # 3. 定位并点击侧边栏 / 菜单「Claim offer / Upgrade / オファー / 特典」按钮
+    _emit("正在寻找并点击侧边栏 / 菜单「Claim offer / Upgrade / オファー」入口…")
+    upgrade_clicked = driver.execute_script("""
         const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight);
         const selectors = [
             'button[aria-label*="Claim offer"]',
+            'button[aria-label*="オファー"]',
+            'button[aria-label*="特典"]',
+            'button[aria-label*="アップグレード"]',
             'button[data-testid="upgrade-button"]',
             'button[data-testid="pricing-button"]',
             'button[data-testid="sidebar-upgrade-button"]',
@@ -161,6 +168,7 @@ def _human_extract_checkout_url(
         }
         return { ok: false };
     """)
+    logger.info("[提链-拟人化] 点击升级/优惠入口结果: %s", upgrade_clicked)
 
     time.sleep(2.5)
     if stripe_url:
@@ -181,7 +189,7 @@ def _human_extract_checkout_url(
 
     if not modal_opened and not stripe_url:
         # 尝试在个人菜单中点击 Upgrade / Claim 项
-        driver.execute_script("""
+        menu_clicked = driver.execute_script("""
             const menuItems = [...document.querySelectorAll('[role="menuitem"], button, div')];
             const upgradeItem = menuItems.find(el => {
                 const t = (el.innerText || '').toLowerCase();
@@ -191,36 +199,53 @@ def _human_extract_checkout_url(
                     t.includes('upgrade') ||
                     t.includes('アップグレード') ||
                     t.includes('plus') ||
-                    t.includes('特典')
+                    t.includes('特典') ||
+                    t.includes('オファー')
                 ) && !t.includes('login');
             });
             if (upgradeItem) {
                 upgradeItem.click();
+                return { ok: true, text: upgradeItem.innerText.trim() };
             }
+            return { ok: false };
         """)
+        logger.info("[提链-拟人化] 个人菜单点击结果: %s", menu_clicked)
         time.sleep(2.5)
 
-    # 5. 在定价 / 优惠弹窗中点击确认按钮 (Claim special offer / Upgrade to Plus 等)
+    # 5. 在定价 / 优惠弹窗中点击确认按钮 (兼容中日英全语种)
     if not stripe_url:
         _emit("正在定价/优惠弹窗中点击 Plus 试用确认按钮…")
-        driver.execute_script("""
+        btn_clicked = driver.execute_script("""
             const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight);
             const dialog = document.querySelector('div[role="dialog"], div[aria-modal="true"]') || document.body;
             const buttons = [...dialog.querySelectorAll('button')].filter(visible);
+
+            // 优先匹配包含明确优惠 / 试用动作的按钮（中日英全覆盖）
             const plusBtn = buttons.find(b => {
                 const t = (b.innerText || '').trim();
-                return /claim offer|claim special offer|upgrade to plus|plus を試す|無料で試す|plus にアップグレード|try for free|try plus|get plus|upgrade|continue|get offer|claim/i.test(t);
+                return /claim offer|claim special offer|special offer|upgrade to plus|plus を試す|無料で試す|plus にアップグレード|特別オファー|オファーを受け取る|特典を受け取る|オファーを利用|特典を利用|オファー|特典|try for free|try plus|get plus|upgrade|continue|get offer|claim/i.test(t);
             });
             if (plusBtn) {
                 plusBtn.scrollIntoView({ block: 'center' });
                 plusBtn.click();
                 return { ok: true, text: plusBtn.innerText.trim() };
             }
-            return { ok: false };
+
+            // 兜底匹配弹窗中的 primary 按钮
+            const primaryBtn = dialog.querySelector('button.btn-primary, button[data-testid*="upgrade"], button[data-testid*="claim"]');
+            if (primaryBtn && visible(primaryBtn)) {
+                primaryBtn.scrollIntoView({ block: 'center' });
+                primaryBtn.click();
+                return { ok: true, text: primaryBtn.innerText.trim(), reason: 'primary_button' };
+            }
+
+            return { ok: false, all_buttons: buttons.map(b => b.innerText.trim()).filter(Boolean) };
         """)
+        logger.info("[提链-拟人化] 弹窗内确认按钮点击结果: %s", btn_clicked)
 
     # 6. 等待捕获 Stripe Checkout 链接 (Sentinel PoW 计算需 40~90s)
     _emit("等待官方生成 Stripe 结账链接 (含 Sentinel 人机对抗计算，最长等待 120 秒)…")
+    logger.info("[提链-拟人化] 开始等待 Stripe 链接生成 (最长 120s)…")
     wait_start = time.time()
     while time.time() - wait_start < timeout:
         if stripe_url:
@@ -237,6 +262,7 @@ def _human_extract_checkout_url(
     if stripe_url:
         cs_id = stripe_url.split("/")[-1]
         _emit("🎉 官方 Stripe 试用结账链接提取成功！")
+        logger.info("[提链-拟人化] 🎉 成功捕获 Stripe 链接: %s", stripe_url)
         return {"ok": True, "url": stripe_url, "checkout_session_id": cs_id}
 
     if checkout_response_data and isinstance(checkout_response_data, dict):
@@ -244,6 +270,7 @@ def _human_extract_checkout_url(
         if "already" in err_msg.lower() or "active_subscription" in err_msg.lower():
             return {"ok": True, "already_paid": True, "message": "账号已是 Plus 会员"}
 
+    logger.warning("[提链-拟人化] 未能通过拟人化操作捕获到链接，当前 URL: %s, 响应: %s", getattr(driver, "current_url", ""), checkout_response_data)
     return {"ok": False, "error": "未能通过拟人化操作捕获到 Stripe 结账链接"}
 
 
