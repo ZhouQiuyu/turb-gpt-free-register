@@ -29,7 +29,7 @@ CLOAK_FINGERPRINT_SEED: str = ""
 CLOAK_USER_DATA_DIR: str = ""
 
 # 额外 Chromium 参数，例如 ["--fingerprint=12345"]。CLOAK_FINGERPRINT_SEED 会自动追加。
-CLOAK_EXTRA_ARGS: list = []
+CLOAK_EXTRA_ARGS: list = ['--ignore-certificate-errors', '--allow-insecure-localhost']
 
 # 与原 Roxy Selenium 流程共用的超时时间。
 CLOAK_SELENIUM_TIMEOUT: int = 90

@@ -682,6 +682,7 @@ def build_cloak_driver(proxy: str | None = None) -> tuple[CloakSeleniumDriver, C
     )
     context_kwargs = {
         "viewport": {"width": 1440, "height": 900},
+        "ignore_https_errors": True,
     }
     if locale_opts.get("locale"):
         context_kwargs["locale"] = locale_opts["locale"]
@@ -693,6 +694,7 @@ def build_cloak_driver(proxy: str | None = None) -> tuple[CloakSeleniumDriver, C
     if user_data_dir:
         persistent_opts = dict(opts)
         persistent_opts.setdefault("viewport", {"width": 1440, "height": 900})
+        persistent_opts.setdefault("ignore_https_errors", True)
         context = launch_persistent_context(user_data_dir, **persistent_opts)
         page = context.new_page()
         browser = getattr(context, "browser", None) or context
