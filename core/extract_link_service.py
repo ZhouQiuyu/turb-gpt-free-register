@@ -122,80 +122,87 @@ def _human_extract_checkout_url(
 
     # 3. 定位并点击侧边栏 / 菜单「Claim offer / Upgrade / オファー / 特典」按钮
     _emit("正在寻找并点击侧边栏 / 菜单「Claim offer / Upgrade / オファー」入口…")
-    upgrade_info = driver.execute_script("""
-        const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight);
-        const allButtons = [...document.querySelectorAll('button, a, div[role="button"]')].filter(visible);
-
-        // 1. 优先直接匹配页面上所有包含专属优惠/试用关键词的按钮 (中英日越)
-        const targetBtn = allButtons.find(b => {
-            const t = (b.innerText || '').trim().toLowerCase();
-            return (
-                t.includes('nhận ưu đãi') ||
-                t.includes('claim offer') ||
-                t.includes('オファーを受け取る') ||
-                t.includes('特典を受け取る') ||
-                t.includes('claim') ||
-                t.includes('offer') ||
-                t.includes('ưu đãi') ||
-                t.includes('特典') ||
-                t.includes('オファー') ||
-                t.includes('upgrade to plus') ||
-                t.includes('plus にアップグレード') ||
-                t.includes('nâng cấp lên plus') ||
-                t.includes('upgrade') ||
-                t.includes('アップグレード') ||
-                t.includes('nâng cấp')
-            ) && !t.includes('login') && !t.includes('signin') && !t.includes('lên go') && !t.includes('lên pro');
-        });
-        if (targetBtn) {
-            targetBtn.scrollIntoView({ block: 'center' });
-            const r = targetBtn.getBoundingClientRect();
-            return { ok: true, text: targetBtn.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
-        }
-
-        // 2. 备用常见选择器
-        const selectors = [
-            'button[aria-label*="Claim offer"]',
-            'button[aria-label*="オファー"]',
-            'button[aria-label*="特典"]',
-            'button[aria-label*="Nhận ưu đãi"]',
-            'button[aria-label*="ưu đãi"]',
-            'button[aria-label*="Nâng cấp"]',
-            'button[aria-label*="アップグレード"]',
-            'button[data-testid="upgrade-button"]',
-            'button[data-testid="pricing-button"]',
-            'button[data-testid="sidebar-upgrade-button"]',
-            'a[href*="/pricing"]'
-        ];
-        for (const sel of selectors) {
-            const el = document.querySelector(sel);
-            if (el && visible(el)) {
-                el.scrollIntoView({ block: 'center' });
-                const r = el.getBoundingClientRect();
-                return { ok: true, selector: sel, text: el.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
-            }
-        }
-        return { ok: false };
+    # 3. 检查是否已经处于定价 / 优惠弹窗
+    has_dialog = driver.execute_script("""
+        const d = document.querySelector('div[role="dialog"], [data-testid="pricing-modal"], [data-testid="all-plans-modal"], div[aria-modal="true"]');
+        return !!(d && (d.offsetWidth || d.offsetHeight));
     """)
-    logger.info("[提链-拟人化] 定位升级/优惠入口: %s", upgrade_info)
-    if upgrade_info and upgrade_info.get("ok") and upgrade_info.get("x") and upgrade_info.get("y"):
-        x = float(upgrade_info["x"])
-        y = float(upgrade_info["y"])
-        if page and hasattr(page, "mouse") and x > 0 and y > 0:
-            page.mouse.move(x, y)
-            time.sleep(0.08)
-            page.mouse.down()
-            time.sleep(0.06)
-            page.mouse.up()
 
-    time.sleep(2.5)
+    if not has_dialog and not stripe_url:
+        _emit("正在寻找并点击侧边栏 / 菜单「Claim offer / Upgrade / オファー」入口…")
+        upgrade_info = driver.execute_script("""
+            const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight);
+            const allButtons = [...document.querySelectorAll('button, a, div[role="button"]')].filter(visible);
+
+            // 1. 优先直接匹配页面上所有包含专属优惠/试用关键词的按钮 (中英日越)
+            const targetBtn = allButtons.find(b => {
+                const t = (b.innerText || '').trim().toLowerCase();
+                return (
+                    t.includes('nhận ưu đãi') ||
+                    t.includes('claim offer') ||
+                    t.includes('オファーを受け取る') ||
+                    t.includes('特典を受け取る') ||
+                    t.includes('claim') ||
+                    t.includes('offer') ||
+                    t.includes('ưu đãi') ||
+                    t.includes('特典') ||
+                    t.includes('オファー') ||
+                    t.includes('upgrade to plus') ||
+                    t.includes('plus にアップグレード') ||
+                    t.includes('nâng cấp lên plus') ||
+                    t.includes('upgrade') ||
+                    t.includes('アップグレード') ||
+                    t.includes('nâng cấp')
+                ) && !t.includes('login') && !t.includes('signin') && !t.includes('lên go') && !t.includes('lên pro');
+            });
+            if (targetBtn) {
+                targetBtn.scrollIntoView({ block: 'center' });
+                const r = targetBtn.getBoundingClientRect();
+                return { ok: true, text: targetBtn.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
+            }
+
+            // 2. 备用常见选择器
+            const selectors = [
+                'button[aria-label*="Claim offer"]',
+                'button[aria-label*="オファー"]',
+                'button[aria-label*="特典"]',
+                'button[aria-label*="Nhận ưu đãi"]',
+                'button[aria-label*="ưu đãi"]',
+                'button[aria-label*="Nâng cấp"]',
+                'button[aria-label*="アップグレード"]',
+                'button[data-testid="upgrade-button"]',
+                'button[data-testid="pricing-button"]',
+                'button[data-testid="sidebar-upgrade-button"]',
+                'a[href*="/pricing"]'
+            ];
+            for (const sel of selectors) {
+                const el = document.querySelector(sel);
+                if (el && visible(el)) {
+                    el.scrollIntoView({ block: 'center' });
+                    const r = el.getBoundingClientRect();
+                    return { ok: true, selector: sel, text: el.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
+                }
+            }
+            return { ok: false };
+        """)
+        logger.info("[提链-拟人化] 定位升级/优惠入口: %s", upgrade_info)
+        if upgrade_info and upgrade_info.get("ok") and upgrade_info.get("x") and upgrade_info.get("y"):
+            x = float(upgrade_info["x"])
+            y = float(upgrade_info["y"])
+            if page and hasattr(page, "mouse") and x > 0 and y > 0:
+                page.mouse.move(x, y)
+                time.sleep(0.08)
+                page.mouse.down()
+                time.sleep(0.06)
+                page.mouse.up()
+            time.sleep(2.5)
+
     if stripe_url:
         return {"ok": True, "url": stripe_url, "checkout_session_id": stripe_url.split("/")[-1]}
 
-    # 4. 检查是否弹出定价 / 优惠弹窗
-    t_wait_modal = time.time() + 6.0
+    # 4. 若弹窗仍未打开，点击左下角个人信息/用户菜单唤出菜单，并点击升级项
     modal_opened = False
-    while time.time() < t_wait_modal and not stripe_url:
+    for _ in range(3):
         has_dialog = driver.execute_script("""
             const d = document.querySelector('div[role="dialog"], [data-testid="pricing-modal"], [data-testid="all-plans-modal"], div[aria-modal="true"]');
             return !!(d && (d.offsetWidth || d.offsetHeight));
@@ -206,41 +213,64 @@ def _human_extract_checkout_url(
         time.sleep(1.0)
 
     if not modal_opened and not stripe_url:
-        # 尝试在个人菜单中点击 Upgrade / Claim 项
-        menu_info = driver.execute_script("""
+        _emit("未见直接弹窗，正在展开左下角账户菜单以触发升级入口…")
+        profile_btn_info = driver.execute_script("""
             const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight);
-            const menuItems = [...document.querySelectorAll('[role="menuitem"], button, div')].filter(visible);
-            const upgradeItem = menuItems.find(el => {
-                const t = (el.innerText || '').toLowerCase();
-                return (
-                    t.includes('claim offer') ||
-                    t.includes('claim') ||
-                    t.includes('nhận ưu đãi') ||
-                    t.includes('ưu đãi') ||
-                    t.includes('nâng cấp') ||
-                    t.includes('upgrade') ||
-                    t.includes('アップグレード') ||
-                    t.includes('plus') ||
-                    t.includes('特典') ||
-                    t.includes('オファー')
-                ) && !t.includes('login');
-            });
-            if (upgradeItem) {
-                upgradeItem.scrollIntoView({ block: 'center' });
-                const r = upgradeItem.getBoundingClientRect();
-                return { ok: true, text: upgradeItem.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
+            const profileBtn = document.querySelector('button[data-testid="profile-button"], [data-testid="accounts-profile-button"], div[data-testid="user-menu"], button[aria-label*="User"], button[aria-label*="Profile"]') ||
+                [...document.querySelectorAll('button, div[role="button"]')].find(el => {
+                    const t = (el.innerText || '').toLowerCase();
+                    return (t.includes('free') || t.includes('plus')) && visible(el);
+                });
+            if (profileBtn) {
+                profileBtn.scrollIntoView({ block: 'center' });
+                const r = profileBtn.getBoundingClientRect();
+                return { ok: true, text: profileBtn.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
             }
             return { ok: false };
         """)
-        logger.info("[提链-拟人化] 个人菜单定位结果: %s", menu_info)
-        if menu_info and menu_info.get("ok") and menu_info.get("x") and menu_info.get("y"):
+        logger.info("[提链-拟人化] 左下角账户按钮定位: %s", profile_btn_info)
+        if profile_btn_info and profile_btn_info.get("ok") and profile_btn_info.get("x"):
             if page and hasattr(page, "mouse"):
-                page.mouse.move(float(menu_info["x"]), float(menu_info["y"]))
+                page.mouse.move(float(profile_btn_info["x"]), float(profile_btn_info["y"]))
                 time.sleep(0.08)
                 page.mouse.down()
                 time.sleep(0.06)
                 page.mouse.up()
-        time.sleep(2.5)
+            time.sleep(1.5)
+
+            # 在展开的个人菜单中点击 Upgrade / Nâng cấp / Claim 项
+            menu_info = driver.execute_script("""
+                const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight);
+                const menuItems = [...document.querySelectorAll('[role="menuitem"], div[role="button"], button, a')].filter(visible);
+                const upgradeItem = menuItems.find(el => {
+                    const t = (el.innerText || '').toLowerCase();
+                    return (
+                        t.includes('nâng cấp') ||
+                        t.includes('upgrade') ||
+                        t.includes('claim') ||
+                        t.includes('ưu đãi') ||
+                        t.includes('plus') ||
+                        t.includes('特典') ||
+                        t.includes('オファー') ||
+                        t.includes('アップグレード')
+                    ) && !t.includes('free') && !t.includes('login') && !t.includes('logout') && !t.includes('đăng xuất');
+                });
+                if (upgradeItem) {
+                    upgradeItem.scrollIntoView({ block: 'center' });
+                    const r = upgradeItem.getBoundingClientRect();
+                    return { ok: true, text: upgradeItem.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
+                }
+                return { ok: false, items: menuItems.map(m => m.innerText.trim()).filter(Boolean) };
+            """)
+            logger.info("[提链-拟人化] 个人菜单内升级项定位: %s", menu_info)
+            if menu_info and menu_info.get("ok") and menu_info.get("x"):
+                if page and hasattr(page, "mouse"):
+                    page.mouse.move(float(menu_info["x"]), float(menu_info["y"]))
+                    time.sleep(0.08)
+                    page.mouse.down()
+                    time.sleep(0.06)
+                    page.mouse.up()
+            time.sleep(3.0)
 
     # 保存弹窗截图供排查
     try:
