@@ -253,10 +253,20 @@ def _human_extract_checkout_url(
             const dialog = document.querySelector('div[role="dialog"], div[aria-modal="true"]') || document.body;
             const buttons = [...dialog.querySelectorAll('button')].filter(visible);
 
-            // 优先匹配包含明确优惠 / 试用动作的按钮（中英日越全覆盖）
+            // 优先匹配包含明确优惠 / 试用动作的按钮（中英日越全覆盖，且坚决排除 Go / Pro / Team）
             const plusBtn = buttons.find(b => {
-                const t = (b.innerText || '').trim();
-                return /claim offer|claim special offer|special offer|upgrade to plus|plus を試す|無料で試す|plus にアップグレード|特別オファー|オファーを受け取る|特典を受け取る|オファーを利用|特典を利用|オファー|特典|nhận ưu đãi|ưu đãi đặc biệt|ưu đãi|nâng cấp lên plus|thử miễn phí|nâng cấp|try for free|try plus|get plus|upgrade|continue|get offer|claim/i.test(t);
+                const t = (b.innerText || '').trim().toLowerCase();
+                if (/(?:^|\s)(?:go|pro|team|business|enterprise)(?:\s|$)/.test(t) && !t.includes('plus')) {
+                    return false;
+                }
+                if (t.includes('lên go') || t.includes('lên pro')) {
+                    return false;
+                }
+                return /dùng thử ưu đãi đặc biệt|ưu đãi đặc biệt|dùng thử plus|nâng cấp lên plus|claim special offer|special offer|try special offer|claim offer|upgrade to plus|plus を試す|無料で試す|plus にアップグレード|特別オファー|オファーを受け取る|特典を受け取る|オファーを利用|特典を利用|オファー|特典|try for free|try plus|get plus|get offer|claim/i.test(t);
+            }) || buttons.find(b => {
+                const t = (b.innerText || '').trim().toLowerCase();
+                if (t.includes('lên go') || t.includes('lên pro')) return false;
+                return /plus|ưu đãi|オファー|特典|offer/i.test(t);
             }) || dialog.querySelector('button.btn-primary, button[data-testid*="upgrade"], button[data-testid*="claim"]');
 
             if (plusBtn) {
