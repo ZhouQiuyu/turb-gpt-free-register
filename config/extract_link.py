@@ -8,8 +8,8 @@ EXTRACT_LINK_API_BASE: str = ""
 # 提链 CDK；创建任务和监听事件都需要。
 EXTRACT_LINK_CDK: str = ""
 
-# 提链类型：pix / upi / kakao_pay / ideal
-EXTRACT_LINK_TYPE: str = "pix"
+# 提链类型：ideal / pix / upi / kakao_pay
+EXTRACT_LINK_TYPE: str = "ideal"
 
 # 后台提链并发与超时
 EXTRACT_LINK_WORKERS: int = 3

@@ -329,8 +329,9 @@ class TestNativeExtractLink(unittest.TestCase):
             country="JP",
             currency="JPY",
         )
-        # 绝不能拼接出 https://checkout.stripe.com/c/pay/oaics_... 假链接
-        self.assertIsNone(res.get("url"))
+        # 绝不能拼接出 https://checkout.stripe.com/c/pay/oaics_... 假链接，必须是官方真实直链
+        self.assertNotIn("checkout.stripe.com", res.get("url", ""))
+        self.assertTrue(res.get("url", "").startswith("https://chatgpt.com/checkout/"))
 
     def test_human_extract_checkout_url_with_page_route(self):
         mock_driver = MagicMock()
@@ -353,7 +354,7 @@ class TestNativeExtractLink(unittest.TestCase):
         self.assertTrue(res["ok"])
         self.assertIn("cs_live_real123", res["url"])
         self.assertIn("#fidkd_hash", res["url"])
-        mock_page.route.assert_called_with("**/backend-api/payments/checkout", unittest.mock.ANY)
+        mock_page.on.assert_any_call("response", unittest.mock.ANY)
 
     @patch("core.extract_link_service._human_extract_checkout_url")
     @patch("core.extract_link_service._read_chatgpt_session_once")
@@ -383,6 +384,7 @@ class TestNativeExtractLink(unittest.TestCase):
         res = extract_link_service.extract_checkout_url_with_cloak(
             account=account,
             proxy_url="socks5h://127.0.0.1:1080",
+            target_lpm="card",
             log_cb=lambda m: logs.append(m),
         )
 
@@ -394,6 +396,63 @@ class TestNativeExtractLink(unittest.TestCase):
         for call in mock_driver.get.call_args_list:
             self.assertNotIn("auth/login", call[0][0])
 
+    @patch("core.stripe_lpm_engine.StripeLPMExtractor.run")
+    @patch("core.extract_link_service._human_extract_checkout_url")
+    @patch("core.extract_link_service._read_chatgpt_session_once")
+    @patch("core.cloakbrowser_driver.build_cloak_driver")
+    @patch("core.extract_link_service.solve_cloudflare_challenge_if_present")
+    def test_extract_checkout_url_with_cloak_lpm_conversion(self, mock_solve_cf, mock_build_driver, mock_read_session, mock_human_extract, mock_lpm_run):
+        mock_driver = MagicMock()
+        mock_build_driver.return_value = (mock_driver, None)
+        mock_solve_cf.return_value = False
+        mock_read_session.return_value = {"accessToken": "valid_token", "account": {"id": "acc_direct"}}
+        mock_human_extract.return_value = {
+            "ok": True,
+            "url": "https://checkout.stripe.com/c/pay/cs_direct_success",
+            "checkout_session_id": "cs_direct_success",
+        }
+        mock_lpm_run.return_value = {
+            "ok": True,
+            "url": "https://hooks.stripe.com/redirect/authenticate/test",
+            "payment_method": "ideal",
+            "checkout_session_id": "cs_direct_success",
+        }
+
+        account = {
+            "id": 1,
+            "email": "direct@example.com",
+            "access_token": "valid_token",
+            "account_id": "acc_direct",
+            "country_code": "JP",
+            "token_expired": False,
+        }
+
+        res = extract_link_service.extract_checkout_url_with_cloak(
+            account=account,
+            proxy_url="socks5h://127.0.0.1:1080",
+            target_lpm="ideal",
+        )
+
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["payment_method"], "ideal")
+        self.assertIn("hooks.stripe.com", res["url"])
+        mock_lpm_run.assert_called_once()
+
+    def test_extract_log_helpers(self):
+        p = extract_link_service.log_path(999)
+        self.assertTrue(str(p).endswith("extract-link-999.log"))
+        try:
+            extract_link_service._append_log(999, "测试提链日志1", clear=True)
+            self.assertTrue(p.exists())
+            extract_link_service._append_log(999, "测试提链日志2")
+            content = p.read_text(encoding="utf-8")
+            self.assertIn("测试提链日志1", content)
+            self.assertIn("测试提链日志2", content)
+        finally:
+            if p.exists():
+                p.unlink()
+
 
 if __name__ == "__main__":
     unittest.main()
+

@@ -1009,12 +1009,14 @@ def create_app(auth_code: str | None = None) -> Flask:
         token = (acc.get("access_token") or "").strip()
         if not token:
             return jsonify({"ok": False, "error": "该账号没有 access_token"}), 400
+        link_type = data.get("link_type") or data.get("type") or ""
         try:
             queued = extract_link_service.enqueue_account_extract(
                 account_id=int(acc.get("id")),
                 email=acc.get("email") or "",
                 access_token=token,
                 trigger="manual",
+                link_type=link_type,
             )
         except Exception as exc:
             return jsonify({"ok": False, "error": f"{type(exc).__name__}: {exc}"}), 400
@@ -1029,6 +1031,7 @@ def create_app(auth_code: str | None = None) -> Flask:
         """批量原生官方试用提链。Body {account_ids:[...]}。"""
         data = request.get_json(silent=True) or {}
         ids = data.get("account_ids") or data.get("ids") or []
+        bulk_link_type = data.get("link_type") or data.get("type") or ""
         if not isinstance(ids, list) or not ids:
             return jsonify({"ok": False, "error": "account_ids 必须是非空数组"}), 400
         if len(ids) > 500:
@@ -1066,6 +1069,7 @@ def create_app(auth_code: str | None = None) -> Flask:
                     email=email or "",
                     access_token=token,
                     trigger="manual_bulk",
+                    link_type=bulk_link_type,
                 )
             except Exception as exc:
                 failed.append({"id": acc_id, "email": email, "error": f"{type(exc).__name__}: {exc}"})
@@ -2659,6 +2663,46 @@ def create_app(auth_code: str | None = None) -> Flask:
         data["account_id"] = acc_id
         data["email"] = acc.get("email")
         data["running"] = bool(data.get("running") or str(acc.get("email_change_status") or "") in {"queued", "running"})
+        return jsonify(data)
+
+    @app.get("/api/accounts/<int:acc_id>/extract-log")
+    def api_account_extract_log(acc_id: int):
+        """读取账号最近一次提链日志。"""
+        from core import extract_link_service
+        acc = db.get_account(acc_id)
+        if not acc:
+            return jsonify({"ok": False, "error": "账号不存在"}), 404
+        p = extract_link_service.log_path(acc_id)
+        status = str(acc.get("extract_link_status") or "").lower()
+        is_running = status in {"queued", "running"}
+        data = _read_log_tail(
+            p, max_bytes=80_000,
+            running_fn=lambda: is_running,
+        )
+        data["account_id"] = acc_id
+        data["email"] = acc.get("email")
+        data["status"] = status
+        data["running"] = is_running
+
+        if not data.get("log"):
+            lines = []
+            if acc.get("extract_link_queued_at"):
+                lines.append(f"排队时间: {acc.get('extract_link_queued_at')}")
+            if acc.get("extract_link_started_at"):
+                lines.append(f"启动时间: {acc.get('extract_link_started_at')}")
+            if acc.get("extract_link_status"):
+                lines.append(f"当前状态: {acc.get('extract_link_status')}")
+            if acc.get("extract_link_type"):
+                lines.append(f"支付方式: {acc.get('extract_link_type')}")
+            if acc.get("extract_link_message"):
+                lines.append(f"执行反馈: {acc.get('extract_link_message')}")
+            if acc.get("extract_link_error"):
+                lines.append(f"错误信息: {acc.get('extract_link_error')}")
+            if acc.get("extract_link_url"):
+                lines.append(f"提链链接: {acc.get('extract_link_url')}")
+            if acc.get("extract_link_completed_at"):
+                lines.append(f"完成时间: {acc.get('extract_link_completed_at')}")
+            data["log"] = "\n".join(lines) if lines else "(暂无提链日志)"
         return jsonify(data)
 
     # ----------------------------------------------------------
