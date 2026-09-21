@@ -72,6 +72,7 @@ def _human_extract_checkout_url(
     promo_campaign_id: str = "",
     emit_fn: Any = None,
     timeout: float = 120.0,
+    origin_country: str = "JP",
 ) -> dict[str, Any]:
     """
     通过真实浏览器拟人化 UI 点击操作触发原生试用提链。
@@ -742,6 +743,9 @@ def extract_checkout_url_with_cloak(
             except Exception:
                 pass
 
+    origin_country = str(account.get("country_code") or "JP").strip().upper() or "JP"
+    currency = get_currency_for_country(origin_country)
+
     def _convert_to_lpm_if_needed(res: dict) -> dict:
         if not res or not res.get("ok") or res.get("already_paid"):
             return res
@@ -796,9 +800,6 @@ def extract_checkout_url_with_cloak(
             totp_secret = str(extra.get("totp_secret") or extra.get("totp_key") or "").strip()
         except Exception:
             pass
-
-    origin_country = str(account.get("country_code") or "JP").strip().upper() or "JP"
-    currency = get_currency_for_country(origin_country)
     promo_campaign_id = str(
         account.get("plus_trial_campaign_id")
         or account.get("promo_campaign_id")
@@ -847,7 +848,7 @@ def extract_checkout_url_with_cloak(
 
             if session_data and session_data.get("accessToken"):
                 _emit(f"存量会话有效，正在通过拟人化操作向 OpenAI 发起【{origin_country}】原生试用提链…")
-                chk_res = _human_extract_checkout_url(driver, promo_campaign_id=promo_campaign_id, emit_fn=_emit, timeout=120.0)
+                chk_res = _human_extract_checkout_url(driver, promo_campaign_id=promo_campaign_id, emit_fn=_emit, timeout=120.0, origin_country=origin_country)
                 if chk_res.get("ok"):
                     return _convert_to_lpm_if_needed(chk_res)
                 if chk_res.get("already_paid"):
@@ -1227,7 +1228,7 @@ def extract_checkout_url_with_cloak(
                 raise RuntimeError("指纹浏览器未能获取到有效 accessToken，登录未完成")
 
             _emit(f"指纹环境已鉴权，正在通过拟人化操作向 OpenAI 发起【{origin_country}】原生提链…")
-            chk_res = _human_extract_checkout_url(driver, promo_campaign_id=promo_campaign_id, emit_fn=_emit, timeout=120.0)
+            chk_res = _human_extract_checkout_url(driver, promo_campaign_id=promo_campaign_id, emit_fn=_emit, timeout=120.0, origin_country=origin_country)
             if chk_res.get("ok"):
                 return _convert_to_lpm_if_needed(chk_res)
             if chk_res.get("already_paid"):
