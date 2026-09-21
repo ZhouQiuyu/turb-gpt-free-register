@@ -527,6 +527,9 @@ def _human_extract_checkout_url(
             if ("checkout.stripe.com" in cur or "pay.openai.com" in cur) and "#" in cur:
                 stripe_url = cur
             break
+        if checkout_session_id and (captured_pk or (time.time() - wait_start > 5.0)):
+            logger.info("[提链-拟人化] 成功提前捕获 checkout_session_id (%s)，提前退出等待", checkout_session_id)
+            break
 
         # 兜底：若 10 秒后未见任何网络请求或跳转且按钮仍可点击，再次触发双重点击
         if not reclick_attempted and (time.time() - wait_start > 10.0) and not checkout_response_data:
