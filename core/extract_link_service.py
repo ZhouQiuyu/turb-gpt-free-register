@@ -1028,19 +1028,53 @@ def extract_checkout_url_with_cloak(
                             password_attempts += 1
                             if password_attempts > max_password_attempts:
                                 raise RuntimeError("OpenAI 密码验证失败次数过多，可能密码已被更改或账号受限")
-                            _emit(f"检测到密码输入框，正在输入密码 (第 {password_attempts}/{max_password_attempts} 次)…")
+                            _emit(f"检测到密码输入框，正在输入密码并提交 (第 {password_attempts}/{max_password_attempts} 次)…")
                             driver.execute_script("""
-                                const el = document.querySelector('input[type="password"], input[name="password"], input[autocomplete="current-password"]');
+                                const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+                                  && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'
+                                  && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
+                                const pwd = [...document.querySelectorAll('input[type="password"], input[name="password"], input[autocomplete="current-password"]')]
+                                  .find(visible);
+                                if (!pwd) return false;
                                 const val = arguments[0];
-                                el.focus();
+                                pwd.focus();
                                 const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-                                if (setter) setter.call(el, val); else el.value = val;
-                                el.dispatchEvent(new Event('input', {bubbles: true}));
-                                el.dispatchEvent(new Event('change', {bubbles: true}));
+                                if (setter) setter.call(pwd, val); else pwd.value = val;
+                                pwd.dispatchEvent(new Event('input', {bubbles: true}));
+                                pwd.dispatchEvent(new Event('change', {bubbles: true}));
+
+                                const form = pwd.closest('form');
+                                const scope = form || document;
+                                const bad = /google|apple|microsoft|github|facebook|saml|sso|oauth|social/;
+                                const buttons = [...scope.querySelectorAll('button, input[type="submit"]')]
+                                  .filter(el => visible(el) && !bad.test((el.className || '' + el.innerText).toLowerCase()))
+                                  .map((el, idx) => {
+                                    const r = el.getBoundingClientRect();
+                                    const ir = pwd.getBoundingClientRect();
+                                    return {el, idx, below: r.top >= ir.bottom - 10, dist: Math.max(0, r.top - ir.bottom)};
+                                  })
+                                  .filter(x => x.below)
+                                  .sort((a,b) => a.dist - b.dist || a.idx - b.idx);
+                                if (buttons.length > 0) {
+                                  buttons[0].el.click();
+                                  return true;
+                                }
+                                if (form && typeof form.requestSubmit === 'function') {
+                                  form.requestSubmit();
+                                  return true;
+                                }
+                                pwd.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true}));
+                                return true;
                             """, password)
-                            time.sleep(0.5)
-                            _submit_nearest_form_for_active_input(driver)
-                            time.sleep(2.5)
+                            try:
+                                from selenium.webdriver.common.by import By
+                                from selenium.webdriver.common.keys import Keys
+                                pwd_els = [e for e in driver.find_elements(By.CSS_SELECTOR, "input[type='password']") if e.is_displayed()]
+                                if pwd_els:
+                                    pwd_els[0].send_keys(Keys.ENTER)
+                            except Exception:
+                                pass
+                            time.sleep(3.5)
                             continue
                         else:
                             switch_pwdless_attempts += 1
