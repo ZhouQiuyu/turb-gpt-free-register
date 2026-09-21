@@ -66,8 +66,33 @@ def test_human_extract(account_id: int = 359, headless: bool = True):
         page = driver.page
 
         # -------------------------------------------------------------
-        # 1. 注册网络监听器（核心双保险捕获）
+        # 1. 挂载 CDP 路由拦截器与响应监听器
         # -------------------------------------------------------------
+        if hasattr(page, "route"):
+            def handle_route(route, request):
+                try:
+                    if "/backend-api/payments/checkout" in request.url and request.method == "POST":
+                        post_data = request.post_data
+                        if post_data:
+                            try:
+                                payload = json.loads(post_data)
+                                logger.info("[CDP] 拦截到 /payments/checkout 请求，原 mode=%s", payload.get("checkout_ui_mode"))
+                                payload["checkout_ui_mode"] = "hosted"
+                                route.continue_(post_data=json.dumps(payload))
+                                logger.info("[CDP] 已将 checkout_ui_mode 重写为 hosted 并放行")
+                                return
+                            except Exception as ex:
+                                logger.warning("[CDP] 解析/重写 post_data 失败: %s", ex)
+                except Exception as exc:
+                    logger.warning("[CDP] 路由处理异常: %s", exc)
+                route.continue_()
+
+            try:
+                page.route("**/backend-api/payments/checkout", handle_route)
+                logger.info("[CDP] 已注册 **/backend-api/payments/checkout 请求重写拦截器")
+            except Exception as e:
+                logger.warning("[CDP] 注册路由拦截器异常: %s", e)
+
         def handle_response(response):
             nonlocal stripe_url, checkout_response_data
             url = response.url
@@ -77,23 +102,24 @@ def test_human_extract(account_id: int = 359, headless: bool = True):
                     logger.info("[Network] 拦截到 /payments/checkout 响应: status=%s, keys=%s", response.status, list(data.keys()) if isinstance(data, dict) else type(data))
                     checkout_response_data = data
                     if isinstance(data, dict):
-                        target = data.get("url") or data.get("checkout_session_id")
-                        if target:
-                            if not target.startswith("http"):
-                                target = f"https://checkout.stripe.com/c/pay/{target}"
+                        target = data.get("url")
+                        if target and isinstance(target, str) and target.startswith("http"):
                             stripe_url = target
-                            logger.info(">>> [成功] 从网络接口截获 Stripe 链接: %s <<<", stripe_url)
+                            logger.info(">>> [成功] 从网络接口截获原生 Stripe 长链: %s <<<", stripe_url)
+                        elif data.get("checkout_session_id"):
+                            logger.info("[Network] 获得 checkout_session_id: %s (等待页面跳转或长链渲染)", data.get("checkout_session_id"))
                 except Exception as exc:
                     logger.warning("[Network] 解析 checkout 响应失败: %s", exc)
-            elif "checkout.stripe.com" in url:
-                logger.info("[Network] 观察到 Stripe URL 跳转: %s", url)
-                if not stripe_url:
-                    stripe_url = url
+            elif "checkout.stripe.com" in url or "pay.openai.com" in url:
+                if url.startswith("http"):
+                    logger.info("[Network] 观察到 Stripe URL 跳转: %s", url)
+                    if not stripe_url or "#" not in stripe_url:
+                        stripe_url = url
 
         def handle_framenavigated(frame):
             nonlocal stripe_url
             url = frame.url
-            if "checkout.stripe.com" in url:
+            if ("checkout.stripe.com" in url or "pay.openai.com" in url) and url.startswith("http"):
                 logger.info("[Frame] 页面已导航到 Stripe 结账台: %s", url)
                 stripe_url = url
 

@@ -70,6 +70,33 @@ def _human_extract_checkout_url(
     checkout_response_data = None
 
     if page:
+        # 1. 挂载 CDP 路由拦截器：出站请求将 checkout_ui_mode 注入为 hosted
+        if hasattr(page, "route"):
+            def handle_route(route, request):
+                try:
+                    if "/backend-api/payments/checkout" in request.url and request.method == "POST":
+                        post_data = request.post_data
+                        if post_data:
+                            try:
+                                payload = json.loads(post_data)
+                                logger.info("[提链-CDP] 拦截到 /payments/checkout 请求，原 mode=%s", payload.get("checkout_ui_mode"))
+                                payload["checkout_ui_mode"] = "hosted"
+                                route.continue_(post_data=json.dumps(payload))
+                                logger.info("[提链-CDP] 已将 checkout_ui_mode 注入为 hosted 并放行")
+                                return
+                            except Exception as ex:
+                                logger.warning("[提链-CDP] 解析/重写 post_data 失败: %s", ex)
+                except Exception as exc:
+                    logger.warning("[提链-CDP] 路由处理异常: %s", exc)
+                route.continue_()
+
+            try:
+                page.route("**/backend-api/payments/checkout", handle_route)
+                logger.info("[提链-CDP] 已注册 **/backend-api/payments/checkout 请求重写拦截器")
+            except Exception as e:
+                logger.warning("[提链-CDP] 注册路由拦截器异常: %s", e)
+
+        # 2. 注册网络响应与页面导航监听器
         def handle_response(response):
             nonlocal stripe_url, checkout_response_data
             url = response.url
@@ -77,23 +104,28 @@ def _human_extract_checkout_url(
                 try:
                     data = response.json()
                     checkout_response_data = data
+                    logger.info("[提链-Network] 拦截到 /payments/checkout 响应: status=%s, keys=%s", response.status, list(data.keys()) if isinstance(data, dict) else type(data))
                     if isinstance(data, dict):
-                        target = data.get("url") or data.get("checkout_session_id")
-                        if target:
-                            if not target.startswith("http"):
-                                target = f"https://checkout.stripe.com/c/pay/{target}"
+                        target = data.get("url")
+                        if target and isinstance(target, str) and target.startswith("http"):
                             stripe_url = target
-                            _emit(f"拦截到官方 Stripe 结账链接: {stripe_url}")
-                except Exception:
-                    pass
-            elif "checkout.stripe.com" in url:
-                if not stripe_url:
-                    stripe_url = url
+                            _emit(f"拦截到官方 Stripe 结账长链: {stripe_url}")
+                            logger.info("[提链-Network] 成功截获原生 Stripe 长链: %s", stripe_url)
+                        elif data.get("checkout_session_id"):
+                            logger.info("[提链-Network] 获得 checkout_session_id: %s (等待页面跳转或长链渲染)", data.get("checkout_session_id"))
+                except Exception as exc:
+                    logger.warning("[提链-Network] 解析 checkout 响应失败: %s", exc)
+            elif "checkout.stripe.com" in url or "pay.openai.com" in url:
+                if url.startswith("http"):
+                    logger.info("[提链-Network] 观察到 Stripe 页面请求: %s", url)
+                    if not stripe_url or "#" not in stripe_url:
+                        stripe_url = url
 
         def handle_framenavigated(frame):
             nonlocal stripe_url
             url = frame.url
-            if "checkout.stripe.com" in url:
+            if ("checkout.stripe.com" in url or "pay.openai.com" in url) and url.startswith("http"):
+                logger.info("[提链-Frame] 页面已导航到 Stripe 结账台: %s", url)
                 stripe_url = url
 
         page.on("response", handle_response)
@@ -425,11 +457,13 @@ def _human_extract_checkout_url(
     wait_start = time.time()
     reclick_attempted = False
     while time.time() - wait_start < timeout:
-        if stripe_url:
-            break
         cur = str(getattr(driver, "current_url", "") or "")
-        if "checkout.stripe.com" in cur:
+        if ("checkout.stripe.com" in cur or "pay.openai.com" in cur) and ("#" in cur or "cs_" in cur):
             stripe_url = cur
+            break
+        if stripe_url and ("#" in stripe_url or "cs_" in stripe_url):
+            if ("checkout.stripe.com" in cur or "pay.openai.com" in cur) and "#" in cur:
+                stripe_url = cur
             break
 
         # 兜底：若 10 秒后未见任何网络请求或跳转且按钮仍可点击，轻微偏移再次模拟点击
@@ -448,19 +482,31 @@ def _human_extract_checkout_url(
 
         time.sleep(1.0)
 
-    if not stripe_url:
-        time.sleep(3.0)
+    # 兜底再次检查当前 URL
+    cur = str(getattr(driver, "current_url", "") or "")
+    if ("checkout.stripe.com" in cur or "pay.openai.com" in cur) and ("#" in cur or "cs_" in cur):
+        stripe_url = cur
 
     if stripe_url:
-        cs_id = stripe_url.split("/")[-1]
-        _emit("🎉 官方 Stripe 试用结账链接提取成功！")
-        logger.info("[提链-拟人化] 🎉 成功捕获 Stripe 链接: %s", stripe_url)
+        cs_id = stripe_url.split("/")[-1].split("#")[0]
+        _emit("🎉 官方 Stripe 试用结账长链提取成功！")
+        logger.info("[提链-拟人化] 🎉 成功捕获 Stripe 结账长链: %s", stripe_url)
         return {"ok": True, "url": stripe_url, "checkout_session_id": cs_id}
 
     if checkout_response_data and isinstance(checkout_response_data, dict):
         err_msg = str(checkout_response_data.get("error") or checkout_response_data.get("detail") or "")
         if "already" in err_msg.lower() or "active_subscription" in err_msg.lower():
             return {"ok": True, "already_paid": True, "message": "账号已是 Plus 会员"}
+        cs_id = checkout_response_data.get("checkout_session_id")
+        if cs_id and str(cs_id).startswith("oaics_"):
+            chatgpt_url = f"https://chatgpt.com/checkout/openai_llc/{cs_id}"
+            logger.warning("[提链-拟人化] 后端未返回 Stripe 独立长链，仅返回官方站内结账链接: %s", chatgpt_url)
+            return {
+                "ok": False,
+                "error": "未能生成 Stripe 独立长链 (OpenAI 仅返回站内结账会话，无法免登打开)",
+                "checkout_session_id": cs_id,
+                "chatgpt_url": chatgpt_url,
+            }
 
     try:
         from pathlib import Path
@@ -473,7 +519,7 @@ def _human_extract_checkout_url(
         pass
 
     logger.warning("[提链-拟人化] 未能通过拟人化操作捕获到链接，当前 URL: %s, 响应: %s", getattr(driver, "current_url", ""), checkout_response_data)
-    return {"ok": False, "error": "未能通过拟人化操作捕获到 Stripe 结账链接"}
+    return {"ok": False, "error": "未能通过拟人化操作捕获到 Stripe 结账长链"}
 
 
 def _execute_js_checkout(
@@ -551,7 +597,7 @@ def _execute_js_checkout(
     checkout_data = res.get("data") if isinstance(res.get("data"), dict) else {}
     url = checkout_data.get("url")
     cs_id = checkout_data.get("checkout_session_id") or checkout_data.get("session_id") or checkout_data.get("id")
-    if not url and cs_id:
+    if not url and cs_id and not str(cs_id).startswith("oaics_"):
         url = f"https://checkout.stripe.com/c/pay/{cs_id}"
 
     if url:

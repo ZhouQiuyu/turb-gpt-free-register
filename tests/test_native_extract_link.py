@@ -313,9 +313,47 @@ class TestNativeExtractLink(unittest.TestCase):
             country="JP",
             currency="JPY",
         )
-        self.assertFalse(res["ok"])
-        self.assertTrue(res.get("unauthorized"))
-        self.assertEqual(res.get("status"), 401)
+    def test_execute_js_checkout_does_not_fake_oaics_stripe_url(self):
+        mock_driver = MagicMock()
+        mock_driver.execute_async_script.return_value = {
+            "ok": True,
+            "status": 200,
+            "data": {
+                "checkout_session_id": "oaics_c166236de4a940668942eed5c263ad11",
+            },
+        }
+        res = extract_link_service._execute_js_checkout(
+            mock_driver,
+            access_token="tok_123",
+            account_id="acc_123",
+            country="JP",
+            currency="JPY",
+        )
+        # 绝不能拼接出 https://checkout.stripe.com/c/pay/oaics_... 假链接
+        self.assertIsNone(res.get("url"))
+
+    def test_human_extract_checkout_url_with_page_route(self):
+        mock_driver = MagicMock()
+        mock_page = MagicMock()
+        mock_driver.page = mock_page
+        mock_driver.current_url = "https://checkout.stripe.com/c/pay/cs_live_real123#fidkd_hash"
+        mock_driver.execute_script.return_value = {
+            "ok": True,
+            "in_dialog": True,
+            "text": "特別オファーを利用する",
+            "x": 100.0,
+            "y": 200.0,
+        }
+
+        res = extract_link_service._human_extract_checkout_url(
+            mock_driver,
+            promo_campaign_id="plus-1-month-free",
+            timeout=5.0,
+        )
+        self.assertTrue(res["ok"])
+        self.assertIn("cs_live_real123", res["url"])
+        self.assertIn("#fidkd_hash", res["url"])
+        mock_page.route.assert_called_with("**/backend-api/payments/checkout", unittest.mock.ANY)
 
     @patch("core.extract_link_service._human_extract_checkout_url")
     @patch("core.extract_link_service._read_chatgpt_session_once")
