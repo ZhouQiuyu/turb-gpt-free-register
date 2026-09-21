@@ -895,10 +895,12 @@ def extract_checkout_url_with_cloak(
 
             # 校验浏览器当前是否已持有有效登录会话 (通过 /api/auth/session)
             session_data = None
-            try:
-                session_data = _read_chatgpt_session_once(driver)
-            except Exception:
-                pass
+            cur_check = str(getattr(driver, "current_url", "") or "")
+            if not cur_check or "chatgpt.com" in cur_check or "mock" in cur_check.lower():
+                try:
+                    session_data = _read_chatgpt_session_once(driver)
+                except Exception:
+                    pass
 
             if session_data and session_data.get("accessToken"):
                 _emit(f"存量会话有效，正在通过拟人化操作向 OpenAI 发起【{origin_country}】原生试用提链…")
@@ -938,383 +940,383 @@ def extract_checkout_url_with_cloak(
                     time.sleep(2.0)
             time.sleep(2.5)
 
-            otp_after_ts = time.time() - 2.0
-            email_submitted = False
-            otp_submitted = False
-            last_otp_submit_ts = 0.0
-            totp_attempts = 0
-            max_totp_attempts = 3
-            password_attempts = 0
-            max_password_attempts = 3
-            switch_pwdless_attempts = 0
-            max_switch_pwdless_attempts = 3
-            last_logged_url = ""
-            last_totp_submit_time = 0.0
+        otp_after_ts = time.time() - 2.0
+        email_submitted = False
+        otp_submitted = False
+        last_otp_submit_ts = 0.0
+        totp_attempts = 0
+        max_totp_attempts = 3
+        password_attempts = 0
+        max_password_attempts = 3
+        switch_pwdless_attempts = 0
+        max_switch_pwdless_attempts = 3
+        last_logged_url = ""
+        last_totp_submit_time = 0.0
 
-            t_end = time.time() + 240
-            while time.time() < t_end:
-                cur_url = str(driver.current_url or "")
-                title = str(driver.title or "")
-                base_url = cur_url.split("?")[0] if cur_url else ""
+        t_end = time.time() + 240
+        while time.time() < t_end:
+            cur_url = str(driver.current_url or "")
+            title = str(driver.title or "")
+            base_url = cur_url.split("?")[0] if cur_url else ""
 
-                if base_url and base_url != last_logged_url:
-                    last_logged_url = base_url
-                    _emit(f"页面流转: {base_url}")
+            if base_url and base_url != last_logged_url:
+                last_logged_url = base_url
+                _emit(f"页面流转: {base_url}")
 
-                if "error" in cur_url and "rate_limit" in cur_url:
-                    raise RuntimeError("OpenAI 登录验证码发送过于频繁 (rate_limit_exceeded)，请稍后重试")
+            if "error" in cur_url and "rate_limit" in cur_url:
+                raise RuntimeError("OpenAI 登录验证码发送过于频繁 (rate_limit_exceeded)，请稍后重试")
 
-                # 0.5. 检测并恢复网络错误页 (chrome-error / neterror)
-                if "chrome-error://" in cur_url or "about:neterror" in cur_url:
-                    _emit("检测到浏览器网络连接偶发异常 (chrome-error)，正在自动刷新恢复…")
-                    time.sleep(2.0)
-                    driver.refresh()
-                    time.sleep(3.0)
-                    continue
+            # 0.5. 检测并恢复网络错误页 (chrome-error / neterror)
+            if "chrome-error://" in cur_url or "about:neterror" in cur_url:
+                _emit("检测到浏览器网络连接偶发异常 (chrome-error)，正在自动刷新恢复…")
+                time.sleep(2.0)
+                driver.refresh()
+                time.sleep(3.0)
+                continue
 
-                # 1. 穿透 Cloudflare 质询
-                if solve_cloudflare_challenge_if_present(driver, max_wait=15.0, emit_fn=_emit):
-                    time.sleep(1.0)
-                    continue
+            # 1. 穿透 Cloudflare 质询
+            if solve_cloudflare_challenge_if_present(driver, max_wait=15.0, emit_fn=_emit):
+                time.sleep(1.0)
+                continue
 
-                # 1.5. 检测并恢复 OpenAI 认证错误页 (/auth/error / 問題が発生しました / Route Error / 500)
-                is_auth_error = False
-                if "/auth/error" in cur_url:
-                    is_auth_error = True
-                else:
-                    try:
-                        is_auth_error = driver.execute_script("""
-                            const t = (document.body ? document.body.innerText : '').toLowerCase();
-                            return t.includes('問題が発生しました') || t.includes('route error') || 
-                                   t.includes('500 internal server') || t.includes('不明なエラーが発生しました') ||
-                                   t.includes('something went wrong') || t.includes('there was a problem');
-                        """)
-                    except Exception:
-                        is_auth_error = False
-
-                if is_auth_error:
-                    _emit("检测到处于 OpenAI 认证错误页 (/auth/error)，正在自动恢复并重试登录…")
-                    time.sleep(2.0)
-                    clicked_back = False
-                    try:
-                        clicked_back = driver.execute_script("""
-                            const btns = [...document.querySelectorAll('button, a')];
-                            const btn = btns.find(b => {
-                                const t = (b.innerText || '').trim().toLowerCase();
-                                return /戻る|もう一度試す|try again|back|sign in|ログイン/i.test(t);
-                            });
-                            if (btn && (btn.offsetWidth || btn.offsetHeight)) {
-                                btn.click();
-                                return true;
-                            }
-                            return false;
-                        """)
-                    except Exception:
-                        clicked_back = False
-
-                    if not clicked_back:
-                        try:
-                            driver.delete_all_cookies()
-                            driver.execute_script("try { localStorage.clear(); sessionStorage.clear(); } catch(e) {}")
-                        except Exception:
-                            pass
-                        driver.get("https://chatgpt.com/auth/login")
-
-                    email_submitted = False
-                    otp_submitted = False
-                    time.sleep(3.0)
-                    continue
-
-                # 2. 真实登录态判定 (严禁仅凭 cur_url 包含 chatgpt.com 判断！)
-                session_data = None
+            # 1.5. 检测并恢复 OpenAI 认证错误页 (/auth/error / 問題が発生しました / Route Error / 500)
+            is_auth_error = False
+            if "/auth/error" in cur_url:
+                is_auth_error = True
+            else:
                 try:
-                    session_data = _read_chatgpt_session_once(driver)
+                    is_auth_error = driver.execute_script("""
+                        const t = (document.body ? document.body.innerText : '').toLowerCase();
+                        return t.includes('問題が発生しました') || t.includes('route error') || 
+                               t.includes('500 internal server') || t.includes('不明なエラーが発生しました') ||
+                               t.includes('something went wrong') || t.includes('there was a problem');
+                    """)
+                except Exception:
+                    is_auth_error = False
+
+            if is_auth_error:
+                _emit("检测到处于 OpenAI 认证错误页 (/auth/error)，正在自动恢复并重试登录…")
+                time.sleep(2.0)
+                clicked_back = False
+                try:
+                    clicked_back = driver.execute_script("""
+                        const btns = [...document.querySelectorAll('button, a')];
+                        const btn = btns.find(b => {
+                            const t = (b.innerText || '').trim().toLowerCase();
+                            return /戻る|もう一度試す|try again|back|sign in|ログイン/i.test(t);
+                        });
+                        if (btn && (btn.offsetWidth || btn.offsetHeight)) {
+                            btn.click();
+                            return true;
+                        }
+                        return false;
+                    """)
+                except Exception:
+                    clicked_back = False
+
+                if not clicked_back:
+                    try:
+                        driver.delete_all_cookies()
+                        driver.execute_script("try { localStorage.clear(); sessionStorage.clear(); } catch(e) {}")
+                    except Exception:
+                        pass
+                    driver.get("https://chatgpt.com/auth/login")
+
+                email_submitted = False
+                otp_submitted = False
+                time.sleep(3.0)
+                continue
+
+            # 2. 真实登录态判定 (严禁仅凭 cur_url 包含 chatgpt.com 判断！)
+            session_data = None
+            try:
+                session_data = _read_chatgpt_session_once(driver)
+            except Exception:
+                pass
+
+            if session_data and session_data.get("accessToken"):
+                access_token = session_data.get("accessToken")
+                account_id = (session_data.get("account") or {}).get("id") or account_id
+                _emit("浏览器已成功获取到全新登录会话！")
+                if account_id_db:
+                    try:
+                        from core import db
+                        db.update_account_session(
+                            acc_id=account_id_db,
+                            access_token=access_token,
+                            account_id=account_id,
+                        )
+                    except Exception as exc:
+                        logger.warning("[提链] 更新账号会话失败: %s", exc)
+                break
+
+            # 3. 若落在游客聊天首页（例如 ?slm=1 且未有邮箱输入框），点击登录按钮唤起登录弹窗
+            if not email_submitted and ("slm=1" in cur_url or cur_url.rstrip("/") in ("https://chatgpt.com", "http://chatgpt.com")):
+                try:
+                    clicked = driver.execute_script("""
+                        const btn = document.querySelector('button[data-testid="login-button"], [data-testid="login-button"], a[href*="/auth/login"]');
+                        if (btn && (btn.offsetWidth || btn.offsetHeight)) { btn.click(); return true; }
+                        return false;
+                    """)
+                    if clicked:
+                        _emit("处于匿名首页，已点击登录按钮拉起登录框…")
+                        time.sleep(2.0)
+                        continue
                 except Exception:
                     pass
 
-                if session_data and session_data.get("accessToken"):
-                    access_token = session_data.get("accessToken")
-                    account_id = (session_data.get("account") or {}).get("id") or account_id
-                    _emit("浏览器已成功获取到全新登录会话！")
-                    if account_id_db:
+            # 4. 处于邮箱输入页面
+            if not email_submitted:
+                el = _find_visible_email_input_js(driver)
+                if el:
+                    _emit("正在提交账号邮箱…")
+                    _type_email_address(driver, email, timeout=10)
+                    time.sleep(0.8)
+                    submitted = _submit_nearest_form_for_active_input(driver)
+                    if not submitted:
                         try:
-                            from core import db
-                            db.update_account_session(
-                                acc_id=account_id_db,
-                                access_token=access_token,
-                                account_id=account_id,
-                            )
-                        except Exception as exc:
-                            logger.warning("[提链] 更新账号会话失败: %s", exc)
-                    break
-
-                # 3. 若落在游客聊天首页（例如 ?slm=1 且未有邮箱输入框），点击登录按钮唤起登录弹窗
-                if not email_submitted and ("slm=1" in cur_url or cur_url.rstrip("/") in ("https://chatgpt.com", "http://chatgpt.com")):
-                    try:
-                        clicked = driver.execute_script("""
-                            const btn = document.querySelector('button[data-testid="login-button"], [data-testid="login-button"], a[href*="/auth/login"]');
-                            if (btn && (btn.offsetWidth || btn.offsetHeight)) { btn.click(); return true; }
-                            return false;
-                        """)
-                        if clicked:
-                            _emit("处于匿名首页，已点击登录按钮拉起登录框…")
-                            time.sleep(2.0)
-                            continue
-                    except Exception:
-                        pass
-
-                # 4. 处于邮箱输入页面
-                if not email_submitted:
-                    el = _find_visible_email_input_js(driver)
-                    if el:
-                        _emit("正在提交账号邮箱…")
-                        _type_email_address(driver, email, timeout=10)
-                        time.sleep(0.8)
-                        submitted = _submit_nearest_form_for_active_input(driver)
-                        if not submitted:
-                            try:
-                                clicked = driver.execute_script("""
-                                    const btn = document.querySelector('form button[type="submit"], button.btn-primary');
-                                    if (btn && (btn.offsetWidth || btn.offsetHeight)) {
-                                        btn.click();
-                                        return true;
-                                    }
-                                    return false;
-                                """)
-                                if clicked:
-                                    submitted = True
-                            except Exception:
-                                pass
-                        if submitted:
-                            email_submitted = True
-                            otp_after_ts = time.time() - 2.0
-                            time.sleep(2.0)
-                            continue
-                    elif "auth.openai.com" in cur_url and not any(k in cur_url for k in ["login/password", "email-verification", "mfa", "challenge"]):
+                            clicked = driver.execute_script("""
+                                const btn = document.querySelector('form button[type="submit"], button.btn-primary');
+                                if (btn && (btn.offsetWidth || btn.offsetHeight)) {
+                                    btn.click();
+                                    return true;
+                                }
+                                return false;
+                            """)
+                            if clicked:
+                                submitted = True
+                        except Exception:
+                            pass
+                    if submitted:
                         email_submitted = True
+                        otp_after_ts = time.time() - 2.0
+                        time.sleep(2.0)
+                        continue
+                elif "auth.openai.com" in cur_url and not any(k in cur_url for k in ["login/password", "email-verification", "mfa", "challenge"]):
+                    email_submitted = True
 
-                # 5. 处于密码输入页面
-                if email_submitted:
+            # 5. 处于密码输入页面
+            if email_submitted:
+                has_password_input = False
+                try:
+                    has_password_input = driver.execute_script("""
+                        const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+                          && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'
+                          && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
+                        const pwd = document.querySelector('input[type="password"], input[name="password"], input[autocomplete="current-password"]');
+                        return !!(pwd && visible(pwd));
+                    """)
+                except Exception:
                     has_password_input = False
-                    try:
-                        has_password_input = driver.execute_script("""
+                if has_password_input:
+                    if password:
+                        password_attempts += 1
+                        if password_attempts > max_password_attempts:
+                            raise RuntimeError("OpenAI 密码验证失败次数过多，可能密码已被更改或账号受限")
+                        _emit(f"检测到密码输入框，正在输入密码并提交 (第 {password_attempts}/{max_password_attempts} 次)…")
+                        driver.execute_script("""
                             const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
                               && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'
                               && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
-                            const pwd = document.querySelector('input[type="password"], input[name="password"], input[autocomplete="current-password"]');
-                            return !!(pwd && visible(pwd));
-                        """)
-                    except Exception:
-                        has_password_input = False
-                    if has_password_input:
-                        if password:
-                            password_attempts += 1
-                            if password_attempts > max_password_attempts:
-                                raise RuntimeError("OpenAI 密码验证失败次数过多，可能密码已被更改或账号受限")
-                            _emit(f"检测到密码输入框，正在输入密码并提交 (第 {password_attempts}/{max_password_attempts} 次)…")
-                            driver.execute_script("""
-                                const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
-                                  && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'
-                                  && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
-                                const pwd = [...document.querySelectorAll('input[type="password"], input[name="password"], input[autocomplete="current-password"]')]
-                                  .find(visible);
-                                if (!pwd) return false;
-                                const val = arguments[0];
-                                pwd.focus();
-                                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-                                if (setter) setter.call(pwd, val); else pwd.value = val;
-                                pwd.dispatchEvent(new Event('input', {bubbles: true}));
-                                pwd.dispatchEvent(new Event('change', {bubbles: true}));
+                            const pwd = [...document.querySelectorAll('input[type="password"], input[name="password"], input[autocomplete="current-password"]')]
+                              .find(visible);
+                            if (!pwd) return false;
+                            const val = arguments[0];
+                            pwd.focus();
+                            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                            if (setter) setter.call(pwd, val); else pwd.value = val;
+                            pwd.dispatchEvent(new Event('input', {bubbles: true}));
+                            pwd.dispatchEvent(new Event('change', {bubbles: true}));
 
-                                const form = pwd.closest('form');
-                                const scope = form || document;
-                                const bad = /google|apple|microsoft|github|facebook|saml|sso|oauth|social/;
-                                const buttons = [...scope.querySelectorAll('button, input[type="submit"]')]
-                                  .filter(el => visible(el) && !bad.test((el.className || '' + el.innerText).toLowerCase()))
-                                  .map((el, idx) => {
-                                    const r = el.getBoundingClientRect();
-                                    const ir = pwd.getBoundingClientRect();
-                                    return {el, idx, below: r.top >= ir.bottom - 10, dist: Math.max(0, r.top - ir.bottom)};
-                                  })
-                                  .filter(x => x.below)
-                                  .sort((a,b) => a.dist - b.dist || a.idx - b.idx);
-                                if (buttons.length > 0) {
-                                  buttons[0].el.click();
-                                  return true;
-                                }
-                                if (form && typeof form.requestSubmit === 'function') {
-                                  form.requestSubmit();
-                                  return true;
-                                }
-                                pwd.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true}));
-                                return true;
-                            """, password)
-                            try:
-                                from selenium.webdriver.common.by import By
-                                from selenium.webdriver.common.keys import Keys
-                                pwd_els = [e for e in driver.find_elements(By.CSS_SELECTOR, "input[type='password']") if e.is_displayed()]
-                                if pwd_els:
-                                    pwd_els[0].send_keys(Keys.ENTER)
-                            except Exception:
-                                pass
-                            time.sleep(3.5)
-                            continue
-                        else:
-                            switch_pwdless_attempts += 1
-                            if switch_pwdless_attempts > max_switch_pwdless_attempts:
-                                raise RuntimeError("OpenAI 要求密码登录，但系统内未找到可用密码，且页面无一次性验证码入口")
-                            _emit(f"检测到密码输入框但账号无可用密码，正在切换至一次性验证码登录 (尝试 {switch_pwdless_attempts}/{max_switch_pwdless_attempts})…")
-                            res = _click_passwordless_signup_if_present(driver)
-                            time.sleep(2.0)
-                            continue
-
-                # 6. 处于 TOTP 2FA 双因子验证挑战页面 (必须优先于 OTP 检测，因 MFA 挑战页面同样包含 one-time-code 输入框)
-                is_mfa_page = False
-                if any(k in cur_url.lower() for k in ["mfa", "challenge", "authenticator"]):
-                    is_mfa_page = True
-                else:
-                    try:
-                        body_text = driver.execute_script("return (document.body ? document.body.innerText : '').slice(0, 500);") or ""
-                        if any(w in body_text for w in ["認証アプリ", "authenticator", "ワンタイム", "security code", "two-factor", "Two-factor"]):
-                            is_mfa_page = True
-                    except Exception:
-                        pass
-
-                if is_mfa_page and (time.time() - last_totp_submit_time >= 5.0) and totp_attempts < max_totp_attempts:
-                    if not totp_secret:
-                        raise RuntimeError("账号触发了双因子 TOTP 验证，但系统内未存储 totp_secret")
-                    totp_attempts += 1
-                    last_totp_submit_time = time.time()
-                    import pyotp
-                    code = pyotp.TOTP(totp_secret).now()
-                    _emit(f"检测到双因子 TOTP 挑战 (第 {totp_attempts} 次)，正在计算动态令牌并自动提交…")
-                    try:
-                        from selenium.webdriver.common.by import By
-                        inputs = [
-                            e for e in driver.find_elements(
-                                By.CSS_SELECTOR,
-                                "input[name='code'], input[autocomplete='one-time-code'], input[inputmode='numeric'], input[type='text'], input[type='tel']"
-                            ) if e.is_displayed()
-                        ]
-                        if inputs:
-                            inp = inputs[0]
-                            driver.execute_script("""
-                                const el = arguments[0];
-                                const val = arguments[1];
-                                el.focus();
-                                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-                                if (setter) setter.call(el, val); else el.value = val;
-                                el.dispatchEvent(new Event('input', {bubbles: true}));
-                                el.dispatchEvent(new Event('change', {bubbles: true}));
-                            """, inp, code)
-                            try:
-                                inp.send_keys(code)
-                            except Exception:
-                                pass
-                            time.sleep(1.0)
-
-                            submit_btns = [
-                                b for b in driver.find_elements(
-                                    By.CSS_SELECTOR,
-                                    "button[type='submit'], form button, button[data-dd-action-name='Continue']"
-                                ) if b.is_displayed()
-                            ]
-                            if submit_btns:
-                                submit_btns[0].click()
-                            else:
-                                driver.execute_script("""
-                                    const btn = document.querySelector("button[type='submit'], form button");
-                                    if (btn) btn.click();
-                                """)
-                            time.sleep(3.0)
-                    except Exception as exc:
-                        _emit(f"TOTP 提交尝试异常: {exc}")
+                            const form = pwd.closest('form');
+                            const scope = form || document;
+                            const bad = /google|apple|microsoft|github|facebook|saml|sso|oauth|social/;
+                            const buttons = [...scope.querySelectorAll('button, input[type="submit"]')]
+                              .filter(el => visible(el) && !bad.test((el.className || '' + el.innerText).toLowerCase()))
+                              .map((el, idx) => {
+                                const r = el.getBoundingClientRect();
+                                const ir = pwd.getBoundingClientRect();
+                                return {el, idx, below: r.top >= ir.bottom - 10, dist: Math.max(0, r.top - ir.bottom)};
+                              })
+                              .filter(x => x.below)
+                              .sort((a,b) => a.dist - b.dist || a.idx - b.idx);
+                            if (buttons.length > 0) {
+                              buttons[0].el.click();
+                              return true;
+                            }
+                            if (form && typeof form.requestSubmit === 'function') {
+                              form.requestSubmit();
+                              return true;
+                            }
+                            pwd.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true}));
+                            return true;
+                        """, password)
+                        try:
+                            from selenium.webdriver.common.by import By
+                            from selenium.webdriver.common.keys import Keys
+                            pwd_els = [e for e in driver.find_elements(By.CSS_SELECTOR, "input[type='password']") if e.is_displayed()]
+                            if pwd_els:
+                                pwd_els[0].send_keys(Keys.ENTER)
+                        except Exception:
+                            pass
+                        time.sleep(3.5)
+                        continue
+                    else:
+                        switch_pwdless_attempts += 1
+                        if switch_pwdless_attempts > max_switch_pwdless_attempts:
+                            raise RuntimeError("OpenAI 要求密码登录，但系统内未找到可用密码，且页面无一次性验证码入口")
+                        _emit(f"检测到密码输入框但账号无可用密码，正在切换至一次性验证码登录 (尝试 {switch_pwdless_attempts}/{max_switch_pwdless_attempts})…")
+                        res = _click_passwordless_signup_if_present(driver)
                         time.sleep(2.0)
-                    continue
-
-                # 7. 处于邮箱验证码 (OTP) 页面 (严格排除 MFA 页面及已跳转至主站页面的情况)
-                is_otp_page = ("email-verification" in cur_url or "auth.openai.com/u/email-verification" in cur_url)
-                if not is_otp_page and not is_mfa_page:
-                    try:
-                        is_otp_page = bool(driver.execute_script("""
-                            const inps = [...document.querySelectorAll('input[name="code"], input[autocomplete="one-time-code"], input[data-testid="otp-input"], input[inputmode="numeric"]')];
-                            return inps.some(el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length));
-                        """))
-                    except Exception:
-                        is_otp_page = False
-
-                if is_otp_page and (time.time() - last_otp_submit_ts > 30.0):
-                    _emit("等待接收邮箱验证码 (OTP)…")
-                    try:
-                        otp_code = wait_for_otp(email, after_ts=otp_after_ts, max_wait=40, force_service=True)
-                    except Exception as exc:
-                        exc_str = str(exc)
-                        if "D0004" in exc_str:
-                            raise RuntimeError(f"该账号关联的临时邮箱已过服务商保留期 (MailNest D0004)，无法接收验证码: {email}") from exc
-                        raise
-
-                    # 检查等待期间页面是否已经自动跳转完成登录
-                    cur_now = str(getattr(driver, "current_url", "") or "")
-                    if "chatgpt.com" in cur_now and "login" not in cur_now and "auth.openai.com" not in cur_now:
-                        _emit("页面已在等待期间自动完成登录跳转，跳过验证码输入…")
                         continue
 
-                    _emit("收到邮箱验证码，正在模拟输入…")
-                    _clear_otp_inputs(driver)
-                    _type_otp(driver, otp_code)
-                    time.sleep(1.0)
-                    try:
-                        _click_continue(driver)
-                    except Exception:
-                        pass
-                    # 强力兜底：通过 JS 主动点击包含 Tiếp tục/Continue/続行 的提交按钮或触发 form submit
-                    try:
-                        driver.execute_script("""
-                            const btn = [...document.querySelectorAll('button')].find(b => {
-                                const t = (b.innerText || '').toLowerCase();
-                                return /continue|続行|继续|tiếp tục|next|submit/i.test(t) || b.type === 'submit';
-                            });
-                            if (btn && (btn.offsetWidth || btn.offsetHeight)) {
-                                btn.click();
-                            } else {
-                                const form = document.querySelector('form');
-                                if (form) form.requestSubmit ? form.requestSubmit() : form.submit();
-                            }
-                        """)
-                    except Exception:
-                        pass
-                    last_otp_submit_ts = time.time()
-                    otp_submitted = True
-                    time.sleep(3.0)
-                    continue
-
-                time.sleep(1.5)
-
-            if not access_token:
-                _emit("正在读取 ChatGPT 真实登录会话凭证…")
-                session_info = _fetch_chatgpt_session(driver, timeout=45, auto_jump_wait=30)
-                access_token = session_info.get("accessToken")
-                account_id = (session_info.get("account") or {}).get("id") or account_id
-
-            if not access_token:
+            # 6. 处于 TOTP 2FA 双因子验证挑战页面 (必须优先于 OTP 检测，因 MFA 挑战页面同样包含 one-time-code 输入框)
+            is_mfa_page = False
+            if any(k in cur_url.lower() for k in ["mfa", "challenge", "authenticator"]):
+                is_mfa_page = True
+            else:
                 try:
-                    from pathlib import Path
-                    screenshots_dir = Path("/app/注册日志/screenshots")
-                    screenshots_dir.mkdir(parents=True, exist_ok=True)
-                    shot_path = screenshots_dir / f"login_fail_{email}_{int(time.time())}.png"
-                    driver.save_screenshot(str(shot_path))
-                    cur = str(getattr(driver, "current_url", "") or "")
-                    logger.info("[提链] 登录未完成，现场快照已保存至 %s (url=%s)", shot_path, cur)
+                    body_text = driver.execute_script("return (document.body ? document.body.innerText : '').slice(0, 500);") or ""
+                    if any(w in body_text for w in ["認証アプリ", "authenticator", "ワンタイム", "security code", "two-factor", "Two-factor"]):
+                        is_mfa_page = True
                 except Exception:
                     pass
-                raise RuntimeError("指纹浏览器未能获取到有效 accessToken，登录未完成")
 
-            _emit(f"指纹环境已鉴权，正在通过拟人化操作向 OpenAI 发起【{origin_country}】原生提链…")
-            chk_res = _human_extract_checkout_url(driver, promo_campaign_id=promo_campaign_id, emit_fn=_emit, timeout=120.0, origin_country=origin_country)
-            if chk_res.get("ok"):
-                return _convert_to_lpm_if_needed(chk_res)
-            if chk_res.get("already_paid"):
-                return chk_res
+            if is_mfa_page and (time.time() - last_totp_submit_time >= 5.0) and totp_attempts < max_totp_attempts:
+                if not totp_secret:
+                    raise RuntimeError("账号触发了双因子 TOTP 验证，但系统内未存储 totp_secret")
+                totp_attempts += 1
+                last_totp_submit_time = time.time()
+                import pyotp
+                code = pyotp.TOTP(totp_secret).now()
+                _emit(f"检测到双因子 TOTP 挑战 (第 {totp_attempts} 次)，正在计算动态令牌并自动提交…")
+                try:
+                    from selenium.webdriver.common.by import By
+                    inputs = [
+                        e for e in driver.find_elements(
+                            By.CSS_SELECTOR,
+                            "input[name='code'], input[autocomplete='one-time-code'], input[inputmode='numeric'], input[type='text'], input[type='tel']"
+                        ) if e.is_displayed()
+                    ]
+                    if inputs:
+                        inp = inputs[0]
+                        driver.execute_script("""
+                            const el = arguments[0];
+                            const val = arguments[1];
+                            el.focus();
+                            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                            if (setter) setter.call(el, val); else el.value = val;
+                            el.dispatchEvent(new Event('input', {bubbles: true}));
+                            el.dispatchEvent(new Event('change', {bubbles: true}));
+                        """, inp, code)
+                        try:
+                            inp.send_keys(code)
+                        except Exception:
+                            pass
+                        time.sleep(1.0)
+
+                        submit_btns = [
+                            b for b in driver.find_elements(
+                                By.CSS_SELECTOR,
+                                "button[type='submit'], form button, button[data-dd-action-name='Continue']"
+                            ) if b.is_displayed()
+                        ]
+                        if submit_btns:
+                            submit_btns[0].click()
+                        else:
+                            driver.execute_script("""
+                                const btn = document.querySelector("button[type='submit'], form button");
+                                if (btn) btn.click();
+                            """)
+                        time.sleep(3.0)
+                except Exception as exc:
+                    _emit(f"TOTP 提交尝试异常: {exc}")
+                    time.sleep(2.0)
+                continue
+
+            # 7. 处于邮箱验证码 (OTP) 页面 (严格排除 MFA 页面及已跳转至主站页面的情况)
+            is_otp_page = ("email-verification" in cur_url or "auth.openai.com/u/email-verification" in cur_url)
+            if not is_otp_page and not is_mfa_page:
+                try:
+                    is_otp_page = bool(driver.execute_script("""
+                        const inps = [...document.querySelectorAll('input[name="code"], input[autocomplete="one-time-code"], input[data-testid="otp-input"], input[inputmode="numeric"]')];
+                        return inps.some(el => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length));
+                    """))
+                except Exception:
+                    is_otp_page = False
+
+            if is_otp_page and (time.time() - last_otp_submit_ts > 30.0):
+                _emit("等待接收邮箱验证码 (OTP)…")
+                try:
+                    otp_code = wait_for_otp(email, after_ts=otp_after_ts, max_wait=40, force_service=True)
+                except Exception as exc:
+                    exc_str = str(exc)
+                    if "D0004" in exc_str:
+                        raise RuntimeError(f"该账号关联的临时邮箱已过服务商保留期 (MailNest D0004)，无法接收验证码: {email}") from exc
+                    raise
+
+                # 检查等待期间页面是否已经自动跳转完成登录
+                cur_now = str(getattr(driver, "current_url", "") or "")
+                if "chatgpt.com" in cur_now and "login" not in cur_now and "auth.openai.com" not in cur_now:
+                    _emit("页面已在等待期间自动完成登录跳转，跳过验证码输入…")
+                    continue
+
+                _emit("收到邮箱验证码，正在模拟输入…")
+                _clear_otp_inputs(driver)
+                _type_otp(driver, otp_code)
+                time.sleep(1.0)
+                try:
+                    _click_continue(driver)
+                except Exception:
+                    pass
+                # 强力兜底：通过 JS 主动点击包含 Tiếp tục/Continue/続行 的提交按钮或触发 form submit
+                try:
+                    driver.execute_script("""
+                        const btn = [...document.querySelectorAll('button')].find(b => {
+                            const t = (b.innerText || '').toLowerCase();
+                            return /continue|続行|继续|tiếp tục|next|submit/i.test(t) || b.type === 'submit';
+                        });
+                        if (btn && (btn.offsetWidth || btn.offsetHeight)) {
+                            btn.click();
+                        } else {
+                            const form = document.querySelector('form');
+                            if (form) form.requestSubmit ? form.requestSubmit() : form.submit();
+                        }
+                    """)
+                except Exception:
+                    pass
+                last_otp_submit_ts = time.time()
+                otp_submitted = True
+                time.sleep(3.0)
+                continue
+
+            time.sleep(1.5)
+
+        if not access_token:
+            _emit("正在读取 ChatGPT 真实登录会话凭证…")
+            session_info = _fetch_chatgpt_session(driver, timeout=45, auto_jump_wait=30)
+            access_token = session_info.get("accessToken")
+            account_id = (session_info.get("account") or {}).get("id") or account_id
+
+        if not access_token:
+            try:
+                from pathlib import Path
+                screenshots_dir = Path("/app/注册日志/screenshots")
+                screenshots_dir.mkdir(parents=True, exist_ok=True)
+                shot_path = screenshots_dir / f"login_fail_{email}_{int(time.time())}.png"
+                driver.save_screenshot(str(shot_path))
+                cur = str(getattr(driver, "current_url", "") or "")
+                logger.info("[提链] 登录未完成，现场快照已保存至 %s (url=%s)", shot_path, cur)
+            except Exception:
+                pass
+            raise RuntimeError("指纹浏览器未能获取到有效 accessToken，登录未完成")
+
+        _emit(f"指纹环境已鉴权，正在通过拟人化操作向 OpenAI 发起【{origin_country}】原生提链…")
+        chk_res = _human_extract_checkout_url(driver, promo_campaign_id=promo_campaign_id, emit_fn=_emit, timeout=120.0, origin_country=origin_country)
+        if chk_res.get("ok"):
+            return _convert_to_lpm_if_needed(chk_res)
+        if chk_res.get("already_paid"):
+            return chk_res
 
             # 拟人化提链未出链，保存现场截图并报错，坚决不退回协议请求
             try:

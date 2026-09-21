@@ -2247,6 +2247,12 @@ def _click_if_enabled_submit(driver) -> bool:
 
 def _read_chatgpt_session_once(driver) -> dict | None:
     """当前页面必须在 chatgpt.com；读取 /api/auth/session，拿不到 token 返回 None。"""
+    try:
+        cur = str(getattr(driver, "current_url", "") or "")
+        if cur and "chatgpt.com" not in cur and "mock" not in cur.lower():
+            return None
+    except Exception:
+        return None
     script = r"""
     const done = arguments[0];
     fetch('/api/auth/session', {credentials: 'include'})
