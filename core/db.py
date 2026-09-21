@@ -727,6 +727,9 @@ def _decorate_account(row: dict) -> dict:
     out = dict(row)
     out["note"] = out.get("note") or ""
     out["note_updated_at"] = out.get("note_updated_at") or ""
+    reg_pwd = _extract_registration_password(out)
+    if reg_pwd and not out.get("password"):
+        out["password"] = reg_pwd
 
     # 国别地区信息解析与徽标格式化
     if not out.get("country_code") and out.get("proxy_used"):

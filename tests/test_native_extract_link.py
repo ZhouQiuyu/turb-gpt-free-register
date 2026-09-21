@@ -452,6 +452,18 @@ class TestNativeExtractLink(unittest.TestCase):
             if p.exists():
                 p.unlink()
 
+    def test_account_password_extracted_from_registration_password(self):
+        import json
+        from core import db
+        raw_row = {
+            "id": 888,
+            "email": "test@exclusive.mail",
+            "password": None,
+            "extra_json": json.dumps({"registration_password": "MySecretPassword123!"}),
+        }
+        dec = db._decorate_account(raw_row)
+        self.assertEqual(dec.get("password"), "MySecretPassword123!")
+
 
 if __name__ == "__main__":
     unittest.main()

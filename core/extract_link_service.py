@@ -790,6 +790,13 @@ def extract_checkout_url_with_cloak(
     access_token = str(account.get("access_token") or "").strip()
     account_id = str(account.get("account_id") or "").strip()
     totp_secret = str(account.get("totp_secret") or "").strip()
+    if not totp_secret and account.get("extra_json"):
+        try:
+            extra = json.loads(account["extra_json"]) if isinstance(account["extra_json"], str) else account["extra_json"]
+            totp_secret = str(extra.get("totp_secret") or extra.get("totp_key") or "").strip()
+        except Exception:
+            pass
+
     origin_country = str(account.get("country_code") or "JP").strip().upper() or "JP"
     currency = get_currency_for_country(origin_country)
     promo_campaign_id = str(
@@ -797,7 +804,16 @@ def extract_checkout_url_with_cloak(
         or account.get("promo_campaign_id")
         or ""
     ).strip()
-    password = str(account.get("password") or account.get("account_password") or account.get("openai_password") or "").strip()
+
+    from core.db import _extract_registration_password
+    password = str(
+        account.get("password")
+        or _extract_registration_password(account)
+        or account.get("registration_password")
+        or account.get("account_password")
+        or account.get("openai_password")
+        or ""
+    ).strip()
 
     # 本地校验 JWT 是否已过期
     token_expired = bool(account.get("token_expired") or is_jwt_expired(access_token))
@@ -868,6 +884,10 @@ def extract_checkout_url_with_cloak(
             last_otp_submit_ts = 0.0
             totp_attempts = 0
             max_totp_attempts = 3
+            password_attempts = 0
+            max_password_attempts = 3
+            switch_pwdless_attempts = 0
+            max_switch_pwdless_attempts = 3
             last_logged_url = ""
             last_totp_submit_time = 0.0
 
@@ -1005,7 +1025,10 @@ def extract_checkout_url_with_cloak(
                         has_password_input = False
                     if has_password_input:
                         if password:
-                            _emit("检测到密码输入框，正在输入密码…")
+                            password_attempts += 1
+                            if password_attempts > max_password_attempts:
+                                raise RuntimeError("OpenAI 密码验证失败次数过多，可能密码已被更改或账号受限")
+                            _emit(f"检测到密码输入框，正在输入密码 (第 {password_attempts}/{max_password_attempts} 次)…")
                             driver.execute_script("""
                                 const el = document.querySelector('input[type="password"], input[name="password"], input[autocomplete="current-password"]');
                                 const val = arguments[0];
@@ -1020,7 +1043,10 @@ def extract_checkout_url_with_cloak(
                             time.sleep(2.5)
                             continue
                         else:
-                            _emit("检测到密码输入框但账号无密码，正在切换至一次性验证码登录…")
+                            switch_pwdless_attempts += 1
+                            if switch_pwdless_attempts > max_switch_pwdless_attempts:
+                                raise RuntimeError("OpenAI 要求密码登录，但系统内未找到可用密码，且页面无一次性验证码入口")
+                            _emit(f"检测到密码输入框但账号无可用密码，正在切换至一次性验证码登录 (尝试 {switch_pwdless_attempts}/{max_switch_pwdless_attempts})…")
                             res = _click_passwordless_signup_if_present(driver)
                             time.sleep(2.0)
                             continue
