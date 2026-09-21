@@ -856,6 +856,11 @@ def extract_checkout_url_with_cloak(
                 _emit("存量会话拟人化提链未直接出链，进入登录自愈流…")
             else:
                 _emit("存量会话在当前浏览器环境中未就绪，切换至完整登录流程…")
+                try:
+                    driver.delete_all_cookies()
+                    driver.execute_script("try { localStorage.clear(); sessionStorage.clear(); } catch(e) {}")
+                except Exception:
+                    pass
             access_token = ""
 
         # -------------------------------------------------------------
@@ -918,28 +923,51 @@ def extract_checkout_url_with_cloak(
                     time.sleep(1.0)
                     continue
 
-                # 1.5. 检测并恢复 OpenAI 认证页 500 / Route Error / 不明なエラーが発生しました
-                is_route_error = None
-                try:
-                    is_route_error = driver.execute_script("""
-                        const t = (document.body ? document.body.innerText : '').toLowerCase();
-                        if (t.includes('route error') || t.includes('500 internal server') || t.includes('不明なエラーが発生しました')) {
-                            const btn = [...document.querySelectorAll('button')].find(b => /try again|もう一度試す/i.test(b.innerText || ''));
+                # 1.5. 检测并恢复 OpenAI 认证错误页 (/auth/error / 問題が発生しました / Route Error / 500)
+                is_auth_error = False
+                if "/auth/error" in cur_url:
+                    is_auth_error = True
+                else:
+                    try:
+                        is_auth_error = driver.execute_script("""
+                            const t = (document.body ? document.body.innerText : '').toLowerCase();
+                            return t.includes('問題が発生しました') || t.includes('route error') || 
+                                   t.includes('500 internal server') || t.includes('不明なエラーが発生しました') ||
+                                   t.includes('something went wrong') || t.includes('there was a problem');
+                        """)
+                    except Exception:
+                        is_auth_error = False
+
+                if is_auth_error:
+                    _emit("检测到处于 OpenAI 认证错误页 (/auth/error)，正在自动恢复并重试登录…")
+                    time.sleep(2.0)
+                    clicked_back = False
+                    try:
+                        clicked_back = driver.execute_script("""
+                            const btns = [...document.querySelectorAll('button, a')];
+                            const btn = btns.find(b => {
+                                const t = (b.innerText || '').trim().toLowerCase();
+                                return /戻る|もう一度試す|try again|back|sign in|ログイン/i.test(t);
+                            });
                             if (btn && (btn.offsetWidth || btn.offsetHeight)) {
                                 btn.click();
-                                return 'clicked_try_again';
+                                return true;
                             }
-                            return 'need_refresh';
-                        }
-                        return null;
-                    """)
-                except Exception:
-                    is_route_error = None
-                if is_route_error:
-                    _emit(f"检测到 OpenAI 认证页临时异常 ({is_route_error})，正在自动重试恢复…")
-                    time.sleep(2.0)
-                    if is_route_error == "need_refresh":
-                        driver.refresh()
+                            return false;
+                        """)
+                    except Exception:
+                        clicked_back = False
+
+                    if not clicked_back:
+                        try:
+                            driver.delete_all_cookies()
+                            driver.execute_script("try { localStorage.clear(); sessionStorage.clear(); } catch(e) {}")
+                        except Exception:
+                            pass
+                        driver.get("https://chatgpt.com/auth/login")
+
+                    email_submitted = False
+                    otp_submitted = False
                     time.sleep(3.0)
                     continue
 
