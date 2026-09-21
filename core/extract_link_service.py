@@ -464,17 +464,54 @@ def _human_extract_checkout_url(
     y = float(btn_info["y"])
     logger.info("[提链-拟人化] 执行真实鼠标轨迹点击试用确认按钮 '%s' at (%s, %s)", btn_info.get("text"), x, y)
     if page and hasattr(page, "mouse") and x > 0 and y > 0:
-        page.mouse.move(x, y)
-        time.sleep(0.12)
-        page.mouse.down()
-        time.sleep(0.08)
-        page.mouse.up()
-    else:
-        driver.execute_script("""
-            const buttons = [...document.querySelectorAll('button, div[role="button"]')];
-            const b = buttons.find(el => /特別オファーを利用|dùng thử|claim.*offer|try.*offer/i.test(el.innerText || ''));
-            if (b) b.click();
-        """)
+        try:
+            page.mouse.move(x, y)
+            time.sleep(0.12)
+            page.mouse.down()
+            time.sleep(0.08)
+            page.mouse.up()
+        except Exception as exc:
+            logger.warning("[提链-拟人化] Playwright mouse 点击异常: %s", exc)
+
+    # 双保险：通过 Playwright locator 精确点击 + DOM click 派发确保事件触发
+    if page:
+        try:
+            loc = page.locator('button:has-text("特別オファーを利用"), button:has-text("オファーを利用"), button:has-text("特典を利用"), button:has-text("Claim special offer"), [role="dialog"] button:has-text("利用"), [role="dialog"] button:has-text("試す")').first
+            if loc.is_visible():
+                loc.click(timeout=3000)
+        except Exception:
+            pass
+
+    driver.execute_script(r"""
+        try {
+            const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || (el.getClientRects && el.getClientRects().length));
+            const dialogs = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], [data-state="open"], .modal')].filter(visible);
+            let target = null;
+            for (const dialog of dialogs) {
+                const btns = [...dialog.querySelectorAll('button, div[role="button"], a[role="button"]')].filter(visible);
+                target = btns.find(b => {
+                    const t = (b.innerText || '').trim().toLowerCase();
+                    if (/閉じる|close|cancel|hủy|bỏ qua/i.test(t)) return false;
+                    if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中のプラン') || t.includes('current plan')) return false;
+                    return /特別オファーを利用|オファーを利用|特典を利用|利用する|plus を試す|無料で試す|dùng thử ưu đãi đặc biệt|dùng thử plus|claim special offer|try special offer|try plus|start trial|claim offer/i.test(t);
+                });
+                if (target) break;
+            }
+            if (!target) {
+                const allButtons = [...document.querySelectorAll('button, div[role="button"], a[role="button"]')].filter(visible);
+                target = allButtons.find(b => {
+                    const t = (b.innerText || '').trim().toLowerCase();
+                    if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中的プラン')) return false;
+                    if (/閉じる|close|cancel/i.test(t)) return false;
+                    return /特別オファーを利用|オファーを利用|特典を利用|plus を試す|無料で試す|dùng thử ưu đãi đặc biệt|claim special offer/i.test(t);
+                });
+            }
+            if (target) {
+                target.focus();
+                target.click();
+            }
+        } catch (_) {}
+    """)
 
     # 8. 阶段五：等待捕获 Stripe Checkout 链接 (Sentinel PoW 计算需 30~80s)
     _emit("等待官方生成 Stripe 结账链接 (含 Sentinel 人机对抗计算，最长等待 120 秒)…")
@@ -491,18 +528,35 @@ def _human_extract_checkout_url(
                 stripe_url = cur
             break
 
-        # 兜底：若 10 秒后未见任何网络请求或跳转且按钮仍可点击，轻微偏移再次模拟点击
+        # 兜底：若 10 秒后未见任何网络请求或跳转且按钮仍可点击，再次触发双重点击
         if not reclick_attempted and (time.time() - wait_start > 10.0) and not checkout_response_data:
             check_again = _find_modal_action_btn()
-            if check_again.get("ok") and check_again.get("x") and check_again.get("y"):
-                logger.info("[提链-拟人化] 首次点击可能未被触发，尝试轻微偏移再次点击确认按钮...")
+            if check_again.get("ok"):
+                logger.info("[提链-拟人化] 首次点击可能未被触发，执行多重补点击确认按钮...")
                 _emit("正在确保试用确认点击已触发…")
-                if page and hasattr(page, "mouse"):
-                    page.mouse.move(float(check_again["x"]) + 2, float(check_again["y"]) + 2)
-                    time.sleep(0.1)
-                    page.mouse.down()
-                    time.sleep(0.08)
-                    page.mouse.up()
+                if page and check_again.get("x") and hasattr(page, "mouse"):
+                    try:
+                        page.mouse.move(float(check_again["x"]) + 2, float(check_again["y"]) + 2)
+                        time.sleep(0.1)
+                        page.mouse.down()
+                        time.sleep(0.08)
+                        page.mouse.up()
+                    except Exception:
+                        pass
+                if page:
+                    try:
+                        loc = page.locator('button:has-text("特別オファーを利用"), button:has-text("オファーを利用")').first
+                        if loc.is_visible():
+                            loc.click(timeout=3000)
+                    except Exception:
+                        pass
+                driver.execute_script(r"""
+                    try {
+                        const btns = [...document.querySelectorAll('button')];
+                        const b = btns.find(el => /特別オファーを利用|オファーを利用/i.test(el.innerText || ''));
+                        if (b) { b.focus(); b.click(); }
+                    } catch (_) {}
+                """)
             reclick_attempted = True
 
         time.sleep(1.0)
