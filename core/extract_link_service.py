@@ -1238,11 +1238,6 @@ def extract_checkout_url_with_cloak(
                     return chk_res
 
             _emit("存量会话凭证已失效或未直接出链，切换至完整登录流程…")
-            try:
-                driver.delete_all_cookies()
-                driver.execute_script("try { localStorage.clear(); sessionStorage.clear(); } catch(e) {}")
-            except Exception:
-                pass
             access_token = ""
 
         # -------------------------------------------------------------
@@ -1372,23 +1367,6 @@ def extract_checkout_url_with_cloak(
             # 4. 提交账号邮箱步骤
             if not email_submitted:
                 _emit("正在进入登录流程并提交账号邮箱…")
-                cur = str(getattr(driver, "current_url", "") or "")
-                if "chatgpt.com" in cur:
-                    try:
-                        from core.roxy_registration import _submit_email_via_browser_nextauth
-                        na_res = _submit_email_via_browser_nextauth(driver, email)
-                        if na_res.get("ok"):
-                            email_submitted = True
-                            otp_after_ts = time.time() - 2.0
-                            t_end = max(t_end, time.time() + 180)
-                            logger.info("[提链] NextAuth 协议直达完成，进入下一状态: %s", na_res)
-                            time.sleep(2.0)
-                            continue
-                        else:
-                            logger.info("[提链] NextAuth 协议直达未成功，准备回退表单: %s", na_res)
-                    except Exception as na_err:
-                        logger.warning("[提链] NextAuth 尝试异常: %s", na_err)
-
                 try:
                     next_st = _submit_email_and_wait_next(driver, email, attempts=2, allow_login_password=True, timeout=45)
                     email_submitted = True
@@ -1495,17 +1473,17 @@ def extract_checkout_url_with_cloak(
                         try:
                             pwd_locator = page.locator('input[type="password"], input[name*="password" i], input[autocomplete="current-password"]').first
                             if pwd_locator.is_visible():
-                                pwd_locator.click()
+                                pwd_locator.click(force=True)
+                                time.sleep(0.2)
                                 pwd_locator.fill("")  # 彻底清除已有内容，防止拼接累加
                                 time.sleep(0.2)
-                                page.keyboard.type(password, delay=25)
+                                page.keyboard.type(password, delay=35)
                                 time.sleep(0.5)
                                 page.evaluate("""() => {
                                     const p = document.querySelector('input[type="password"], input[name*="password" i], input[autocomplete="current-password"]');
                                     if (p) {
                                         p.dispatchEvent(new Event('input', {bubbles: true}));
                                         p.dispatchEvent(new Event('change', {bubbles: true}));
-                                        p.blur();
                                     }
                                 }""")
                                 time.sleep(0.5)
@@ -1515,7 +1493,7 @@ def extract_checkout_url_with_cloak(
                                         break
                                     time.sleep(0.2)
                                 if s_btn.is_visible() and not s_btn.is_disabled():
-                                    s_btn.click()
+                                    s_btn.click(force=True)
                                     pwd_submitted = True
                                 else:
                                     page.keyboard.press("Enter")
@@ -1780,7 +1758,7 @@ def extract_checkout_url_with_cloak(
                         try:
                             totp_loc = page.locator("input[name='code'], input[autocomplete='one-time-code'], input[inputmode='numeric'], input[type='text'], input[type='tel']").first
                             if totp_loc.is_visible():
-                                totp_loc.click()
+                                totp_loc.click(force=True)
                                 totp_loc.fill(code)
                                 time.sleep(0.3)
                                 page.evaluate("""() => {
@@ -1797,7 +1775,7 @@ def extract_checkout_url_with_cloak(
                                         break
                                     time.sleep(0.2)
                                 if sub_btn.is_visible() and not sub_btn.is_disabled():
-                                    sub_btn.click()
+                                    sub_btn.click(force=True)
                                 else:
                                     page.keyboard.press("Enter")
                                 totp_filled = True

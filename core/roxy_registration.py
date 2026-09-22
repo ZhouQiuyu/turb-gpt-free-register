@@ -872,19 +872,6 @@ def _submit_email_form_stable(driver, email: str) -> dict:
 def _submit_email_step(driver, email: str | None = None) -> None:
     email_value = str(email or _current_email_input_value(driver) or "").strip()
 
-    # 优先尝试 NextAuth 协议直达授权页（在 chatgpt.com 上最稳定，直接将浏览器重定向至密码页）
-    try:
-        cur = str(getattr(driver, "current_url", "") or "")
-        if "chatgpt.com" in cur and email_value:
-            na_res = _submit_email_via_browser_nextauth(driver, email_value)
-            if na_res.get("ok"):
-                logger.info("%s 已通过 NextAuth 协议成功推进至登录授权页: email=%s", _log_prefix(driver), email_value)
-                time.sleep(1.5)
-                _assert_not_external_idp(driver, "稳定表单提交邮箱后")
-                return
-    except Exception as e:
-        logger.debug("%s NextAuth 提交尝试异常: %s", _log_prefix(driver), e)
-
     stable = _stabilize_email_input_before_submit(driver, email_value)
     logger.info("%s 邮箱提交前状态稳定：%s", _log_prefix(driver), stable)
     time.sleep(random.uniform(0.5, 1.0) if _browser_actions_enabled() else 0.3)
@@ -1250,42 +1237,13 @@ def _wait_email_submit_next_state(driver, email: str, timeout: int = 35) -> str:
         inputs = state.get("inputs") or []
         url = str(state.get("url") or getattr(driver, "current_url", "") or "")
 
-        # 核心增强：检测到处于原生 GET 刷新态 chatgpt.com/auth/login?email=xxx# 时立即自愈，绝不傻等 35s
+        # 若处于过渡态 chatgpt.com/auth/login?email=xxx，允许 SPA/Turnstile 自然流转，预留 15s 观察窗口
         if "/auth/login" in url and "email=" in url:
             now = time.time()
             if cleared_seen_at is None:
                 cleared_seen_at = now
-            if not cleared_recover_done and (now - cleared_seen_at >= 1.0):
-                cleared_recover_done = True
-                logger.info("%s 邮箱提交后检测到停留在 login?email，立即调用 NextAuth 协议直达授权页", _log_prefix(driver))
-                try:
-                    na_res = _submit_email_via_browser_nextauth(driver, expected_email)
-                    if na_res.get("ok"):
-                        logger.info("%s NextAuth 直跳完成，等待进入登录密码页: email=%s", _log_prefix(driver), expected_email)
-                        time.sleep(2.0)
-                        continue
-                except Exception as e_na:
-                    logger.debug("%s NextAuth 自愈异常: %s", _log_prefix(driver), e_na)
-
-                page = getattr(driver, "page", None)
-                if page is not None and not type(driver).__name__.startswith("MagicMock"):
-                    try:
-                        inp = page.locator('input[type="email"], input[name="email"], input[name="username"]').first
-                        if inp.is_visible():
-                            inp.focus()
-                            page.keyboard.press("Enter")
-                    except Exception:
-                        pass
-                    try:
-                        btn = page.locator('form button[type="submit"], button[type="submit"], button[name="action"][value="default"], button.btn-primary').first
-                        if btn.is_visible():
-                            btn.click(delay=80)
-                    except Exception:
-                        pass
-                recover = _recover_email_submit_if_stuck(driver, email)
-                logger.info("%s 补交表单结果：%s", _log_prefix(driver), recover)
-            if now - cleared_seen_at >= 6.0:
-                logger.info("%s 停留在 login?email 超过 6s，判定为刷新未走通，返回重新提交", _log_prefix(driver))
+            if now - cleared_seen_at >= 15.0:
+                logger.info("%s 停留在 login?email 超过 15s，判定为未走通，返回重新提交", _log_prefix(driver))
                 return "email_cleared"
 
         elif inputs:
@@ -1989,11 +1947,22 @@ def _is_login_password_page(driver) -> bool:
         url = str(driver.current_url or '').lower()
     except Exception:
         url = ''
-    if '/log-in/password' in url:
+    if any(k in url for k in ('/log-in/password', '/u/login/password', '/login/password')):
         return True
+    try:
+        title = str(getattr(driver, 'title', '') or '').lower()
+        if 'パスワード' in title or 'password' in title:
+            return True
+    except Exception:
+        pass
     state = _password_page_state(driver)
     url = str(state.get('url') or '').lower()
-    return '/log-in/password' in url
+    if any(k in url for k in ('/log-in/password', '/u/login/password', '/login/password')):
+        return True
+    inputs = state.get('inputs') or []
+    if not any(k in url for k in ('new-password', 'reset-password')):
+        return any(i.get('visible') and str(i.get('type') or '').lower() == 'password' for i in inputs)
+    return False
 
 
 def _click_passwordless_signup_if_present(driver) -> dict:
