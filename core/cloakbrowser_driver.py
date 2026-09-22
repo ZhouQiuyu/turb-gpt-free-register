@@ -304,7 +304,7 @@ class CloakSeleniumDriver:
 
     def save_screenshot(self, filename: str) -> bool:
         try:
-            self.page.screenshot(path=filename)
+            self.page.screenshot(path=filename, timeout=5000)
             return True
         except Exception as exc:
             logger.warning("[Cloak] save_screenshot 失败: %s", exc)

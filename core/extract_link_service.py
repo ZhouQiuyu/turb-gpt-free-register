@@ -430,17 +430,29 @@ def _human_extract_checkout_url(
                 const r = el.getBoundingClientRect();
                 return (r.width > 0 || r.height > 0 || el.offsetWidth > 0 || el.offsetHeight > 0);
             };
+
+            // 先尝试展开侧边栏 (若被折叠)
+            const sidebarBtn = document.querySelector('button[aria-label*="sidebar" i], button[data-testid*="sidebar" i], [aria-label*="サイドバー" i]');
+            if (sidebarBtn) {
+                try { sidebarBtn.click(); } catch(_) {}
+            }
+
             const all = [...document.querySelectorAll('button, a, div[role="button"], div[aria-haspopup="menu"], [tabindex="0"], nav div, nav button')].filter(visible);
             
-            // 优先根据 profile / user / account / free / 升级标识定位
-            let profileBtn = all.find(el => {
-                const t = (el.innerText || '').toLowerCase();
-                const attr = (el.getAttribute('data-testid') || '') + ' ' + (el.getAttribute('aria-label') || '');
-                if (attr.includes('profile') || attr.includes('user') || attr.includes('account')) return true;
-                return (t.includes('free') || t.includes('plus') || t.includes('upgrade') || t.includes('無料') || t.includes('プラン')) && !t.includes('new chat') && !t.includes('start');
-            });
-
-            // 备用兜底：左下角侧边栏区域 (x < 300, y > window.innerHeight - 150)
+            // 1. 直接通过 data-testid 定位
+            let profileBtn = document.querySelector('button[data-testid="profile-button"], [data-testid="profile-button"]');
+            if (!profileBtn) {
+                profileBtn = all.find(el => {
+                    const attr = ((el.getAttribute('data-testid') || '') + ' ' + (el.getAttribute('aria-label') || '')).toLowerCase();
+                    return attr.includes('profile') || attr.includes('user') || attr.includes('account');
+                });
+            }
+            if (!profileBtn) {
+                profileBtn = all.find(el => {
+                    const t = (el.innerText || '').toLowerCase();
+                    return (t.includes('free') || t.includes('plus') || t.includes('upgrade') || t.includes('無料') || t.includes('プラン')) && !t.includes('new chat') && !t.includes('start');
+                });
+            }
             if (!profileBtn) {
                 profileBtn = all.find(el => {
                     const r = el.getBoundingClientRect();
@@ -452,9 +464,17 @@ def _human_extract_checkout_url(
                 profileBtn.scrollIntoView({ block: 'center' });
                 try { profileBtn.click(); } catch (_) {}
                 const r = profileBtn.getBoundingClientRect();
-                return { ok: true, text: profileBtn.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
+                return { ok: true, text: (profileBtn.innerText || '').trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
             }
-            return { ok: false };
+            return {
+                ok: false,
+                all_buttons: all.slice(0, 15).map(el => ({
+                    tag: el.tagName,
+                    testid: el.getAttribute('data-testid'),
+                    aria: el.getAttribute('aria-label'),
+                    text: (el.innerText || '').slice(0, 30).trim()
+                }))
+            };
         """)
         logger.info("[提链-拟人化] 左下角账户按钮定位: %s", profile_btn_info)
         if profile_btn_info and profile_btn_info.get("ok") and profile_btn_info.get("x"):
@@ -781,7 +801,7 @@ def _execute_js_checkout(
             } catch (_) {}
 
             const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), 8000);
+            const timer = setTimeout(() => controller.abort(), 65000);
             try {
                 const r = await fetch('https://chatgpt.com/backend-api/payments/checkout', {
                     method: 'POST',
@@ -801,7 +821,7 @@ def _execute_js_checkout(
         }
         """
         try:
-            res = page.evaluate(js_evaluate, [clean_token, str(account_id or ""), country, currency, promo_campaign_id])
+            res = page.evaluate(js_evaluate, [clean_token, str(account_id or ""), country, currency, promo_campaign_id], timeout=75000)
         except Exception as exc:
             logger.warning(f"[提链] page.evaluate 原生 checkout 异常: {exc}")
             res = None
@@ -847,7 +867,7 @@ def _execute_js_checkout(
         } catch (_) {}
 
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 8000);
+        const timer = setTimeout(() => controller.abort(), 65000);
         fetch('https://chatgpt.com/backend-api/payments/checkout', {
             method: 'POST',
             credentials: 'include',
@@ -871,6 +891,11 @@ def _execute_js_checkout(
         except Exception as exc:
             logger.warning(f"[提链] execute_async_script 异常: {exc}")
             res = {"ok": False, "error": str(exc)}
+
+    logger.info("[提链] 原生 JS checkout 执行结果: status=%s, ok=%s, data_keys=%s, error=%s",
+                (res or {}).get("status"), (res or {}).get("ok"),
+                list(((res or {}).get("data") or {}).keys()) if isinstance((res or {}).get("data"), dict) else (res or {}).get("data"),
+                (res or {}).get("error"))
 
     if not res or not isinstance(res, dict):
         return {"ok": False, "error": "JS checkout returned invalid response"}
