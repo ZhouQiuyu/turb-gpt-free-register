@@ -589,20 +589,24 @@ def _wait_for_email_input(driver, timeout: int | None = None):
                 page = getattr(driver, "page", None)
                 if page is not None and not type(driver).__name__.startswith("MagicMock"):
                     try:
-                        slm_btn = page.locator('button[data-testid="login-button"], button[data-testid="signup-button"], [data-testid="login-button"], [data-testid="signup-button"], a[href*="/auth/login"]').first
+                        slm_btn = page.locator('button[data-testid="login-button"], button:text-is("Log in"), button:text-is("ログイン"), button:text-is("Sign in"), [data-testid="login-button"], a[href*="/auth/login"]').first
                         if slm_btn.is_visible(timeout=500):
                             slm_btn.click(delay=60)
-                            logger.info("%s 处于登录引导页/游客首页，已通过 Playwright 点击登录/注册按钮拉起弹窗", _log_prefix(driver))
+                            logger.info("%s 处于登录引导页/游客首页，已通过 Playwright 点击登录按钮拉起弹窗", _log_prefix(driver))
                             time.sleep(1.5)
                             continue
                     except Exception:
                         pass
                 res = driver.execute_script(r"""
                 try {
-                  const btn = document.querySelector(
+                  const btns = [...document.querySelectorAll('button, a, div[role="button"]')];
+                  const btn = btns.find(b => {
+                      const t = (b.innerText || '').trim().toLowerCase();
+                      return t === 'log in' || t === 'ログイン' || t === 'sign in' || t === 'サインイン' || b.getAttribute('data-testid') === 'login-button';
+                  }) || document.querySelector(
                     'button[data-testid="login-button"], button[data-testid="signup-button"], [data-testid="login-button"], [data-testid="signup-button"], button.login-button, button.signup-button, a[href*="/auth/login"]'
                   );
-                  if (btn && (btn.offsetWidth || btn.offsetHeight)) {
+                  if (btn && (btn.offsetWidth || btn.offsetHeight || btn.getClientRects().length)) {
                     btn.click();
                     return 'clicked';
                   }
@@ -610,7 +614,7 @@ def _wait_for_email_input(driver, timeout: int | None = None):
                 } catch (_) { return 'err'; }
                 """)
                 if res == "clicked":
-                    logger.info("%s 处于登录引导页/游客首页，已点击登录/注册按钮拉起弹窗", _log_prefix(driver))
+                    logger.info("%s 处于登录引导页/游客首页，已点击登录按钮拉起弹窗", _log_prefix(driver))
                     time.sleep(1.5)
                     continue
                 elif (end - time.time()) <= 15 and "slm=1" in curr_url:
@@ -1004,6 +1008,8 @@ def _submit_email_via_browser_nextauth(driver, email: str) -> dict:
     if page is not None and not type(driver).__name__.startswith("MagicMock"):
         try:
             result = page.evaluate(r"""async ([email, did, authLogId]) => {
+              const controller = new AbortController();
+              const timer = setTimeout(() => controller.abort(), 6000);
               try {
                 const csrfResp = await fetch('/api/auth/csrf', {
                   method: 'GET',
@@ -1012,13 +1018,15 @@ def _submit_email_via_browser_nextauth(driver, email: str) -> dict:
                     'accept': 'application/json',
                     'cache-control': 'no-cache',
                     'pragma': 'no-cache'
-                  }
+                  },
+                  signal: controller.signal
                 });
                 const csrfText = await csrfResp.text();
                 let csrfData = {};
                 try { csrfData = JSON.parse(csrfText); } catch (_) {}
                 const csrfToken = csrfData.csrfToken || '';
                 if (!csrfResp.ok || !csrfToken) {
+                  clearTimeout(timer);
                   return {ok:false, stage:'csrf', status:csrfResp.status, body:csrfText.slice(0, 500)};
                 }
 
@@ -1044,8 +1052,10 @@ def _submit_email_via_browser_nextauth(driver, email: str) -> dict:
                     'cache-control': 'no-cache',
                     'pragma': 'no-cache'
                   },
-                  body: body.toString()
+                  body: body.toString(),
+                  signal: controller.signal
                 });
+                clearTimeout(timer);
                 const text = await resp.text();
                 let data = {};
                 try { data = JSON.parse(text); } catch (_) {}
@@ -1064,6 +1074,7 @@ def _submit_email_via_browser_nextauth(driver, email: str) -> dict:
                 } catch (_) {}
                 return {ok:true, stage:'redirect', url:url};
               } catch (e) {
+                clearTimeout(timer);
                 return {ok:false, stage:'exception', error:String(e && (e.stack || e.message) || e).slice(0, 700)};
               }
             }""", [email, did, auth_log_id])
