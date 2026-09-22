@@ -227,25 +227,21 @@ def _human_extract_checkout_url(
             const allButtons = [...document.querySelectorAll('button, div[role="button"], a[role="button"]')].filter(visible);
 
             // 1. 优先在 dialog / modal 弹窗容器内寻找
-            const dialogs = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], [data-state="open"], .modal')].filter(visible);
+            const dialogs = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], .modal')].filter(visible);
             for (const dialog of dialogs) {
-                const dialogBtns = [...dialog.querySelectorAll('button, div[role="button"], a[role="button"]')].filter(visible);
+                const dialogBtns = [...dialog.querySelectorAll('button, div[role="button"], a[role="button"]')].filter(b => {
+                    if (!visible(b)) return false;
+                    const r = b.getBoundingClientRect();
+                    return r.left >= 260; // 严格排除侧边栏区域 (< 260px)
+                });
                 const btn = dialogBtns.find(b => {
                     const t = (b.innerText || '').trim().toLowerCase();
                     if (/閉じる|close|cancel|hủy|bỏ qua/i.test(t)) return false;
                     if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中のプラン') || t.includes('current plan')) return false;
                     if (/(?:^|\s)(?:go|pro|team|business|enterprise)(?:\s|$)/.test(t) && !t.includes('plus')) return false;
 
-                    // 精准动作关键词 (JP/VN/EN)
-                    return /特別オファーを利用|オファーを利用|特典を利用|利用する|無料オファーを受け取る|オファーを受け取る|特典を受け取る|無料オファー|plus を試す|無料で試す|plus をはじめる|plus にアップグレード|plus を利用|アップグレード|upgrade to plus|upgrade|dùng thử ưu đãi đặc biệt|dùng thử plus|ưu đãi đặc biệt|claim special offer|try special offer|try plus|start trial|claim offer/i.test(t);
-                }) || dialogBtns.find(b => {
-                    // 弹窗内 ChatGPT Plus 卡片内部的按钮
-                    const card = b.closest('div, section');
-                    const cardText = card ? (card.innerText || '').toLowerCase() : '';
-                    const t = (b.innerText || '').trim().toLowerCase();
-                    if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中のプラン')) return false;
-                    return (cardText.includes('chatgpt plus') || cardText.includes('plus')) &&
-                           /利用|dùng thử|try|claim|start|get|はじめる|アップグレード|upgrade|受け取る/i.test(t);
+                    // 精准动作关键词 (JP/VN/EN) - 排除纯侧栏入口「オファーを受け取る」
+                    return /特別オファーを利用|オファーを利用|特典を利用|利用する|無料オファーを受け取る|無料オファー|plus を試す|無料で試す|plus をはじめる|plus にアップグレード|plus を利用|アップグレード|upgrade to plus|upgrade|dùng thử ưu đãi đặc biệt|dùng thử plus|ưu đãi đặc biệt|claim special offer|try special offer|try plus|start trial|claim offer/i.test(t);
                 }) || dialogBtns.find(b => {
                     // 弹窗内主要蓝色/高亮按钮 (非当前套餐和关闭)
                     const style = window.getComputedStyle(b);
@@ -253,12 +249,19 @@ def _human_extract_checkout_url(
                     const t = (b.innerText || '').trim().toLowerCase();
                     if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中のプラン')) return false;
                     const isBlue = bg.includes('37, 99, 235') || bg.includes('16, 163, 127') || (bg.includes('rgb(') && !bg.includes('255, 255, 255') && !bg.includes('0, 0, 0'));
-                    return isBlue && /オファー|特典|plus|ưu đãi|trial|offer|はじめる|アップグレード|upgrade|受け取る/i.test(t);
+                    return isBlue && /オファー|特典|plus|ưu đãi|trial|offer|はじめる|アップグレード|upgrade/i.test(t);
+                }) || dialogBtns.find(b => {
+                    // 弹窗内 ChatGPT Plus 卡片内部的按钮
+                    const card = b.closest('div, section');
+                    const cardText = card ? (card.innerText || '').toLowerCase() : '';
+                    const t = (b.innerText || '').trim().toLowerCase();
+                    if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中のプラン')) return false;
+                    return (cardText.includes('chatgpt plus') || cardText.includes('plus')) &&
+                           /利用|dùng thử|try|claim|start|get|はじめる|アップグレード|upgrade/i.test(t);
                 });
 
                 if (btn) {
                     btn.scrollIntoView({ block: 'center' });
-                    try { btn.click(); } catch (_) {}
                     const r = btn.getBoundingClientRect();
                     return {
                         ok: true,
@@ -270,13 +273,15 @@ def _human_extract_checkout_url(
                 }
             }
 
-            // 2. 若无 dialog 容器标示，全局检索具有明确提交语义的按钮 (严格排除单纯的“受け取る/nhận”侧边栏入口)
-            const globalBtn = allButtons.find(b => {
+            // 2. 若无 dialog 容器标示，全局检索中央区域具有明确提交语义的按钮
+            const globalBtn = allButtons.filter(b => {
+                const r = b.getBoundingClientRect();
+                return r.left >= 260; // 排除侧边栏
+            }).find(b => {
                 const t = (b.innerText || '').trim().toLowerCase();
                 if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中のプラン') || t.includes('current plan')) return false;
                 if (/閉じる|close|cancel|hủy|bỏ qua/i.test(t)) return false;
-                // 重点：必须是“利用/Dùng thử/Try/Special offer/無料オファー/受け取る”，排除纯侧栏入口
-                return /特別オファーを利用|オファーを利用|特典を利用|無料オファーを受け取る|オファーを受け取る|特典を受け取る|無料オファー|plus を試す|無料で試す|plus をはじめる|plus にアップグレード|plus を利用|アップグレード|upgrade to plus|upgrade|dùng thử ưu đãi đặc biệt|dùng thử plus|claim special offer|try special offer/i.test(t);
+                return /特別オファーを利用|オファーを利用|特典を利用|無料オファーを受け取る|無料オファー|plus を試す|無料で試す|plus をはじめる|plus にアップグレード|plus を利用|アップグレード|upgrade to plus|upgrade|dùng thử ưu đãi đặc biệt|dùng thử plus|claim special offer|try special offer/i.test(t);
             });
 
             if (globalBtn) {
@@ -550,25 +555,33 @@ def _human_extract_checkout_url(
     driver.execute_script(r"""
         try {
             const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || (el.getClientRects && el.getClientRects().length));
-            const dialogs = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], [data-state="open"], .modal')].filter(visible);
+            const dialogs = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], .modal')].filter(visible);
             let target = null;
             for (const dialog of dialogs) {
-                const btns = [...dialog.querySelectorAll('button, div[role="button"], a[role="button"]')].filter(visible);
+                const btns = [...dialog.querySelectorAll('button, div[role="button"], a[role="button"]')].filter(b => {
+                    if (!visible(b)) return false;
+                    const r = b.getBoundingClientRect();
+                    return r.left >= 260; // 排除侧边栏
+                });
                 target = btns.find(b => {
                     const t = (b.innerText || '').trim().toLowerCase();
                     if (/閉じる|close|cancel|hủy|bỏ qua/i.test(t)) return false;
                     if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中のプラン') || t.includes('current plan')) return false;
-                    return /特別オファーを利用|オファーを利用|特典を利用|利用する|無料オファーを受け取る|オファーを受け取る|特典を受け取る|無料オファー|plus を試す|無料で試す|plus をはじめる|plus にアップグレード|plus を利用|アップグレード|upgrade to plus|upgrade|dùng thử ưu đãi đặc biệt|dùng thử plus|claim special offer|try special offer|try plus|start trial|claim offer/i.test(t);
+                    return /特別オファーを利用|オファーを利用|特典を利用|利用する|無料オファーを受け取る|無料オファー|plus を試す|無料で試す|plus をはじめる|plus にアップグレード|plus を利用|アップグレード|upgrade to plus|upgrade|dùng thử ưu đãi đặc biệt|dùng thử plus|claim special offer|try special offer|try plus|start trial|claim offer/i.test(t);
                 });
                 if (target) break;
             }
             if (!target) {
-                const allButtons = [...document.querySelectorAll('button, div[role="button"], a[role="button"]')].filter(visible);
+                const allButtons = [...document.querySelectorAll('button, div[role="button"], a[role="button"]')].filter(b => {
+                    if (!visible(b)) return false;
+                    const r = b.getBoundingClientRect();
+                    return r.left >= 260; // 排除侧边栏
+                });
                 target = allButtons.find(b => {
                     const t = (b.innerText || '').trim().toLowerCase();
                     if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中のプラン')) return false;
                     if (/閉じる|close|cancel/i.test(t)) return false;
-                    return /特別オファーを利用|オファーを利用|特典を利用|無料オファーを受け取る|オファーを受け取る|特典を受け取る|無料オファー|plus を試す|無料で試す|plus をはじめる|plus にアップグレード|plus を利用|アップグレード|upgrade to plus|upgrade|dùng thử ưu đãi đặc biệt|claim special offer/i.test(t);
+                    return /特別オファーを利用|オファーを利用|特典を利用|無料オファーを受け取る|無料オファー|plus を試す|無料で試す|plus をはじめる|plus にアップグレード|plus を利用|アップグレード|upgrade to plus|upgrade|dùng thử ưu đãi đặc biệt|claim special offer/i.test(t);
                 });
             }
             if (target) {
