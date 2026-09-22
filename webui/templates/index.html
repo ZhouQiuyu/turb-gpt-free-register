@@ -2860,11 +2860,11 @@
       <label class="outlook-import-field">
         <span>提链支付方式 (Local Payment Method)</span>
         <select id="extractLinkTypeSelect" onchange="onExtractLinkTypeChange()">
-          <option value="ideal" selected>🇳🇱 iDEAL（荷兰/欧洲网银直跳链接 · 最稳定推荐）</option>
-          <option value="card">💳 官方免登长链（支持 0 元试用 / 50% 折扣特惠签约）</option>
-          <option value="pix">🇧🇷 PIX（巴西二维码与 Copia e Cola 复制付款码）</option>
-          <option value="upi">🇮🇳 UPI（印度聚合支付直链 / 扫码）</option>
-          <option value="kakao_pay">🇰🇷 Kakao Pay（韩国移动端原生结账）</option>
+          <option value="ideal" selected>🇳🇱 iDEAL（荷兰/欧洲网银直跳 · 产出形态 A 免登长链 + 形态 B 跳转直链）</option>
+          <option value="card">💳 官方特惠/免登长链（支持 0 元试用 / 50% 折扣特惠签约 · 产出形态 A 免登收银台）</option>
+          <option value="pix">🇧🇷 PIX（巴西二维码与 Copia e Cola · 产出形态 A + 形态 B）</option>
+          <option value="upi">🇮🇳 UPI（印度聚合支付直链/扫码 · 产出形态 A + 形态 B）</option>
+          <option value="kakao_pay">🇰🇷 Kakao Pay（韩国移动端原生结账 · 产出形态 A + 形态 B）</option>
         </select>
       </label>
       <div class="extract-link-type-desc" id="extractLinkTypeDesc" style="margin:10px 0 12px;padding:12px;border-radius:8px;font-size:12px;line-height:1.6;background:var(--surface-muted, #f8fafc);color:var(--text, #334155);border:1px solid var(--border-subtle, #e2e8f0);">
@@ -4064,10 +4064,10 @@ function _extractLinkAction(r) {
   const s = r.extract_link_status || '';
   if (['queued','running'].includes(s)) return `<button disabled title="${esc(r.extract_link_message || '提链任务执行中')}">提链中…</button>`;
   const plan = (r.current_plan_type || r.plan_type || '').toString().toLowerCase();
-  const eligible = plan === 'free' && !!r.plus_trial_eligible;
+  const eligible = plan === 'free' || !plan || plan === 'unknown';
   if (!eligible) return '';
   const failedReason = (s === 'failed' || s === 'skipped') ? (r.extract_link_error || r.extract_link_message || '') : '';
-  const titleText = failedReason ? `重新提链；上次：${failedReason}` : '使用与账号同属地代理原生提取 Stripe 试用链接';
+  const titleText = failedReason ? `重新提链；上次：${failedReason}` : '使用与账号同属地代理原生提取 Stripe 结账链接 (形态 A 免登长链 / 形态 B 本地支付直链)';
   return `<button class="good" data-extract-link="${esc(r.id)}" title="${esc(titleText)}">🔗 提链</button>`;
 }
 function _codexAction(r) {
