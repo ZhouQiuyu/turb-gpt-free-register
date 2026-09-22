@@ -425,14 +425,32 @@ def _human_extract_checkout_url(
     if not btn_info.get("ok") and not stripe_url:
         _emit("未见直接弹窗，正在展开左下角账户菜单以触发升级入口…")
         profile_btn_info = driver.execute_script("""
-            const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight);
-            const profileBtn = document.querySelector('button[data-testid="profile-button"], [data-testid="accounts-profile-button"], div[data-testid="user-menu"], button[aria-label*="User"], button[aria-label*="Profile"]') ||
-                [...document.querySelectorAll('button, div[role="button"]')].find(el => {
-                    const t = (el.innerText || '').toLowerCase();
-                    return (t.includes('free') || t.includes('plus')) && visible(el);
+            const visible = el => {
+                if (!el) return false;
+                const r = el.getBoundingClientRect();
+                return (r.width > 0 || r.height > 0 || el.offsetWidth > 0 || el.offsetHeight > 0);
+            };
+            const all = [...document.querySelectorAll('button, a, div[role="button"], div[aria-haspopup="menu"], [tabindex="0"], nav div, nav button')].filter(visible);
+            
+            // 优先根据 profile / user / account / free / 升级标识定位
+            let profileBtn = all.find(el => {
+                const t = (el.innerText || '').toLowerCase();
+                const attr = (el.getAttribute('data-testid') || '') + ' ' + (el.getAttribute('aria-label') || '');
+                if (attr.includes('profile') || attr.includes('user') || attr.includes('account')) return true;
+                return (t.includes('free') || t.includes('plus') || t.includes('upgrade') || t.includes('無料') || t.includes('プラン')) && !t.includes('new chat') && !t.includes('start');
+            });
+
+            // 备用兜底：左下角侧边栏区域 (x < 300, y > window.innerHeight - 150)
+            if (!profileBtn) {
+                profileBtn = all.find(el => {
+                    const r = el.getBoundingClientRect();
+                    return r.left >= 0 && r.left < 280 && r.top > (window.innerHeight - 150) && r.width > 20 && r.height > 20;
                 });
+            }
+
             if (profileBtn) {
                 profileBtn.scrollIntoView({ block: 'center' });
+                try { profileBtn.click(); } catch (_) {}
                 const r = profileBtn.getBoundingClientRect();
                 return { ok: true, text: profileBtn.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
             }
@@ -446,23 +464,30 @@ def _human_extract_checkout_url(
                 page.mouse.down()
                 time.sleep(0.06)
                 page.mouse.up()
-            time.sleep(1.5)
+            time.sleep(2.0)
 
             menu_info = driver.execute_script("""
-                const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight);
-                const menuItems = [...document.querySelectorAll('[role="menuitem"], div[role="button"], button, a')].filter(visible);
+                const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || (el.getBoundingClientRect && (el.getBoundingClientRect().width > 0 || el.getBoundingClientRect().height > 0)));
+                const menuItems = [...document.querySelectorAll('[role="menuitem"], [role="option"], div[role="button"], button, a, li, div[tabindex="0"], div[tabindex="-1"], span')].filter(visible);
                 const upgradeItem = menuItems.find(el => {
-                    const t = (el.innerText || '').toLowerCase();
+                    const t = (el.innerText || '').trim().toLowerCase();
+                    if (t.includes('log out') || t.includes('logout') || t.includes('ログアウト') || t.includes('đăng xuất')) return false;
                     return (
-                        t.includes('nâng cấp') ||
+                        t.includes('upgrade plan') ||
+                        t.includes('upgrade to plus') ||
                         t.includes('upgrade') ||
-                        t.includes('claim') ||
-                        t.includes('ưu đãi') ||
-                        t.includes('plus') ||
-                        t.includes('特典') ||
+                        t.includes('プランをアップグレード') ||
+                        t.includes('アップグレード') ||
+                        t.includes('plus にアップグレード') ||
+                        t.includes('my plan') ||
+                        t.includes('plan') ||
+                        t.includes('プラン') ||
+                        t.includes('nâng cấp') ||
+                        t.includes('claim offer') ||
+                        t.includes('special offer') ||
                         t.includes('オファー') ||
-                        t.includes('アップグレード')
-                    ) && !t.includes('free') && !t.includes('login') && !t.includes('logout') && !t.includes('đăng xuất');
+                        t.includes('特典')
+                    ) && !t.includes('free') && !t.includes('login') && !t.includes('signin');
                 });
                 if (upgradeItem) {
                     upgradeItem.scrollIntoView({ block: 'center' });
@@ -470,7 +495,7 @@ def _human_extract_checkout_url(
                     const r = upgradeItem.getBoundingClientRect();
                     return { ok: true, text: upgradeItem.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
                 }
-                return { ok: false, items: menuItems.map(m => m.innerText.trim()).filter(Boolean) };
+                return { ok: false, items: menuItems.map(m => (m.innerText || '').trim()).filter(Boolean) };
             """)
             logger.info("[提链-拟人化] 个人菜单内升级项定位: %s", menu_info)
             if menu_info and menu_info.get("ok") and menu_info.get("x"):
