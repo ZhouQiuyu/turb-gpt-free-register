@@ -107,31 +107,7 @@ def _human_extract_checkout_url(
     captured_pk = None
 
     if page:
-        # 0. 注册 CDP 路由拦截器：将 checkout_ui_mode 重写为 hosted 以直接获取 Stripe 免登托管长链
-        if hasattr(page, "route"):
-            def handle_route(route, request):
-                try:
-                    if "/backend-api/payments/checkout" in request.url and request.method == "POST":
-                        post_data = request.post_data
-                        if post_data:
-                            try:
-                                payload = json.loads(post_data)
-                                logger.info("[CDP] 拦截到 /payments/checkout 请求，原 mode=%s", payload.get("checkout_ui_mode"))
-                                payload["checkout_ui_mode"] = "hosted"
-                                route.continue_(post_data=json.dumps(payload))
-                                logger.info("[CDP] 已将 checkout_ui_mode 重写为 hosted 并放行")
-                                return
-                            except Exception as ex:
-                                logger.warning("[CDP] 解析/重写 post_data 失败: %s", ex)
-                except Exception as exc:
-                    logger.warning("[CDP] 路由处理异常: %s", exc)
-                route.continue_()
 
-            try:
-                page.route("**/backend-api/payments/checkout", handle_route)
-                logger.info("[CDP] 已注册 **/backend-api/payments/checkout 请求重写拦截器")
-            except Exception as e:
-                logger.warning("[CDP] 注册路由拦截器异常: %s", e)
 
         # 1. 注册网络请求监听器：自动嗅探 Stripe 公钥 (pk_live_...) 及全量支付交互
         def handle_request(request):
@@ -821,7 +797,7 @@ def _execute_js_checkout(
         }
         """
         try:
-            res = page.evaluate(js_evaluate, [clean_token, str(account_id or ""), country, currency, promo_campaign_id], timeout=75000)
+            res = page.evaluate(js_evaluate, [clean_token, str(account_id or ""), country, currency, promo_campaign_id])
         except Exception as exc:
             logger.warning(f"[提链] page.evaluate 原生 checkout 异常: {exc}")
             res = None
