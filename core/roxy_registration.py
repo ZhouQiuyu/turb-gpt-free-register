@@ -867,6 +867,20 @@ def _submit_email_form_stable(driver, email: str) -> dict:
 
 def _submit_email_step(driver, email: str | None = None) -> None:
     email_value = str(email or _current_email_input_value(driver) or "").strip()
+
+    # 优先尝试 NextAuth 协议直达授权页（在 chatgpt.com 上最稳定，直接将浏览器重定向至密码页）
+    try:
+        cur = str(getattr(driver, "current_url", "") or "")
+        if "chatgpt.com" in cur and email_value:
+            na_res = _submit_email_via_browser_nextauth(driver, email_value)
+            if na_res.get("ok"):
+                logger.info("%s 已通过 NextAuth 协议成功推进至登录授权页: email=%s", _log_prefix(driver), email_value)
+                time.sleep(1.5)
+                _assert_not_external_idp(driver, "稳定表单提交邮箱后")
+                return
+    except Exception as e:
+        logger.debug("%s NextAuth 提交尝试异常: %s", _log_prefix(driver), e)
+
     stable = _stabilize_email_input_before_submit(driver, email_value)
     logger.info("%s 邮箱提交前状态稳定：%s", _log_prefix(driver), stable)
     time.sleep(random.uniform(0.5, 1.0) if _browser_actions_enabled() else 0.3)
@@ -974,7 +988,7 @@ def _submit_email_via_browser_nextauth(driver, email: str) -> dict:
 
     UI submit 在 Roxy/Chrome 150 上会偶发只跳到 `/auth/login?email=...` 后停住。
     这里改走浏览器页面内 fetch，仍使用当前 Roxy 浏览器的 cookie / 指纹环境，
-    拿到 auth.openai.com authorize URL 后让浏览器跳转。
+    拿到 auth.openai.com authorize URL 后让浏览器直接跳转至登录密码页。
     """
     try:
         current = str(getattr(driver, "current_url", "") or "")
@@ -1057,13 +1071,17 @@ def _submit_email_via_browser_nextauth(driver, email: str) -> dict:
               if (!u.searchParams.get('auth_session_logging_id')) u.searchParams.set('auth_session_logging_id', authLogId);
               url = u.toString();
             } catch (_) {}
-            window.location.assign(url);
-            done({ok:true, stage:'redirect', url:url.slice(0, 260)});
+            done({ok:true, stage:'redirect', url:url});
           } catch (e) {
             done({ok:false, stage:'exception', error:String(e && (e.stack || e.message) || e).slice(0, 700)});
           }
         })();
         """, email, did, auth_log_id) or {}
+        if isinstance(result, dict) and result.get("ok") and result.get("url"):
+            auth_target = result["url"]
+            logger.info("%s NextAuth 成功获取授权跳转 URL，正在通过浏览器直达: %s", _log_prefix(driver), auth_target[:120])
+            driver.get(auth_target)
+            time.sleep(2.0)
         return result if isinstance(result, dict) else {"ok": False, "reason": "invalid_result", "result": str(result)[:300]}
     except Exception as exc:
         return {"ok": False, "reason": f"{type(exc).__name__}: {exc}"}
@@ -1140,9 +1158,18 @@ def _wait_email_submit_next_state(driver, email: str, timeout: int = 35) -> str:
             now = time.time()
             if cleared_seen_at is None:
                 cleared_seen_at = now
-            if not cleared_recover_done and (now - cleared_seen_at >= 1.5):
+            if not cleared_recover_done and (now - cleared_seen_at >= 1.0):
                 cleared_recover_done = True
-                logger.info("%s 邮箱提交后检测到停留在 login?email，立即通过原生点击/补交重试表单提交", _log_prefix(driver))
+                logger.info("%s 邮箱提交后检测到停留在 login?email，立即调用 NextAuth 协议直达授权页", _log_prefix(driver))
+                try:
+                    na_res = _submit_email_via_browser_nextauth(driver, expected_email)
+                    if na_res.get("ok"):
+                        logger.info("%s NextAuth 直跳完成，等待进入登录密码页: email=%s", _log_prefix(driver), expected_email)
+                        time.sleep(2.0)
+                        continue
+                except Exception as e_na:
+                    logger.debug("%s NextAuth 自愈异常: %s", _log_prefix(driver), e_na)
+
                 page = getattr(driver, "page", None)
                 if page is not None and not type(driver).__name__.startswith("MagicMock"):
                     try:
@@ -1517,7 +1544,11 @@ def _page_snapshot(driver) -> dict:
 def _has_access_token(driver) -> bool:
     try:
         cur = str(getattr(driver, "current_url", "") or "")
-        if cur and "chatgpt.com" not in cur and "mock" not in cur.lower():
+        if not cur:
+            return False
+        if "/auth/login" in cur or "/auth/error" in cur or "auth.openai.com" in cur:
+            return False
+        if "chatgpt.com" not in cur and "mock" not in cur.lower():
             return False
         page = getattr(driver, "page", None)
         if page is not None and not type(driver).__name__.startswith("MagicMock"):
@@ -1526,7 +1557,7 @@ def _has_access_token(driver) -> bool:
                 async () => {
                     try {
                         const controller = new AbortController();
-                        const timer = setTimeout(() => controller.abort(), 8000);
+                        const timer = setTimeout(() => controller.abort(), 2500);
                         const r = await fetch('/api/auth/session', {credentials:'include', signal: controller.signal});
                         clearTimeout(timer);
                         let j = {};
