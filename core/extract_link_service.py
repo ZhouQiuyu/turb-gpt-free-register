@@ -1335,6 +1335,21 @@ def extract_checkout_url_with_cloak(
             # 4. 提交账号邮箱步骤
             if not email_submitted:
                 _emit("正在进入登录流程并提交账号邮箱…")
+                cur = str(getattr(driver, "current_url", "") or "")
+                if "chatgpt.com" in cur:
+                    try:
+                        from core.roxy_registration import _submit_email_via_browser_nextauth
+                        na_res = _submit_email_via_browser_nextauth(driver, email)
+                        if na_res.get("ok"):
+                            email_submitted = True
+                            otp_after_ts = time.time() - 2.0
+                            t_end = max(t_end, time.time() + 180)
+                            logger.info("[提链] NextAuth 协议直达完成，进入下一状态: %s", na_res)
+                            time.sleep(2.0)
+                            continue
+                    except Exception as na_err:
+                        logger.debug("[提链] NextAuth 尝试异常: %s", na_err)
+
                 try:
                     next_st = _submit_email_and_wait_next(driver, email, attempts=2, allow_login_password=True, timeout=45)
                     email_submitted = True

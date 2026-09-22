@@ -1000,6 +1000,82 @@ def _submit_email_via_browser_nextauth(driver, email: str) -> dict:
     did = str(uuid.uuid4())
     auth_log_id = str(uuid.uuid4())
     old_script_timeout = int(getattr(_cfg, "ROXY_SELENIUM_TIMEOUT", 90) or 90)
+    page = getattr(driver, "page", None)
+    if page is not None and not type(driver).__name__.startswith("MagicMock"):
+        try:
+            result = page.evaluate(r"""async ([email, did, authLogId]) => {
+              try {
+                const csrfResp = await fetch('/api/auth/csrf', {
+                  method: 'GET',
+                  credentials: 'include',
+                  headers: {
+                    'accept': 'application/json',
+                    'cache-control': 'no-cache',
+                    'pragma': 'no-cache'
+                  }
+                });
+                const csrfText = await csrfResp.text();
+                let csrfData = {};
+                try { csrfData = JSON.parse(csrfText); } catch (_) {}
+                const csrfToken = csrfData.csrfToken || '';
+                if (!csrfResp.ok || !csrfToken) {
+                  return {ok:false, stage:'csrf', status:csrfResp.status, body:csrfText.slice(0, 500)};
+                }
+
+                const q = new URLSearchParams({
+                  prompt: 'login',
+                  'ext-oai-did': did,
+                  auth_session_logging_id: authLogId,
+                  'ext-passkey-client-capabilities': '11111',
+                  screen_hint: 'login_or_signup',
+                  login_hint: email
+                });
+                const body = new URLSearchParams({
+                  callbackUrl: 'https://chatgpt.com/',
+                  csrfToken,
+                  json: 'true'
+                });
+                const resp = await fetch('/api/auth/signin/openai?' + q.toString(), {
+                  method: 'POST',
+                  credentials: 'include',
+                  headers: {
+                    'accept': 'application/json',
+                    'content-type': 'application/x-www-form-urlencoded',
+                    'cache-control': 'no-cache',
+                    'pragma': 'no-cache'
+                  },
+                  body: body.toString()
+                });
+                const text = await resp.text();
+                let data = {};
+                try { data = JSON.parse(text); } catch (_) {}
+                let url = data.url || '';
+                if (!resp.ok || !url) {
+                  return {ok:false, stage:'signin', status:resp.status, body:text.slice(0, 700)};
+                }
+
+                try {
+                  const u = new URL(url, location.href);
+                  if (!u.searchParams.get('screen_hint')) u.searchParams.set('screen_hint', 'login_or_signup');
+                  if (!u.searchParams.get('login_hint')) u.searchParams.set('login_hint', email);
+                  if (!u.searchParams.get('ext-oai-did')) u.searchParams.set('ext-oai-did', did);
+                  if (!u.searchParams.get('auth_session_logging_id')) u.searchParams.set('auth_session_logging_id', authLogId);
+                  url = u.toString();
+                } catch (_) {}
+                return {ok:true, stage:'redirect', url:url};
+              } catch (e) {
+                return {ok:false, stage:'exception', error:String(e && (e.stack || e.message) || e).slice(0, 700)};
+              }
+            }""", [email, did, auth_log_id])
+            if isinstance(result, dict) and result.get("ok") and result.get("url"):
+                auth_target = result["url"]
+                logger.info("%s NextAuth (Playwright) 成功获取授权跳转 URL，正在通过浏览器直达: %s", _log_prefix(driver), auth_target[:120])
+                driver.get(auth_target)
+                time.sleep(2.0)
+            return result if isinstance(result, dict) else {"ok": False, "reason": "invalid_result", "result": str(result)[:300]}
+        except Exception as p_exc:
+            logger.debug("%s NextAuth Playwright evaluate 异常，尝试回退: %s", _log_prefix(driver), p_exc)
+
     try:
         try:
             driver.set_script_timeout(25)
@@ -1009,7 +1085,7 @@ def _submit_email_via_browser_nextauth(driver, email: str) -> dict:
         const email = String(arguments[0] || '').trim();
         const did = String(arguments[1] || '');
         const authLogId = String(arguments[2] || '');
-        const done = arguments[arguments.length - 1];
+        const done = (typeof __cloak_done === 'function') ? __cloak_done : (arguments[arguments.length - 1] || function(){});
         (async () => {
           try {
             const csrfResp = await fetch('/api/auth/csrf', {
