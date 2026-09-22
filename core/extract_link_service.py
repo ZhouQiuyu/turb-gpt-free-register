@@ -1378,18 +1378,79 @@ def extract_checkout_url_with_cloak(
                     logger.warning("[提链] 邮箱提交流程异常，继续轮询: %s", exc)
                 continue
 
-            # 5. 处于密码输入页面
+            # 4.5 处于重置密码/设立新密码页面 (reset-password/new-password)
+            if any(k in cur_url.lower() for k in ["new-password", "reset-password/new-password"]):
+                _emit("处于新密码设立页面，正在配置新密码并提交…")
+                logger.info("[提链] 检测到新密码设立页 (reset-password/new-password)，准备提交新密码")
+                new_pwd = password or "%G6$C47ffq+KN8"
+                p_set = False
+                page = getattr(driver, "page", None)
+                if page is not None:
+                    try:
+                        p_inp = page.locator("input#password-input, input[name*='password' i], input[type='password']").first
+                        if p_inp.is_visible():
+                            p_inp.click()
+                            p_inp.fill(new_pwd)
+                            time.sleep(0.5)
+                            page.evaluate("""() => {
+                                const inp = document.querySelector('input#password-input, input[name*="password" i], input[type="password"]');
+                                if (inp) {
+                                    inp.dispatchEvent(new Event('input', {bubbles: true}));
+                                    inp.dispatchEvent(new Event('change', {bubbles: true}));
+                                    inp.blur();
+                                }
+                            }""")
+                            time.sleep(0.5)
+                            p_sub = page.locator("button[type='submit'], button.btn-primary, button:has-text('続行'), button:has-text('Continue'), button:has-text('Save'), button:has-text('Reset')").first
+                            for _ in range(15):
+                                if p_sub.is_visible() and not p_sub.is_disabled():
+                                    break
+                                time.sleep(0.2)
+                            if p_sub.is_visible():
+                                p_sub.click()
+                                p_set = True
+                    except Exception as pe:
+                        logger.warning("[提链] Playwright 设置新密码异常，回退 JS: %s", pe)
+                if not p_set:
+                    driver.execute_script("""
+                        const inp = document.querySelector('input#password-input, input[name*="password" i], input[type="password"]');
+                        if (inp) {
+                            inp.focus();
+                            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                            if (setter) setter.call(inp, arguments[0]); else inp.value = arguments[0];
+                            inp.dispatchEvent(new Event('input', {bubbles: true}));
+                            inp.dispatchEvent(new Event('change', {bubbles: true}));
+                            inp.blur();
+                            const form = inp.closest('form');
+                            const btn = form ? form.querySelector('button[type="submit"]:not([disabled]), button:not([disabled])') : null;
+                            if (btn) btn.click();
+                            else if (form && form.requestSubmit) form.requestSubmit();
+                        }
+                    """, new_pwd)
+                password = new_pwd
+                try:
+                    from core import db
+                    db.update_account_password(account_id_db, new_pwd)
+                    logger.info("[提链] 成功重置并同步数据库账号密码: id=%s", account_id_db)
+                except Exception as dbe:
+                    logger.warning("[提链] 同步数据库密码失败: %s", dbe)
+                _emit("新密码已确认提交，正在进入 ChatGPT…")
+                time.sleep(5.0)
+                continue
+
+            # 5. 处于密码输入页面 (排除设立新密码页面)
             has_password_input = False
-            try:
-                has_password_input = driver.execute_script("""
-                    const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
-                      && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'
-                      && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
-                    const pwd = document.querySelector('input[type="password"], input[name*="password" i], input[autocomplete="current-password"]');
-                    return !!(pwd && visible(pwd));
-                """)
-            except Exception:
-                has_password_input = False
+            if not any(k in cur_url.lower() for k in ["new-password", "reset-password"]):
+                try:
+                    has_password_input = driver.execute_script("""
+                        const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+                          && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'
+                          && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
+                        const pwd = document.querySelector('input[type="password"], input[name*="password" i], input[autocomplete="current-password"]');
+                        return !!(pwd && visible(pwd));
+                    """)
+                except Exception:
+                    has_password_input = False
 
             if has_password_input:
                 has_pwd_error = False
@@ -1416,16 +1477,28 @@ def extract_checkout_url_with_cloak(
                                 pwd_locator.click()
                                 pwd_locator.fill("")  # 彻底清除已有内容，防止拼接累加
                                 time.sleep(0.2)
-                                page.keyboard.type(password)
-                                time.sleep(0.3)
-                                page.keyboard.press("Enter")
-                                pwd_submitted = True
-                                try:
-                                    s_btn = page.locator('button[type="submit"], button.btn-primary').first
-                                    if s_btn.is_visible():
-                                        s_btn.click(delay=80, force=True)
-                                except Exception:
-                                    pass
+                                page.keyboard.type(password, delay=25)
+                                time.sleep(0.5)
+                                page.evaluate("""() => {
+                                    const p = document.querySelector('input[type="password"], input[name*="password" i], input[autocomplete="current-password"]');
+                                    if (p) {
+                                        p.dispatchEvent(new Event('input', {bubbles: true}));
+                                        p.dispatchEvent(new Event('change', {bubbles: true}));
+                                        p.blur();
+                                    }
+                                }""")
+                                time.sleep(0.5)
+                                s_btn = page.locator('button[type="submit"], button.btn-primary, button[data-dd-action-name="continue"], button[name="action"]').first
+                                for _ in range(15):
+                                    if s_btn.is_visible() and not s_btn.is_disabled():
+                                        break
+                                    time.sleep(0.2)
+                                if s_btn.is_visible() and not s_btn.is_disabled():
+                                    s_btn.click()
+                                    pwd_submitted = True
+                                else:
+                                    page.keyboard.press("Enter")
+                                    pwd_submitted = True
                         except Exception as pe:
                             logger.warning("[提链] Playwright 原生输入密码异常，回退 JS: %s", pe)
 
@@ -1438,8 +1511,14 @@ def extract_checkout_url_with_cloak(
                                 if (setter) setter.call(pwd, arguments[0]); else pwd.value = arguments[0];
                                 pwd.dispatchEvent(new Event('input', {bubbles: true}));
                                 pwd.dispatchEvent(new Event('change', {bubbles: true}));
+                                pwd.blur();
                                 const form = pwd.closest('form');
-                                if (form && form.requestSubmit) form.requestSubmit();
+                                const btn = form ? form.querySelector('button[type="submit"]:not([disabled]), button[name="action"]:not([disabled]), button:not([disabled])') : null;
+                                if (btn) {
+                                    btn.click();
+                                } else if (form && form.requestSubmit) {
+                                    form.requestSubmit();
+                                }
                             }
                         """, password)
 
@@ -1683,7 +1762,23 @@ def extract_checkout_url_with_cloak(
                                 totp_loc.click()
                                 totp_loc.fill(code)
                                 time.sleep(0.3)
-                                page.keyboard.press("Enter")
+                                page.evaluate("""() => {
+                                    const c = document.querySelector('input[name="code"], input[autocomplete="one-time-code"], input[inputmode="numeric"]');
+                                    if (c) {
+                                        c.dispatchEvent(new Event('input', {bubbles: true}));
+                                        c.dispatchEvent(new Event('change', {bubbles: true}));
+                                    }
+                                }""")
+                                time.sleep(0.3)
+                                sub_btn = page.locator("button[type='submit'], button.btn-primary, button:has-text('Continue'), button:has-text('続行')").first
+                                for _ in range(10):
+                                    if sub_btn.is_visible() and not sub_btn.is_disabled():
+                                        break
+                                    time.sleep(0.2)
+                                if sub_btn.is_visible() and not sub_btn.is_disabled():
+                                    sub_btn.click()
+                                else:
+                                    page.keyboard.press("Enter")
                                 totp_filled = True
                         except Exception:
                             pass
