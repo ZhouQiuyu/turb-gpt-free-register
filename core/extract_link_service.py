@@ -278,6 +278,7 @@ def _human_extract_checkout_url(
 
                 if (btn) {
                     btn.scrollIntoView({ block: 'center' });
+                    try { btn.click(); } catch (_) {}
                     const r = btn.getBoundingClientRect();
                     return {
                         ok: true,
@@ -300,6 +301,7 @@ def _human_extract_checkout_url(
 
             if (globalBtn) {
                 globalBtn.scrollIntoView({ block: 'center' });
+                try { globalBtn.click(); } catch (_) {}
                 const r = globalBtn.getBoundingClientRect();
                 return {
                     ok: true,
@@ -316,23 +318,26 @@ def _human_extract_checkout_url(
     def _find_pricing_entry_btn():
         """
         在页面主界面/侧边栏中定位唤出定价弹窗的入口按钮。
-        例如侧边栏的「オファーを受け取る」/「Nhận ưu đãi」/「アップグレード」/「Upgrade」。
+        例如侧边栏的「オファーを受け取る」/「Nhận ưu đãi」/「アップグレード」/「Upgrade」，以及右上角的「無料オファー」。
         """
         return driver.execute_script(r"""
             const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight);
             const allButtons = [...document.querySelectorAll('button, a, div[role="button"]')].filter(visible);
 
-            // 1. 匹配侧边栏横幅/专属优惠入口 (中英日越)
+            // 1. 匹配顶部横幅/侧边栏/专属优惠入口 (中英日越)
             const entryBtn = allButtons.find(b => {
                 const t = (b.innerText || '').trim().toLowerCase();
                 if (t.includes('login') || t.includes('signin') || t.includes('lên go') || t.includes('lên pro')) return false;
                 return (
+                    t.includes('無料オファー') ||
                     t.includes('オファーを受け取る') ||
                     t.includes('特典を受け取る') ||
+                    t.includes('特別オファー') ||
+                    t.includes('オファー') ||
+                    t.includes('特典') ||
                     t.includes('nhận ưu đãi') ||
                     t.includes('claim offer') ||
                     t.includes('get offer') ||
-                    t.includes('特別オファー') ||
                     t.includes('ưu đãi đặc biệt') ||
                     t.includes('plus にアップグレード') ||
                     t.includes('upgrade to plus') ||
@@ -345,6 +350,7 @@ def _human_extract_checkout_url(
 
             if (entryBtn) {
                 entryBtn.scrollIntoView({ block: 'center' });
+                try { entryBtn.click(); } catch (_) {}
                 const r = entryBtn.getBoundingClientRect();
                 return { ok: true, text: entryBtn.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
             }
@@ -367,6 +373,7 @@ def _human_extract_checkout_url(
                 const el = document.querySelector(sel);
                 if (el && visible(el)) {
                     el.scrollIntoView({ block: 'center' });
+                    try { el.click(); } catch (_) {}
                     const r = el.getBoundingClientRect();
                     return { ok: true, text: el.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
                 }
@@ -459,6 +466,7 @@ def _human_extract_checkout_url(
                 });
                 if (upgradeItem) {
                     upgradeItem.scrollIntoView({ block: 'center' });
+                    try { upgradeItem.click(); } catch (_) {}
                     const r = upgradeItem.getBoundingClientRect();
                     return { ok: true, text: upgradeItem.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
                 }
@@ -513,15 +521,6 @@ def _human_extract_checkout_url(
             page.mouse.up()
         except Exception as exc:
             logger.warning("[提链-拟人化] Playwright mouse 点击异常: %s", exc)
-
-    # 双保险：通过 Playwright locator 精确点击 + DOM click 派发确保事件触发
-    if page:
-        try:
-            loc = page.locator('button:has-text("特別オファーを利用"), button:has-text("オファーを利用"), button:has-text("特典を利用"), button:has-text("Claim special offer"), [role="dialog"] button:has-text("利用"), [role="dialog"] button:has-text("試す")').first
-            if loc.is_visible():
-                loc.click(timeout=3000)
-        except Exception:
-            pass
 
     driver.execute_script(r"""
         try {
@@ -1376,13 +1375,15 @@ def extract_checkout_url_with_cloak(
                                 pwd_locator.fill("")  # 彻底清除已有内容，防止拼接累加
                                 time.sleep(0.2)
                                 page.keyboard.type(password)
-                                time.sleep(0.5)
-                                submit_btn = page.locator('button:text-is("続行"), button:text-is("Continue"), button:text-is("Tiếp tục"), form button[type="submit"], button[type="submit"], button.btn-primary').first
-                                if submit_btn.is_visible():
-                                    submit_btn.click(delay=80, force=True)
-                                else:
-                                    page.keyboard.press("Enter")
+                                time.sleep(0.3)
+                                page.keyboard.press("Enter")
                                 pwd_submitted = True
+                                try:
+                                    s_btn = page.locator('button[type="submit"], button.btn-primary').first
+                                    if s_btn.is_visible():
+                                        s_btn.click(delay=80, force=True)
+                                except Exception:
+                                    pass
                         except Exception as pe:
                             logger.warning("[提链] Playwright 原生输入密码异常，回退 JS: %s", pe)
 
