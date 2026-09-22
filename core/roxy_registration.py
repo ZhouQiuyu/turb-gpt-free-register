@@ -2423,7 +2423,7 @@ def _read_chatgpt_session_once(driver) -> dict | None:
             async () => {
                 try {
                     const controller = new AbortController();
-                    const timer = setTimeout(() => controller.abort(), 15000);
+                    const timer = setTimeout(() => controller.abort(), 30000);
                     const r = await fetch('/api/auth/session', {credentials: 'include', signal: controller.signal});
                     clearTimeout(timer);
                     let j = {};

@@ -467,12 +467,14 @@ def _human_extract_checkout_url(
                 page.mouse.up()
             time.sleep(2.0)
 
-            menu_info = driver.execute_script("""
+            menu_info = driver.execute_script(r"""
                 const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || (el.getBoundingClientRect && (el.getBoundingClientRect().width > 0 || el.getBoundingClientRect().height > 0)));
                 const menuItems = [...document.querySelectorAll('[role="menuitem"], [role="option"], div[role="button"], button, a, li, div[tabindex="0"], div[tabindex="-1"], span')].filter(visible);
-                const upgradeItem = menuItems.find(el => {
+                
+                // 1. 明确的升级相关文字
+                let upgradeItem = menuItems.find(el => {
                     const t = (el.innerText || '').trim().toLowerCase();
-                    if (t.includes('log out') || t.includes('logout') || t.includes('ログアウト') || t.includes('đăng xuất')) return false;
+                    if (/log\s*out|ログアウト|đăng xuất/i.test(t)) return false;
                     return (
                         t.includes('upgrade plan') ||
                         t.includes('upgrade to plus') ||
@@ -488,8 +490,27 @@ def _human_extract_checkout_url(
                         t.includes('special offer') ||
                         t.includes('オファー') ||
                         t.includes('特典')
-                    ) && !t.includes('free') && !t.includes('login') && !t.includes('signin');
+                    ) && !t.includes('free') && !t.includes('無料') && !t.includes('login') && !t.includes('signin');
                 });
+
+                // 2. 如果没有直接升级项，定位带有当前套餐/工作区标识的菜单项 (例如 'Wayne Cruz\\n無料版' / 'Free')
+                // 在 ChatGPT 新版界面中，该项为套餐/工作区二级菜单入口，点击即可展开计划选项
+                if (!upgradeItem) {
+                    upgradeItem = menuItems.find(el => {
+                        const t = (el.innerText || '').trim().toLowerCase();
+                        if (/log\s*out|ログアウト|đăng xuất|パーソナライズ|プロフィール|ヘルプ|設定|settings/i.test(t)) return false;
+                        return (t.includes('無料版') || t.includes('無料') || t.includes('free')) && t.length < 50;
+                    });
+                }
+
+                // 3. 如果仍未找到，寻找【設定】(Settings)
+                if (!upgradeItem) {
+                    upgradeItem = menuItems.find(el => {
+                        const t = (el.innerText || '').trim().toLowerCase();
+                        return /^(設定|settings|cài đặt)$/i.test(t);
+                    });
+                }
+
                 if (upgradeItem) {
                     upgradeItem.scrollIntoView({ block: 'center' });
                     const r = upgradeItem.getBoundingClientRect();
@@ -505,7 +526,42 @@ def _human_extract_checkout_url(
                     page.mouse.down()
                     time.sleep(0.06)
                     page.mouse.up()
-            time.sleep(3.0)
+            time.sleep(2.0)
+
+            # 检查点击后是否展开了二级子菜单 (包含「プランをアップグレード」或「Upgrade」)
+            sub_menu_info = driver.execute_script(r"""
+                const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || (el.getBoundingClientRect && (el.getBoundingClientRect().width > 0 || el.getBoundingClientRect().height > 0)));
+                const all = [...document.querySelectorAll('[role="menuitem"], [role="option"], div[role="button"], button, a, li, div[tabindex="0"], div[tabindex="-1"], span')].filter(visible);
+                const subItem = all.find(el => {
+                    const t = (el.innerText || '').trim().toLowerCase();
+                    if (/log\s*out|ログアウト|đăng xuất/i.test(t)) return false;
+                    return (
+                        t.includes('プランをアップグレード') ||
+                        t.includes('plus にアップグレード') ||
+                        t.includes('upgrade to plus') ||
+                        t.includes('upgrade plan') ||
+                        t.includes('アップグレード') ||
+                        t.includes('upgrade') ||
+                        t.includes('オファー') ||
+                        t.includes('特典')
+                    );
+                });
+                if (subItem) {
+                    subItem.scrollIntoView({ block: 'center' });
+                    const r = subItem.getBoundingClientRect();
+                    return { ok: true, text: subItem.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
+                }
+                return { ok: false };
+            """)
+            if sub_menu_info and sub_menu_info.get("ok") and sub_menu_info.get("x"):
+                logger.info("[提链-拟人化] 二级菜单内升级按钮定位: %s", sub_menu_info)
+                if page and hasattr(page, "mouse"):
+                    page.mouse.move(float(sub_menu_info["x"]), float(sub_menu_info["y"]))
+                    time.sleep(0.08)
+                    page.mouse.down()
+                    time.sleep(0.06)
+                    page.mouse.up()
+                time.sleep(2.0)
 
             t_menu_wait = time.time() + 15.0
             while time.time() < t_menu_wait:
@@ -1121,7 +1177,7 @@ def extract_checkout_url_with_cloak(
                 return _convert_to_lpm_if_needed(human_res)
             if human_res.get("already_paid"):
                 return human_res
-            return human_res
+            logger.warning("[提链] 拟人化 UI 提取未出链，尝试通过页面内 JS 原生结账兜底: %s", human_res)
 
         # 1. 优先尝试以目标国家 + hosted 模式申请 (若有试用活动先带试用活动)
         chk_res = _execute_js_checkout(driver, tok, acc_id, req_country, req_currency, promo_campaign_id=promo_campaign_id)
@@ -1251,7 +1307,7 @@ def extract_checkout_url_with_cloak(
                 )
             _emit(f"正在打开 ChatGPT 登录页以建立新会话 ({email})…")
             from core.roxy_registration import _safe_get
-            _safe_get(driver, "https://chatgpt.com/auth/login", timeout=45, attempts=2, accept_hosts=("chatgpt.com", "auth.openai.com"))
+            _safe_get(driver, "https://chatgpt.com/", timeout=45, attempts=2, accept_hosts=("chatgpt.com", "auth.openai.com"))
             time.sleep(2.5)
 
         otp_after_ts = time.time() - 2.0
@@ -1334,7 +1390,7 @@ def extract_checkout_url_with_cloak(
                         driver.execute_script("try { localStorage.clear(); sessionStorage.clear(); } catch(e) {}")
                     except Exception:
                         pass
-                    driver.get("https://chatgpt.com/auth/login")
+                    driver.get("https://chatgpt.com/")
 
                 email_submitted = False
                 otp_submitted = False
@@ -1364,18 +1420,66 @@ def extract_checkout_url_with_cloak(
                         logger.warning("[提链] 更新账号会话失败: %s", exc)
                 break
 
-            # 4. 提交账号邮箱步骤
+            # 4. 提交账号邮箱步骤 (优先使用 Direct-Authorize 凭据跳转，绕过无头渲染空白页)
             if not email_submitted:
-                _emit("正在进入登录流程并提交账号邮箱…")
-                try:
-                    next_st = _submit_email_and_wait_next(driver, email, attempts=2, allow_login_password=True, timeout=45)
+                _emit(f"正在请求直接授权登录入口 ({email})…")
+                auth_url = None
+                page = getattr(driver, "page", None)
+                if page is not None and not type(driver).__name__.startswith("MagicMock"):
+                    try:
+                        import uuid
+                        did = str(uuid.uuid4())
+                        auth_log_id = str(uuid.uuid4())
+                        auth_url = page.evaluate("""async ([email, did, authLogId]) => {
+                            const csrfResp = await fetch('/api/auth/csrf', {credentials: 'include'});
+                            const csrfData = await csrfResp.json();
+                            const csrfToken = csrfData.csrfToken;
+                            const q = new URLSearchParams({
+                                prompt: 'login',
+                                'ext-oai-did': did,
+                                auth_session_logging_id: authLogId,
+                                'ext-passkey-client-capabilities': '11111',
+                                screen_hint: 'login_or_signup',
+                                login_hint: email
+                            });
+                            const body = new URLSearchParams({
+                                callbackUrl: 'https://chatgpt.com/',
+                                csrfToken,
+                                json: 'true'
+                            });
+                            const resp = await fetch('/api/auth/signin/openai?' + q.toString(), {
+                                method: 'POST',
+                                credentials: 'include',
+                                headers: {
+                                    'accept': 'application/json',
+                                    'content-type': 'application/x-www-form-urlencoded'
+                                },
+                                body: body.toString()
+                            });
+                            const data = await resp.json();
+                            return data.url;
+                        }""", [email, did, auth_log_id])
+                    except Exception as auth_ex:
+                        logger.warning("[提链] 获取直接授权链接异常，回退传统表单: %s", auth_ex)
+
+                if auth_url:
+                    _emit("已获取授权跳转链接，直接进入认证页面…")
+                    driver.get(auth_url)
                     email_submitted = True
                     otp_after_ts = time.time() - 2.0
                     t_end = max(t_end, time.time() + 180)
-                    logger.info("[提链] 邮箱提交完成，进入下一状态：%s", next_st)
-                except Exception as exc:
-                    logger.warning("[提链] 邮箱提交流程异常，继续轮询: %s", exc)
-                continue
+                    time.sleep(2.0)
+                    continue
+                else:
+                    try:
+                        next_st = _submit_email_and_wait_next(driver, email, attempts=2, allow_login_password=True, timeout=45)
+                        email_submitted = True
+                        otp_after_ts = time.time() - 2.0
+                        t_end = max(t_end, time.time() + 180)
+                        logger.info("[提链] 邮箱提交完成，进入下一状态：%s", next_st)
+                    except Exception as exc:
+                        logger.warning("[提链] 邮箱提交流程异常，继续轮询: %s", exc)
+                    continue
 
             # 4.5 处于重置密码/设立新密码页面 (reset-password/new-password)
             if any(k in cur_url.lower() for k in ["new-password", "reset-password/new-password"]):
@@ -1386,41 +1490,46 @@ def extract_checkout_url_with_cloak(
                 page = getattr(driver, "page", None)
                 if page is not None:
                     try:
-                        p_inp = page.locator("input#password-input, input[name*='password' i], input[type='password']").first
-                        if p_inp.is_visible():
-                            p_inp.click()
-                            p_inp.fill(new_pwd)
-                            time.sleep(0.5)
-                            page.evaluate("""() => {
-                                const inp = document.querySelector('input#password-input, input[name*="password" i], input[type="password"]');
-                                if (inp) {
-                                    inp.dispatchEvent(new Event('input', {bubbles: true}));
-                                    inp.dispatchEvent(new Event('change', {bubbles: true}));
-                                    inp.blur();
-                                }
-                            }""")
-                            time.sleep(0.5)
-                            p_sub = page.locator("button[type='submit'], button.btn-primary, button:has-text('続行'), button:has-text('Continue'), button:has-text('Save'), button:has-text('Reset')").first
-                            for _ in range(15):
-                                if p_sub.is_visible() and not p_sub.is_disabled():
-                                    break
-                                time.sleep(0.2)
-                            if p_sub.is_visible():
-                                p_sub.click()
-                                p_set = True
+                        p_new = page.locator("input[name='new-password'], input#password-input, input[type='password']").first
+                        p_conf = page.locator("input[name='confirm-password'], input[name*='confirm' i]").first
+                        if p_new.is_visible():
+                            p_new.click(force=True)
+                            p_new.fill(new_pwd)
+                            time.sleep(0.3)
+                        if p_conf.is_visible():
+                            p_conf.click(force=True)
+                            p_conf.fill(new_pwd)
+                            time.sleep(0.3)
+                        page.evaluate("""() => {
+                            document.querySelectorAll('input[type="password"]').forEach(inp => {
+                                inp.dispatchEvent(new Event('input', {bubbles: true}));
+                                inp.dispatchEvent(new Event('change', {bubbles: true}));
+                            });
+                        }""")
+                        time.sleep(0.5)
+                        p_sub = page.locator("button[type='submit'], button.btn-primary, button:has-text('続行'), button:has-text('Continue'), button:has-text('Save'), button:has-text('Reset')").first
+                        for _ in range(15):
+                            if p_sub.is_visible() and not p_sub.is_disabled():
+                                break
+                            time.sleep(0.2)
+                        if p_sub.is_visible() and not p_sub.is_disabled():
+                            p_sub.click(force=True)
+                            p_set = True
                     except Exception as pe:
                         logger.warning("[提链] Playwright 设置新密码异常，回退 JS: %s", pe)
                 if not p_set:
                     driver.execute_script("""
-                        const inp = document.querySelector('input#password-input, input[name*="password" i], input[type="password"]');
-                        if (inp) {
-                            inp.focus();
-                            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-                            if (setter) setter.call(inp, arguments[0]); else inp.value = arguments[0];
-                            inp.dispatchEvent(new Event('input', {bubbles: true}));
-                            inp.dispatchEvent(new Event('change', {bubbles: true}));
-                            inp.blur();
-                            const form = inp.closest('form');
+                        const inps = document.querySelectorAll('input[type="password"]');
+                        if (inps.length > 0) {
+                            inps.forEach(inp => {
+                                inp.focus();
+                                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                                if (setter) setter.call(inp, arguments[0]); else inp.value = arguments[0];
+                                inp.dispatchEvent(new Event('input', {bubbles: true}));
+                                inp.dispatchEvent(new Event('change', {bubbles: true}));
+                                inp.blur();
+                            });
+                            const form = inps[0].closest('form');
                             const btn = form ? form.querySelector('button[type="submit"]:not([disabled]), button:not([disabled])') : null;
                             if (btn) btn.click();
                             else if (form && form.requestSubmit) form.requestSubmit();
@@ -1464,9 +1573,9 @@ def extract_checkout_url_with_cloak(
                     has_pwd_error = False
 
                 # 若密码存在且未试过且页面无报错，尝试输入密码提交
-                if password and password_attempts < 2 and not has_pwd_error:
+                if password and password_attempts < 3 and not has_pwd_error:
                     password_attempts += 1
-                    _emit("检测到密码输入框，正在输入密码并提交…")
+                    _emit(f"检测到密码输入框 (第 {password_attempts}/3 次)，正在输入密码并提交…")
                     page = getattr(driver, "page", None)
                     pwd_submitted = False
                     if page is not None:
@@ -1477,7 +1586,7 @@ def extract_checkout_url_with_cloak(
                                 time.sleep(0.2)
                                 pwd_locator.fill("")  # 彻底清除已有内容，防止拼接累加
                                 time.sleep(0.2)
-                                page.keyboard.type(password, delay=35)
+                                pwd_locator.press_sequentially(password, delay=35)
                                 time.sleep(0.5)
                                 page.evaluate("""() => {
                                     const p = document.querySelector('input[type="password"], input[name*="password" i], input[autocomplete="current-password"]');
@@ -1487,7 +1596,7 @@ def extract_checkout_url_with_cloak(
                                     }
                                 }""")
                                 time.sleep(0.5)
-                                s_btn = page.locator('button[type="submit"], button.btn-primary, button[data-dd-action-name="continue"], button[name="action"]').first
+                                s_btn = page.locator("button[type='submit'], button[data-dd-action-name='Continue' i], button:has-text('Continue'), button:has-text('続行'), button.btn-primary").first
                                 for _ in range(15):
                                     if s_btn.is_visible() and not s_btn.is_disabled():
                                         break
@@ -1521,9 +1630,9 @@ def extract_checkout_url_with_cloak(
                             }
                         """, password)
 
-                    # 等待跳转反馈 (网络代理下需预留 15 秒观察窗口)
+                    # 等待跳转反馈 (网络代理下需预留 35 秒观察窗口)
                     wait_pwd = time.time()
-                    while time.time() - wait_pwd < 15.0:
+                    while time.time() - wait_pwd < 35.0:
                         time.sleep(1.0)
                         cur_now = str(getattr(driver, "current_url", "") or "")
                         if any(k in cur_now for k in ["mfa", "challenge", "email-verification", "authenticator"]) or not _find_visible_password_input_js(driver):
@@ -1537,6 +1646,7 @@ def extract_checkout_url_with_cloak(
                         if err_now:
                             logger.warning("[提链] 密码提交后检测到明确密码错误提示")
                             break
+                    t_end = max(t_end, time.time() + 180)
                     continue
 
                 # 方案 2：若无密码、密码已试过、或页面显示密码错误，自动无缝切换至邮箱一次性验证码 (OTP)
@@ -1709,21 +1819,27 @@ def extract_checkout_url_with_cloak(
                         if page is not None:
                             try:
                                 new_pwd = password or "%G6$C47ffq+KN8"
-                                p_inp = page.locator("input#password-input, input[name*='password' i], input[type='password']").first
-                                if p_inp.is_visible():
-                                    p_inp.fill(new_pwd)
-                                    time.sleep(0.5)
-                                    p_sub = page.locator("button[type='submit'], button.btn-primary, button:text-is('続行'), button:text-is('Continue')").first
-                                    p_sub.click(force=True)
-                                    _emit("新密码已确认提交，正在进入 ChatGPT…")
-                                    password = new_pwd
-                                    try:
-                                        from core import db
-                                        db.update_account_password(account_id_db, new_pwd)
-                                    except Exception:
-                                        pass
-                                    time.sleep(4.0)
-                                    continue
+                                p_new = page.locator("input[name='new-password'], input#password-input, input[type='password']").first
+                                p_conf = page.locator("input[name='confirm-password'], input[name*='confirm' i]").first
+                                if p_new.is_visible():
+                                    p_new.click(force=True)
+                                    p_new.fill(new_pwd)
+                                    time.sleep(0.3)
+                                if p_conf.is_visible():
+                                    p_conf.click(force=True)
+                                    p_conf.fill(new_pwd)
+                                    time.sleep(0.3)
+                                p_sub = page.locator("button[type='submit'], button.btn-primary, button:text-is('続行'), button:text-is('Continue')").first
+                                p_sub.click(force=True)
+                                _emit("新密码已确认提交，正在进入 ChatGPT…")
+                                password = new_pwd
+                                try:
+                                    from core import db
+                                    db.update_account_password(account_id_db, new_pwd)
+                                except Exception:
+                                    pass
+                                time.sleep(4.0)
+                                continue
                             except Exception as ex_rst:
                                 logger.warning("[提链] 填写新密码异常: %s", ex_rst)
 
@@ -1759,7 +1875,8 @@ def extract_checkout_url_with_cloak(
                             totp_loc = page.locator("input[name='code'], input[autocomplete='one-time-code'], input[inputmode='numeric'], input[type='text'], input[type='tel']").first
                             if totp_loc.is_visible():
                                 totp_loc.click(force=True)
-                                totp_loc.fill(code)
+                                totp_loc.fill("")
+                                totp_loc.press_sequentially(code, delay=50)
                                 time.sleep(0.3)
                                 page.evaluate("""() => {
                                     const c = document.querySelector('input[name="code"], input[autocomplete="one-time-code"], input[inputmode="numeric"]');
@@ -1779,6 +1896,7 @@ def extract_checkout_url_with_cloak(
                                 else:
                                     page.keyboard.press("Enter")
                                 totp_filled = True
+                                t_end = max(t_end, time.time() + 180)
                         except Exception:
                             pass
                     if not totp_filled:
@@ -1840,8 +1958,11 @@ def extract_checkout_url_with_cloak(
                         raise RuntimeError(f"该账号关联的临时邮箱已过服务商保留期 (MailNest D0004)，无法接收验证码: {email}") from exc
                     raise
 
-                # 检查等待期间页面是否已经自动跳转完成登录
+                # 检查等待期间页面是否已经自动跳转完成登录或流转至新密码/MFA环节
                 cur_now = str(getattr(driver, "current_url", "") or "")
+                if any(k in cur_now.lower() for k in ["new-password", "reset-password/new-password", "mfa", "challenge", "authenticator"]):
+                    _emit(f"等待验证码期间页面已自动流转至下一环节 ({cur_now})，跳过验证码填写…")
+                    continue
                 if "chatgpt.com" in cur_now and "login" not in cur_now and "auth.openai.com" not in cur_now:
                     _emit("页面已在等待期间自动完成登录跳转，跳过验证码输入…")
                     continue
@@ -1854,13 +1975,21 @@ def extract_checkout_url_with_cloak(
                         otp_loc = page.locator('input[name="code"], input[autocomplete="one-time-code"], input[data-testid="otp-input"], input[inputmode="numeric"]').first
                         if otp_loc.is_visible():
                             otp_loc.click()
-                            page.keyboard.type(str(otp_code))
+                            otp_loc.fill("")
+                            otp_loc.press_sequentially(str(otp_code), delay=40)
                             otp_filled = True
                     except Exception:
                         pass
                 if not otp_filled:
-                    _clear_otp_inputs(driver)
-                    _type_otp(driver, otp_code)
+                    try:
+                        _clear_otp_inputs(driver)
+                        _type_otp(driver, otp_code)
+                    except Exception as otp_type_err:
+                        cur_after_err = str(getattr(driver, "current_url", "") or "")
+                        if any(k in cur_after_err.lower() for k in ["new-password", "reset-password", "mfa", "chatgpt.com"]):
+                            _emit(f"填写验证码时检测到页面已流转至: {cur_after_err}，继续流程…")
+                            continue
+                        raise
                 time.sleep(1.0)
                 try:
                     _click_continue(driver)
@@ -1890,7 +2019,7 @@ def extract_checkout_url_with_cloak(
 
         if not access_token:
             _emit("正在读取 ChatGPT 真实登录会话凭证…")
-            session_info = _fetch_chatgpt_session(driver, timeout=45, auto_jump_wait=30)
+            session_info = _fetch_chatgpt_session(driver, timeout=90, auto_jump_wait=45)
             access_token = session_info.get("accessToken")
             account_id = (session_info.get("account") or {}).get("id") or account_id
 
