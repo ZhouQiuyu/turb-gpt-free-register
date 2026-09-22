@@ -1516,12 +1516,39 @@ def _page_snapshot(driver) -> dict:
 
 def _has_access_token(driver) -> bool:
     try:
+        cur = str(getattr(driver, "current_url", "") or "")
+        if cur and "chatgpt.com" not in cur and "mock" not in cur.lower():
+            return False
+        page = getattr(driver, "page", None)
+        if page is not None and not type(driver).__name__.startswith("MagicMock"):
+            try:
+                res = page.evaluate("""
+                async () => {
+                    try {
+                        const controller = new AbortController();
+                        const timer = setTimeout(() => controller.abort(), 8000);
+                        const r = await fetch('/api/auth/session', {credentials:'include', signal: controller.signal});
+                        clearTimeout(timer);
+                        let j = {};
+                        try { j = await r.json(); } catch(_) {}
+                        return Boolean(j && j.accessToken);
+                    } catch (_) {
+                        return false;
+                    }
+                }
+                """)
+                return bool(res)
+            except Exception:
+                return False
+
         result = driver.execute_async_script(r"""
-        const done = arguments[0];
-        fetch('https://chatgpt.com/api/auth/session', {credentials:'include'})
-          .then(r => r.json()).then(j => done(Boolean(j && j.accessToken)))
-          .catch(() => done(false));
+        const done = (typeof __cloak_done === 'function') ? __cloak_done : arguments[arguments.length - 1];
+        fetch('/api/auth/session', {credentials:'include'})
+          .then(r => r.json()).then(j => { if (typeof done === 'function') done(Boolean(j && j.accessToken)); })
+          .catch(() => { if (typeof done === 'function') done(false); });
         """)
+        if isinstance(result, dict) and (result.get("__cloak_timeout") or not result.get("ok", True)):
+            return False
         return bool(result)
     except Exception:
         return False
@@ -2319,9 +2346,10 @@ def _read_chatgpt_session_once(driver) -> dict | None:
             return None
         except Exception as exc:
             logger.debug("%s page.evaluate 读取 session 异常: %s", _log_prefix(driver), exc)
+            return None
 
     script = r"""
-    const done = (typeof __cloak_done === 'function') ? __cloak_done : arguments[0];
+    const done = (typeof __cloak_done === 'function') ? __cloak_done : arguments[arguments.length - 1];
     fetch('/api/auth/session', {credentials: 'include'})
       .then(r => r.json())
       .then(j => { if (typeof done === 'function') done({ok: true, data: j}); })
@@ -2329,7 +2357,7 @@ def _read_chatgpt_session_once(driver) -> dict | None:
     """
     try:
         result = driver.execute_async_script(script)
-        if result and result.get("ok"):
+        if isinstance(result, dict) and not result.get("__cloak_timeout") and result.get("ok"):
             data = result.get("data") or {}
             if data.get("accessToken"):
                 logger.info("%s /api/auth/session 已返回 accessToken", _log_prefix(driver))

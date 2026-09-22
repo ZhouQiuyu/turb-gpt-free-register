@@ -257,7 +257,7 @@ def _human_extract_checkout_url(
                     if (/(?:^|\s)(?:go|pro|team|business|enterprise)(?:\s|$)/.test(t) && !t.includes('plus')) return false;
 
                     // 精准动作关键词 (JP/VN/EN)
-                    return /特別オファーを利用|オファーを利用|特典を利用|利用する|plus を試す|無料で試す|dùng thử ưu đãi đặc biệt|dùng thử plus|ưu đãi đặc biệt|claim special offer|try special offer|try plus|start trial|claim offer/i.test(t);
+                    return /特別オファーを利用|オファーを利用|特典を利用|利用する|plus を試す|無料で試す|plus をはじめる|plus にアップグレード|plus を利用|dùng thử ưu đãi đặc biệt|dùng thử plus|ưu đãi đặc biệt|claim special offer|try special offer|try plus|start trial|claim offer/i.test(t);
                 }) || dialogBtns.find(b => {
                     // 弹窗内 ChatGPT Plus 卡片内部的按钮
                     const card = b.closest('div, section');
@@ -265,7 +265,7 @@ def _human_extract_checkout_url(
                     const t = (b.innerText || '').trim().toLowerCase();
                     if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中のプラン')) return false;
                     return (cardText.includes('chatgpt plus') || cardText.includes('plus')) &&
-                           /利用|dùng thử|try|claim|start|get/i.test(t);
+                           /利用|dùng thử|try|claim|start|get|はじめる|アップグレード/i.test(t);
                 }) || dialogBtns.find(b => {
                     // 弹窗内主要蓝色/高亮按钮 (非当前套餐和关闭)
                     const style = window.getComputedStyle(b);
@@ -273,7 +273,7 @@ def _human_extract_checkout_url(
                     const t = (b.innerText || '').trim().toLowerCase();
                     if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中のプラン')) return false;
                     const isBlue = bg.includes('37, 99, 235') || bg.includes('16, 163, 127') || (bg.includes('rgb(') && !bg.includes('255, 255, 255') && !bg.includes('0, 0, 0'));
-                    return isBlue && /オファー|特典|plus|ưu đãi|trial|offer/i.test(t);
+                    return isBlue && /オファー|特典|plus|ưu đãi|trial|offer|はじめる/i.test(t);
                 });
 
                 if (btn) {
@@ -295,7 +295,7 @@ def _human_extract_checkout_url(
                 if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中のプラン') || t.includes('current plan')) return false;
                 if (/閉じる|close|cancel|hủy|bỏ qua/i.test(t)) return false;
                 // 重点：必须是“利用/Dùng thử/Try/Special offer”，排除纯侧栏入口
-                return /特別オファーを利用|オファーを利用|特典を利用|plus を試す|無料で試す|dùng thử ưu đãi đặc biệt|dùng thử plus|claim special offer|try special offer/i.test(t);
+                return /特別オファーを利用|オファーを利用|特典を利用|plus を試す|無料で試す|plus をはじめる|plus にアップグレード|plus を利用|dùng thử ưu đãi đặc biệt|dùng thử plus|claim special offer|try special offer/i.test(t);
             });
 
             if (globalBtn) {
@@ -1070,7 +1070,7 @@ def extract_checkout_url_with_cloak(
         res["lpm_url"] = ""
         return res
 
-    def _do_checkout(tok: str, acc_id: str, phase_desc: str) -> dict[str, Any]:
+    def _do_checkout(tok: str, acc_id: str, phase_desc: str, allow_human: bool = True) -> dict[str, Any]:
         _emit(f"{phase_desc}，正在向 OpenAI 发起【{req_country} ({lpm.upper()})】原生结账申请 (hosted 模式)…")
 
         # 1. 优先尝试以目标国家 + hosted 模式申请 (若有试用活动先带试用活动)
@@ -1094,8 +1094,8 @@ def extract_checkout_url_with_cloak(
         if chk_res.get("already_paid"):
             return chk_res
 
-        # 5. 若接口方式未成功且非 401，最后尝试拟人化 UI 模拟点击兜底
-        if chk_res.get("status") != 401:
+        # 5. 若接口方式未成功且非 401，且允许拟人化 (已处于登录环境中)，最后尝试拟人化 UI 模拟点击兜底
+        if allow_human and chk_res.get("status") != 401:
             _emit("接口请求未直接出链，尝试通过拟人化 UI 操作唤起…")
             human_res = _human_extract_checkout_url(driver, promo_campaign_id=promo_campaign_id, emit_fn=_emit, timeout=60.0, origin_country=origin_country)
             if human_res.get("ok"):
@@ -1160,7 +1160,7 @@ def extract_checkout_url_with_cloak(
 
             # 优先尝试直接使用存量 access_token 发起结账申请 (秒级直通)
             _emit("正在使用存量授权凭证快速发起结账会话…")
-            chk_res = _do_checkout(access_token, account_id, "存量会话直通")
+            chk_res = _do_checkout(access_token, account_id, "存量会话直通", allow_human=False)
             if chk_res.get("ok"):
                 return chk_res
             if chk_res.get("already_paid"):
