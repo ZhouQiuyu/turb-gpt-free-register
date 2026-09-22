@@ -282,11 +282,17 @@ class CloakSeleniumDriver:
         try:
             self.page.goto(url, wait_until="commit", timeout=nav_timeout)
         except Exception as e:
+            if "ERR_ABORTED" in str(e):
+                try:
+                    self.page.wait_for_load_state("domcontentloaded", timeout=10000)
+                    return
+                except Exception:
+                    return
             logger.warning("[Cloak] page.goto commit 超时/异常: %s", e)
             try:
                 self.page.goto(url, wait_until="domcontentloaded", timeout=20000)
             except Exception:
-                raise e
+                pass
 
     @property
     def page_source(self) -> str:

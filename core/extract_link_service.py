@@ -1236,15 +1236,8 @@ def extract_checkout_url_with_cloak(
                     f"账号 {email} 未设置密码，且注册时使用的临时邮箱已过期无可用接信通道，无法在全新浏览器中接收 OTP 验证码以建立网页登录态"
                 )
             _emit(f"正在打开 ChatGPT 登录页以建立新会话 ({email})…")
-            for attempt in range(3):
-                try:
-                    driver.get("https://chatgpt.com/auth/login")
-                    break
-                except Exception as e:
-                    logger.warning("访问登录页超时/重试 (%d/3): %s", attempt + 1, e)
-                    if attempt == 2:
-                        raise e
-                    time.sleep(2.0)
+            from core.roxy_registration import _safe_get
+            _safe_get(driver, "https://chatgpt.com/auth/login", timeout=45, attempts=2, accept_hosts=("chatgpt.com", "auth.openai.com"))
             time.sleep(2.5)
 
         otp_after_ts = time.time() - 2.0
