@@ -755,17 +755,22 @@ def _execute_js_checkout(
                 }
             } catch (_) {}
 
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 8000);
             try {
                 const r = await fetch('https://chatgpt.com/backend-api/payments/checkout', {
                     method: 'POST',
                     credentials: 'include',
                     headers: headers,
-                    body: JSON.stringify(body)
+                    body: JSON.stringify(body),
+                    signal: controller.signal
                 });
+                clearTimeout(timer);
                 let data = {};
                 try { data = await r.json(); } catch(e) {}
                 return { status: r.status, ok: r.ok, data: data };
             } catch (err) {
+                clearTimeout(timer);
                 return { ok: false, error: String(err) };
             }
         }
@@ -794,7 +799,6 @@ def _execute_js_checkout(
                 currency: currency
             }
         };
-
         if (promoCampaignId && promoCampaignId !== 'none') {
             body.promo_campaign = {
                 promo_campaign_id: promoCampaignId,
@@ -817,18 +821,23 @@ def _execute_js_checkout(
             }
         } catch (_) {}
 
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 8000);
         fetch('https://chatgpt.com/backend-api/payments/checkout', {
             method: 'POST',
             credentials: 'include',
             headers: headers,
-            body: JSON.stringify(body)
+            body: JSON.stringify(body),
+            signal: controller.signal
         })
         .then(async r => {
+            clearTimeout(timer);
             let data = {};
             try { data = await r.json(); } catch(e) {}
             if (typeof done === 'function') done({ status: r.status, ok: r.ok, data: data });
         })
         .catch(err => {
+            clearTimeout(timer);
             if (typeof done === 'function') done({ ok: false, error: String(err) });
         });
         """
