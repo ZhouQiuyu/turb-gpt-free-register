@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{ plan_title or "ChatGPT Plus 结账台" }} - 官方安全通道</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2310a37f'><path d='M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z'/></svg>">
+  <style>
+    :root {
+      --bg: #0d0f12;
+      --card-bg: #16191f;
+      --border: #282f3d;
+      --text: #f3f4f6;
+      --text-muted: #9ca3af;
+      --primary: #10a37f;
+      --primary-hover: #0e8c6d;
+      --accent: #3b82f6;
+      --danger: #ef4444;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .checkout-container {
+      width: 100%;
+      max-width: 480px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 32px;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.45);
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 24px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 20px;
+    }
+    .logo-badge {
+      width: 44px;
+      height: 44px;
+      background: rgba(16, 163, 127, 0.15);
+      border: 1px solid rgba(16, 163, 127, 0.3);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+    }
+    .title-area h1 {
+      font-size: 20px;
+      font-weight: 700;
+      color: #fff;
+    }
+    .title-area p {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+    .plan-summary {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 24px;
+    }
+    .summary-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 14px;
+      margin-bottom: 8px;
+    }
+    .summary-row:last-child {
+      margin-bottom: 0;
+      padding-top: 8px;
+      border-top: 1px dashed var(--border);
+      font-weight: 600;
+      font-size: 16px;
+    }
+    .label { color: var(--text-muted); }
+    .val-promo {
+      color: #34d399;
+      font-weight: 600;
+      background: rgba(16, 185, 129, 0.1);
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 12px;
+    }
+    .val-amount { color: #fff; }
+    #payment-element {
+      margin-bottom: 24px;
+      min-height: 180px;
+    }
+    .btn-pay {
+      width: 100%;
+      height: 48px;
+      background: var(--primary);
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: background 0.2s, transform 0.1s;
+    }
+    .btn-pay:hover { background: var(--primary-hover); }
+    .btn-pay:active { transform: scale(0.99); }
+    .btn-pay:disabled {
+      background: #374151;
+      color: #9ca3af;
+      cursor: not-allowed;
+      transform: none;
+    }
+    .error-msg {
+      margin-top: 12px;
+      padding: 10px 14px;
+      background: rgba(239, 68, 68, 0.12);
+      border: 1px solid rgba(239, 68, 68, 0.3);
+      color: #fca5a5;
+      font-size: 13px;
+      border-radius: 8px;
+      display: none;
+    }
+    .footer-security {
+      margin-top: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .footer-security svg { width: 14px; height: 14px; fill: currentColor; }
+  </style>
+</head>
+<body>
+  <div class="checkout-container">
+    <div class="header">
+      <div class="logo-badge">✦</div>
+      <div class="title-area">
+        <h1>ChatGPT Plus</h1>
+        <p>官方免登独立安全结账台</p>
+      </div>
+    </div>
+
+    <div class="plan-summary">
+      <div class="summary-row">
+        <span class="label">绑定账号</span>
+        <span class="val-amount">{{ masked_email or "当前特惠资格账户" }}</span>
+      </div>
+      {% if promo_title %}
+      <div class="summary-row">
+        <span class="label">专享特惠</span>
+        <span class="val-promo">{{ promo_title }}</span>
+      </div>
+      {% endif %}
+      <div class="summary-row">
+        <span class="label">本次支付</span>
+        <span class="val-amount" style="color: #34d399; font-size: 18px;">{{ amount_display or "$0.00" }}</span>
+      </div>
+    </div>
+
+    <form id="payment-form">
+      <div id="payment-element">
+        <div style="text-align: center; padding: 40px 0; color: #9ca3af; font-size: 14px;">
+          正在安全载入 Stripe 收银组件…
+        </div>
+      </div>
+      <button type="submit" id="btn-submit" class="btn-pay">
+        <span>确认支付与授权</span>
+      </button>
+      <div id="error-message" class="error-msg"></div>
+    </form>
+
+    <div class="footer-security">
+      <svg viewBox="0 0 24 24"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2zm-6 9c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm3.1-9H8.9V6c0-1.71 1.39-3.1 3.1-3.1 1.71 0 3.1 1.39 3.1 3.1v2z"/></svg>
+      <span>由 Stripe 官方端到端加密结算，不留存卡号凭据</span>
+    </div>
+  </div>
+
+  <script src="https://js.stripe.com/v3/"></script>
+  <script>
+    const publishableKey = {{ publishable_key|tojson }};
+    const customerSessionClientSecret = {{ customer_session_client_secret|tojson }};
+    const clientSecret = {{ client_secret|tojson }};
+    const confirmReturnUrl = {{ confirm_return_url|tojson }};
+
+    if (!publishableKey) {
+      document.getElementById("payment-element").innerHTML = '<div style="color:#ef4444;text-align:center;padding:20px;">未获取到有效 Stripe 公钥，会话可能已过期</div>';
+      document.getElementById("btn-submit").disabled = true;
+    } else {
+      const stripe = Stripe(publishableKey);
+      let elements = null;
+
+      const appearance = {
+        theme: 'night',
+        variables: {
+          colorPrimary: '#10a37f',
+          colorBackground: '#16191f',
+          colorText: '#f3f4f6',
+          colorDanger: '#ef4444',
+          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+          borderRadius: '8px',
+        }
+      };
+
+      try {
+        if (customerSessionClientSecret) {
+          elements = stripe.elements({
+            customerSessionClientSecret: customerSessionClientSecret,
+            appearance: appearance
+          });
+        } else if (clientSecret) {
+          elements = stripe.elements({
+            clientSecret: clientSecret,
+            appearance: appearance
+          });
+        }
+      } catch (err) {
+        console.error("Stripe elements init error:", err);
+      }
+
+      if (elements) {
+        document.getElementById("payment-element").innerHTML = "";
+        const paymentElement = elements.create("payment");
+        paymentElement.mount("#payment-element");
+      } else {
+        document.getElementById("payment-element").innerHTML = '<div style="color:#ef4444;text-align:center;padding:20px;">初始化支付组件异常，请刷新重试</div>';
+        document.getElementById("btn-submit").disabled = true;
+      }
+
+      const form = document.getElementById("payment-form");
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const btn = document.getElementById("btn-submit");
+        const errDiv = document.getElementById("error-message");
+        btn.disabled = true;
+        btn.innerHTML = '<span>处理中…</span>';
+        errDiv.style.display = "none";
+
+        try {
+          const { error } = await stripe.confirmPayment({
+            elements,
+            confirmParams: {
+              return_url: confirmReturnUrl || window.location.href,
+            },
+          });
+
+          if (error) {
+            errDiv.innerText = error.message || "支付/授权未成功，请检查卡号信息";
+            errDiv.style.display = "block";
+            btn.disabled = false;
+            btn.innerHTML = '<span>确认支付与授权</span>';
+          }
+        } catch (ex) {
+          errDiv.innerText = String(ex);
+          errDiv.style.display = "block";
+          btn.disabled = false;
+          btn.innerHTML = '<span>确认支付与授权</span>';
+        }
+      });
+    }
+  </script>
+</body>
+</html>

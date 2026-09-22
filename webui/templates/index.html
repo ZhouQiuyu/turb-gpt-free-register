@@ -4035,16 +4035,23 @@ function _extractLinkCell(r) {
     return `<div class="extract-link-cell"><span class="pill status-failed" title="${esc(reason)}" style="background:#fff7ed;color:#c2410c;border-color:#ffedd5;">跳过提链</span><div class="extract-link-error" title="${esc(reason)}" style="color:#c2410c;">${esc(reason)}</div></div>`;
   }
   if (s === 'success') {
-    const link = r.extract_link_long_url || r.stripe_checkout_url || '';
+    let longLink = r.extract_link_long_url || r.stripe_checkout_url || '';
+    if (longLink && !longLink.startsWith('http')) {
+      longLink = window.location.origin + (longLink.startsWith('/') ? '' : '/') + longLink;
+    }
+    const shortLink = r.extract_link_short_url || '';
+    const lpmLink = r.extract_link_lpm_url || '';
     const copyPaste = r.extract_link_copy_paste || '';
     const qr = r.extract_link_image_url_png || r.extract_link_image_url_svg || '';
     const expire = _fmtExtractExpire(r.extract_link_expires_at);
     const typ = (r.extract_link_type || r.extract_link_payment_method || '').toUpperCase();
-    const copy = link ? cbtn('复制链接', link, 'extract-link-btn extract-copy') : '';
+    const copyLpm = lpmLink ? cbtn('复制直链', lpmLink, 'extract-link-btn extract-copy') : '';
+    const copyLong = longLink ? cbtn('复制免登长链', longLink, 'extract-link-btn extract-copy') : '';
+    const copyShort = (shortLink && shortLink !== longLink) ? cbtn('复制短链', shortLink, 'extract-link-btn extract-copy') : '';
     const copyCode = copyPaste ? cbtn('复制付款码', copyPaste, 'extract-link-btn extract-copy') : '';
     const qrBtn = qr ? `<button class="extract-link-btn extract-qr" data-qr-url="${esc(qr)}" title="打开支付二维码图片">查看二维码</button>` : '';
     const expireHtml = expire ? `<div class="extract-link-expire" title="支付链接过期时间">支付到期：${esc(expire)}</div>` : '';
-    return `<div class="extract-link-cell"><span class="pill status-success" title="${title || esc(link || copyPaste)}">提链成功${typ ? '(' + esc(typ) + ')' : ''}</span>${copy}${copyCode}${qrBtn}${expireHtml}</div>`;
+    return `<div class="extract-link-cell"><span class="pill status-success" title="${title || esc(lpmLink || longLink || shortLink || copyPaste)}">提链成功${typ ? '(' + esc(typ) + ')' : ''}</span>${copyLpm}${copyLong}${copyShort}${copyCode}${qrBtn}${expireHtml}</div>`;
   }
   if (s === 'failed') {
     const reason = err || msg || '未知原因';

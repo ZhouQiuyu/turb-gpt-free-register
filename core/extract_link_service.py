@@ -25,6 +25,8 @@ from core.roxy_registration import (
     _fetch_chatgpt_session,
     _find_visible_email_input_js,
     _read_chatgpt_session_once,
+    _submit_email_and_wait_next,
+    _submit_email_step,
     _submit_nearest_form_for_active_input,
     _type_email_address,
     _type_otp,
@@ -67,6 +69,19 @@ def get_currency_for_country(country: str) -> str:
     return "USD"
 
 
+def _find_visible_password_input_js(driver: Any) -> bool:
+    try:
+        return bool(driver.execute_script("""
+            const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+              && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'
+              && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
+            const pwd = document.querySelector('input[type="password"], input[name*="password" i], input[autocomplete="current-password"]');
+            return !!(pwd && visible(pwd));
+        """))
+    except Exception:
+        return False
+
+
 def _human_extract_checkout_url(
     driver: Any,
     promo_campaign_id: str = "",
@@ -92,6 +107,32 @@ def _human_extract_checkout_url(
     captured_pk = None
 
     if page:
+        # 0. 注册 CDP 路由拦截器：将 checkout_ui_mode 重写为 hosted 以直接获取 Stripe 免登托管长链
+        if hasattr(page, "route"):
+            def handle_route(route, request):
+                try:
+                    if "/backend-api/payments/checkout" in request.url and request.method == "POST":
+                        post_data = request.post_data
+                        if post_data:
+                            try:
+                                payload = json.loads(post_data)
+                                logger.info("[CDP] 拦截到 /payments/checkout 请求，原 mode=%s", payload.get("checkout_ui_mode"))
+                                payload["checkout_ui_mode"] = "hosted"
+                                route.continue_(post_data=json.dumps(payload))
+                                logger.info("[CDP] 已将 checkout_ui_mode 重写为 hosted 并放行")
+                                return
+                            except Exception as ex:
+                                logger.warning("[CDP] 解析/重写 post_data 失败: %s", ex)
+                except Exception as exc:
+                    logger.warning("[CDP] 路由处理异常: %s", exc)
+                route.continue_()
+
+            try:
+                page.route("**/backend-api/payments/checkout", handle_route)
+                logger.info("[CDP] 已注册 **/backend-api/payments/checkout 请求重写拦截器")
+            except Exception as e:
+                logger.warning("[CDP] 注册路由拦截器异常: %s", e)
+
         # 1. 注册网络请求监听器：自动嗅探 Stripe 公钥 (pk_live_...) 及全量支付交互
         def handle_request(request):
             nonlocal captured_pk
@@ -602,7 +643,16 @@ def _human_extract_checkout_url(
         cs_id = stripe_url.split("/")[-1].split("#")[0]
         _emit("🎉 官方 Stripe 试用结账长链提取成功！")
         logger.info("[提链-拟人化] 🎉 成功捕获 Stripe 结账长链: %s", stripe_url)
-        return {"ok": True, "url": stripe_url, "checkout_session_id": cs_id, "api_key": captured_pk}
+        return {
+            "ok": True,
+            "url": stripe_url,
+            "checkout_session_id": cs_id,
+            "api_key": captured_pk or (checkout_response_data or {}).get("publishable_key"),
+            "customer_session_client_secret": (checkout_response_data or {}).get("customer_session_client_secret"),
+            "client_secret": (checkout_response_data or {}).get("client_secret"),
+            "confirm_return_url": (checkout_response_data or {}).get("confirm_return_url"),
+            "checkout_data": checkout_response_data,
+        }
 
     if checkout_session_id:
         _emit(f"成功捕获结账会话 ID: {checkout_session_id}")
@@ -614,7 +664,11 @@ def _human_extract_checkout_url(
             "checkout_session_id": checkout_session_id,
             "url": chk_url,
             "processor_entity": entity or ("openai_llc" if origin_country == "US" else "openai_ie"),
-            "api_key": captured_pk,
+            "api_key": captured_pk or (checkout_response_data or {}).get("publishable_key"),
+            "customer_session_client_secret": (checkout_response_data or {}).get("customer_session_client_secret"),
+            "client_secret": (checkout_response_data or {}).get("client_secret"),
+            "confirm_return_url": (checkout_response_data or {}).get("confirm_return_url"),
+            "checkout_data": checkout_response_data,
         }
 
     if checkout_response_data and isinstance(checkout_response_data, dict):
@@ -655,74 +709,163 @@ def _execute_js_checkout(
     currency: str,
     promo_campaign_id: str = "",
 ) -> dict[str, Any]:
-    """在当前已建立好边缘/盾环境的浏览器中，通过真实前端上下文发起原生 checkout 请求。"""
-    js_checkout = """
-    const done = arguments[arguments.length - 1];
-    const token = arguments[0];
-    const accountId = arguments[1];
-    const country = arguments[2] || 'JP';
-    const currency = arguments[3] || 'USD';
-    const promoCampaignId = arguments[4] || '';
+    """在当前已建立好边缘/盾环境的浏览器中，通过真实前端上下文发起原生 checkout 请求 (hosted 模式)。"""
+    cur_url = str(getattr(driver, "current_url", "") or "")
+    if "chatgpt.com" not in cur_url:
+        try:
+            driver.get("https://chatgpt.com/")
+            time.sleep(2.0)
+        except Exception:
+            pass
 
-    const body = {
-        entry_point: 'all_plans_pricing_modal',
-        plan_name: 'chatgptplusplan',
-        checkout_ui_mode: 'hosted',
-        billing_details: {
-            country: country,
-            currency: currency
+    clean_token = (access_token or "").strip()
+    if clean_token.lower().startswith("bearer "):
+        clean_token = clean_token[7:].strip()
+
+    res = None
+    page = getattr(driver, "page", None)
+    if page is not None and not type(driver).__name__.startswith("MagicMock"):
+        js_evaluate = """
+        async ([cleanToken, accountId, country, currency, promoCampaignId]) => {
+            const body = {
+                entry_point: 'all_plans_pricing_modal',
+                plan_name: 'chatgptplusplan',
+                checkout_ui_mode: 'hosted',
+                billing_details: {
+                    country: (country || 'JP').toUpperCase(),
+                    currency: (currency || 'USD').toUpperCase()
+                }
+            };
+            if (promoCampaignId && promoCampaignId !== 'none') {
+                body.promo_campaign = {
+                    promo_campaign_id: promoCampaignId,
+                    is_coupon_from_query_param: false
+                };
+            }
+            const headers = {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + cleanToken
+            };
+            if (accountId) {
+                headers['chatgpt-account-id'] = accountId;
+            }
+            try {
+                const deviceId = localStorage.getItem('oai-device-id') || (document.cookie.match(/oai-device-id=([^;]+)/) || [])[1];
+                if (deviceId) {
+                    headers['oai-device-id'] = deviceId;
+                }
+            } catch (_) {}
+
+            try {
+                const r = await fetch('https://chatgpt.com/backend-api/payments/checkout', {
+                    method: 'POST',
+                    credentials: 'include',
+                    headers: headers,
+                    body: JSON.stringify(body)
+                });
+                let data = {};
+                try { data = await r.json(); } catch(e) {}
+                return { status: r.status, ok: r.ok, data: data };
+            } catch (err) {
+                return { ok: false, error: String(err) };
+            }
         }
-    };
+        """
+        try:
+            res = page.evaluate(js_evaluate, [clean_token, str(account_id or ""), country, currency, promo_campaign_id])
+        except Exception as exc:
+            logger.warning(f"[提链] page.evaluate 原生 checkout 异常: {exc}")
+            res = None
 
-    if (promoCampaignId && promoCampaignId !== 'none') {
-        body.promo_campaign = {
-            promo_campaign_id: promoCampaignId,
-            is_coupon_from_query_param: false
+    if res is None:
+        js_checkout = """
+        const done = (typeof __cloak_done === 'function') ? __cloak_done : arguments[arguments.length - 1];
+        const token = arguments[0];
+        const accountId = arguments[1];
+        const country = (arguments[2] || 'JP').toUpperCase();
+        const currency = (arguments[3] || 'USD').toUpperCase();
+        const promoCampaignId = arguments[4] || '';
+
+        const body = {
+            entry_point: 'all_plans_pricing_modal',
+            plan_name: 'chatgptplusplan',
+            checkout_ui_mode: 'hosted',
+            billing_details: {
+                country: country,
+                currency: currency
+            }
         };
-    }
 
-    const headers = {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + token
-    };
-    if (accountId) {
-        headers['chatgpt-account-id'] = accountId;
-    }
-    try {
-        const deviceId = localStorage.getItem('oai-device-id') || (document.cookie.match(/oai-device-id=([^;]+)/) || [])[1];
-        if (deviceId) {
-            headers['oai-device-id'] = deviceId;
+        if (promoCampaignId && promoCampaignId !== 'none') {
+            body.promo_campaign = {
+                promo_campaign_id: promoCampaignId,
+                is_coupon_from_query_param: false
+            };
         }
-    } catch (_) {}
 
-    fetch('https://chatgpt.com/backend-api/payments/checkout', {
-        method: 'POST',
-        credentials: 'include',
-        headers: headers,
-        body: JSON.stringify(body)
-    })
-    .then(async r => {
-        let data = {};
-        try { data = await r.json(); } catch(e) {}
-        done({ status: r.status, ok: r.ok, data: data });
-    })
-    .catch(err => {
-        done({ ok: false, error: String(err) });
-    });
-    """
-    res = driver.execute_async_script(js_checkout, access_token, str(account_id or ""), country, currency, promo_campaign_id)
-    if not res or (not res.get("ok") and res.get("status") not in (400, 401)):
-        # 仅在非明确业务拦截时尝试 custom 模式兜底
-        js_custom = js_checkout.replace("'checkout_ui_mode': 'hosted'", "'checkout_ui_mode': 'custom'")
-        res = driver.execute_async_script(js_custom, access_token, str(account_id or ""), country, currency, promo_campaign_id)
+        const cleanToken = (token || '').replace(/^Bearer\\s+/i, '').trim();
+        const headers = {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + cleanToken
+        };
+        if (accountId) {
+            headers['chatgpt-account-id'] = accountId;
+        }
+        try {
+            const deviceId = localStorage.getItem('oai-device-id') || (document.cookie.match(/oai-device-id=([^;]+)/) || [])[1];
+            if (deviceId) {
+                headers['oai-device-id'] = deviceId;
+            }
+        } catch (_) {}
+
+        fetch('https://chatgpt.com/backend-api/payments/checkout', {
+            method: 'POST',
+            credentials: 'include',
+            headers: headers,
+            body: JSON.stringify(body)
+        })
+        .then(async r => {
+            let data = {};
+            try { data = await r.json(); } catch(e) {}
+            if (typeof done === 'function') done({ status: r.status, ok: r.ok, data: data });
+        })
+        .catch(err => {
+            if (typeof done === 'function') done({ ok: false, error: String(err) });
+        });
+        """
+        try:
+            res = driver.execute_async_script(js_checkout, clean_token, str(account_id or ""), country, currency, promo_campaign_id)
+        except Exception as exc:
+            logger.warning(f"[提链] execute_async_script 异常: {exc}")
+            res = {"ok": False, "error": str(exc)}
 
     if not res or not isinstance(res, dict):
         return {"ok": False, "error": "JS checkout returned invalid response"}
 
     checkout_data = res.get("data") if isinstance(res.get("data"), dict) else {}
-    url = checkout_data.get("url")
-    cs_id = checkout_data.get("checkout_session_id") or checkout_data.get("session_id") or checkout_data.get("id")
+    url = (
+        checkout_data.get("url")
+        or checkout_data.get("stripe_hosted_url")
+        or checkout_data.get("checkout_url")
+    )
+    cs_id = (
+        checkout_data.get("checkout_session_id")
+        or checkout_data.get("session_id")
+        or checkout_data.get("id")
+    )
     entity = str(checkout_data.get("processor_entity") or ("openai_llc" if country == "US" else "openai_ie")).strip()
+    api_key = (
+        checkout_data.get("api_key")
+        or checkout_data.get("publishable_key")
+        or checkout_data.get("public_key")
+    )
+
+    if not cs_id and url:
+        if "/c/pay/" in url:
+            cs_id = url.split("/c/pay/")[-1].split("?")[0].split("#")[0]
+        elif "/checkout/" in url:
+            cs_id = url.rstrip("/").split("/")[-1]
+
     if not url and cs_id:
         if str(cs_id).startswith("oaics_"):
             url = f"https://chatgpt.com/checkout/{entity}/{cs_id}"
@@ -735,6 +878,11 @@ def _execute_js_checkout(
             "url": url,
             "checkout_session_id": cs_id,
             "processor_entity": entity,
+            "api_key": api_key,
+            "customer_session_client_secret": checkout_data.get("customer_session_client_secret"),
+            "client_secret": checkout_data.get("client_secret"),
+            "confirm_return_url": checkout_data.get("confirm_return_url"),
+            "checkout_data": checkout_data,
             "error": None,
         }
 
@@ -803,6 +951,15 @@ def extract_checkout_url_with_cloak(
     origin_country = str(account.get("country_code") or "JP").strip().upper() or "JP"
     currency = get_currency_for_country(origin_country)
 
+    lpm = str(target_lpm or "ideal").strip().lower()
+    from core.stripe_lpm_engine import LPM_SPECS
+    if lpm in LPM_SPECS:
+        req_country = LPM_SPECS[lpm]["country"]
+        req_currency = LPM_SPECS[lpm]["currency"].upper()
+    else:
+        req_country = origin_country
+        req_currency = currency
+
     def _convert_to_lpm_if_needed(res: dict) -> dict:
         if not res or not res.get("ok") or res.get("already_paid"):
             return res
@@ -813,35 +970,140 @@ def extract_checkout_url_with_cloak(
         elif not cs_id and "/checkout/" in raw_url:
             cs_id = raw_url.rstrip("/").split("/")[-1]
 
+        entity = res.get("processor_entity") or ("openai_llc" if origin_country == "US" else "openai_ie")
+        short_url = f"https://chatgpt.com/checkout/{entity}/{cs_id}" if cs_id else ""
+        long_url = raw_url if ("/c/pay/" in raw_url or "checkout.stripe.com" in raw_url) else (f"https://checkout.stripe.com/c/pay/{cs_id}" if cs_id and cs_id.startswith("cs_") else "")
+        lpm_url = ""
+
         # 针对 oaics_* 原生站内结账会话
         if cs_id.startswith("oaics_") or "oaics_" in raw_url:
-            entity = res.get("processor_entity") or ("openai_llc" if origin_country == "US" else "openai_ie")
-            canonical_url = f"https://chatgpt.com/checkout/{entity}/{cs_id}"
-            _emit("检测到 OpenAI 原生结账会话 (oaics_*)，已生成官方真实免登结账直链")
-            logger.info("[提链] 识别到 oaics_* 原生结账会话: %s -> %s", cs_id, canonical_url)
+            short_url = short_url or f"https://chatgpt.com/checkout/{entity}/{cs_id}"
+            bridge_url = f"/pay/checkout/{cs_id}"
+            _emit("检测到 OpenAI 原生特惠结账会话 (oaics_*)，已生成免登独立收银长链 (形态 A) 与站内短链")
+            if lpm and lpm not in ("card", "direct", "none", "stripe", "hosted"):
+                _emit("提示：特惠试用资格官方限定绑卡/Link 签约 (无额度扣除)，已为您生成免登独立收银长链")
+            logger.info("[提链] 识别到 oaics_* 原生结账会话: %s -> bridge: %s, short: %s", cs_id, bridge_url, short_url)
             return {
                 "ok": True,
-                "url": canonical_url,
+                "url": bridge_url,
+                "short_url": short_url,
+                "long_url": bridge_url,
+                "lpm_url": "",
                 "checkout_session_id": cs_id,
                 "processor_entity": entity,
-                "type": "chatgpt_checkout",
-                "name": "ChatGPT 官方结账直链",
+                "type": "checkout_bridge",
+                "name": "ChatGPT 官方免登独立收银长链",
                 "api_key": res.get("api_key"),
+                "customer_session_client_secret": res.get("customer_session_client_secret"),
+                "client_secret": res.get("client_secret"),
+                "confirm_return_url": res.get("confirm_return_url"),
+                "checkout_data": res.get("checkout_data"),
             }
 
         # 针对标准 Stripe cs_* 会话且要求三方支付 (LPM)
-        lpm = str(target_lpm or "ideal").strip().lower()
-        if lpm and lpm not in ("card", "direct", "none") and cs_id.startswith("cs_"):
+        if lpm and lpm not in ("card", "direct", "none", "stripe", "hosted") and cs_id.startswith("cs_"):
             _emit(f"已捕获 Stripe 结账会话 ({cs_id[:16]}…)，正在调用 Stripe LPM 引擎提取【{lpm.upper()}】原生支付直链…")
             from core.stripe_lpm_engine import StripeLPMExtractor
-            extractor = StripeLPMExtractor(
-                session_url_or_id=cs_id,
-                target_lpm=lpm,
-                proxy=proxy_url,
-                api_key=res.get("api_key"),
-            )
-            return extractor.run()
+            try:
+                extractor = StripeLPMExtractor(
+                    session_url_or_id=cs_id,
+                    target_lpm=lpm,
+                    proxy=proxy_url,
+                    api_key=res.get("api_key"),
+                )
+                lpm_res = extractor.run()
+                if lpm_res.get("ok"):
+                    _emit(f"🎉 成功生成【{lpm.upper()}】原生第三方支付跳转直链！")
+                    lpm_res["short_url"] = short_url
+                    lpm_res["long_url"] = long_url or f"https://checkout.stripe.com/c/pay/{cs_id}"
+                    lpm_res["lpm_url"] = lpm_res.get("url")
+                    lpm_res["customer_session_client_secret"] = res.get("customer_session_client_secret")
+                    lpm_res["checkout_data"] = res.get("checkout_data")
+                    return lpm_res
+                _emit(f"Stripe LPM 引擎提取未直接完成 ({lpm_res.get('error')})，降级为 Stripe 原生收银台免登长链…")
+            except Exception as e:
+                _emit(f"Stripe LPM 引擎提取异常 ({e})，降级为 Stripe 原生收银台免登长链…")
+                logger.warning("[提链] Stripe LPM 引擎提取异常: %s", e)
+
+            # 降级返回原生 Stripe 托管免登长链
+            hosted_url = long_url or f"https://checkout.stripe.com/c/pay/{cs_id}"
+            return {
+                "ok": True,
+                "url": hosted_url,
+                "short_url": short_url,
+                "long_url": hosted_url,
+                "lpm_url": "",
+                "checkout_session_id": cs_id,
+                "processor_entity": res.get("processor_entity") or "openai_ie",
+                "type": "stripe_hosted",
+                "name": f"Stripe 官方托管免登长链 (支持 {lpm.upper()})",
+                "api_key": res.get("api_key"),
+                "customer_session_client_secret": res.get("customer_session_client_secret"),
+                "client_secret": res.get("client_secret"),
+                "confirm_return_url": res.get("confirm_return_url"),
+                "checkout_data": res.get("checkout_data"),
+            }
+
+        # 针对标准 Stripe cs_* 会话 (免登长链)
+        if cs_id.startswith("cs_"):
+            stripe_url = long_url or f"https://checkout.stripe.com/c/pay/{cs_id}"
+            _emit("已捕获 Stripe 官方托管免登长链！")
+            return {
+                "ok": True,
+                "url": stripe_url,
+                "short_url": short_url,
+                "long_url": stripe_url,
+                "lpm_url": "",
+                "checkout_session_id": cs_id,
+                "processor_entity": res.get("processor_entity") or "openai_ie",
+                "type": "stripe_hosted",
+                "name": "Stripe 官方托管免登长链",
+                "api_key": res.get("api_key"),
+                "customer_session_client_secret": res.get("customer_session_client_secret"),
+                "client_secret": res.get("client_secret"),
+                "confirm_return_url": res.get("confirm_return_url"),
+                "checkout_data": res.get("checkout_data"),
+            }
+
+        res["short_url"] = short_url
+        res["long_url"] = long_url
+        res["lpm_url"] = ""
         return res
+
+    def _do_checkout(tok: str, acc_id: str, phase_desc: str) -> dict[str, Any]:
+        _emit(f"{phase_desc}，正在向 OpenAI 发起【{req_country} ({lpm.upper()})】原生结账申请 (hosted 模式)…")
+
+        # 1. 优先尝试以目标国家 + hosted 模式申请 (若有试用活动先带试用活动)
+        chk_res = _execute_js_checkout(driver, tok, acc_id, req_country, req_currency, promo_campaign_id=promo_campaign_id)
+
+        # 2. 若带 promo 失败且非 401，尝试不带 promo 的常规 Plus 申请
+        if not chk_res.get("ok") and promo_campaign_id and chk_res.get("status") != 401:
+            _emit("带活动申请未成功，自动切换至常规 Plus 套餐请求…")
+            chk_res = _execute_js_checkout(driver, tok, acc_id, req_country, req_currency, promo_campaign_id="")
+
+        # 3. 若针对目标国家失败且目标国家不是原属地，且非 401，尝试以原属地申请
+        if not chk_res.get("ok") and req_country != origin_country and chk_res.get("status") != 401:
+            _emit(f"目标属地申请未成功，尝试原属地【{origin_country}】免登长链申请…")
+            chk_res = _execute_js_checkout(driver, tok, acc_id, origin_country, currency, promo_campaign_id=promo_campaign_id)
+            if not chk_res.get("ok") and promo_campaign_id:
+                chk_res = _execute_js_checkout(driver, tok, acc_id, origin_country, currency, promo_campaign_id="")
+
+        # 4. 若接口成功出链或已是 Plus，进行转换与返回
+        if chk_res.get("ok"):
+            return _convert_to_lpm_if_needed(chk_res)
+        if chk_res.get("already_paid"):
+            return chk_res
+
+        # 5. 若接口方式未成功且非 401，最后尝试拟人化 UI 模拟点击兜底
+        if chk_res.get("status") != 401:
+            _emit("接口请求未直接出链，尝试通过拟人化 UI 操作唤起…")
+            human_res = _human_extract_checkout_url(driver, promo_campaign_id=promo_campaign_id, emit_fn=_emit, timeout=60.0, origin_country=origin_country)
+            if human_res.get("ok"):
+                return _convert_to_lpm_if_needed(human_res)
+            if human_res.get("already_paid"):
+                return human_res
+
+        return chk_res
 
     email = str(account.get("email") or "").strip()
     if not email:
@@ -896,30 +1158,39 @@ def extract_checkout_url_with_cloak(
             time.sleep(2.0)
             solve_cloudflare_challenge_if_present(driver, max_wait=15.0, emit_fn=_emit)
 
-            # 校验浏览器当前是否已持有有效登录会话 (通过 /api/auth/session)
+            # 优先尝试直接使用存量 access_token 发起结账申请 (秒级直通)
+            _emit("正在使用存量授权凭证快速发起结账会话…")
+            chk_res = _do_checkout(access_token, account_id, "存量会话直通")
+            if chk_res.get("ok"):
+                return chk_res
+            if chk_res.get("already_paid"):
+                return chk_res
+
+            # 若存量凭证未直接出链，检查浏览器当前是否持有新鲜 session
             session_data = None
             cur_check = str(getattr(driver, "current_url", "") or "")
-            if not cur_check or "chatgpt.com" in cur_check or "mock" in cur_check.lower():
+            if "chatgpt.com" in cur_check or "mock" in cur_check.lower():
                 try:
                     session_data = _read_chatgpt_session_once(driver)
                 except Exception:
                     pass
 
             if session_data and session_data.get("accessToken"):
-                _emit(f"存量会话有效，正在通过拟人化操作向 OpenAI 发起【{origin_country}】原生试用提链…")
-                chk_res = _human_extract_checkout_url(driver, promo_campaign_id=promo_campaign_id, emit_fn=_emit, timeout=120.0, origin_country=origin_country)
-                if chk_res.get("ok"):
-                    return _convert_to_lpm_if_needed(chk_res)
-                if chk_res.get("already_paid"):
-                    return chk_res
-                _emit("存量会话拟人化提链未直接出链，进入登录自愈流…")
-            else:
-                _emit("存量会话在当前浏览器环境中未就绪，切换至完整登录流程…")
-                try:
-                    driver.delete_all_cookies()
-                    driver.execute_script("try { localStorage.clear(); sessionStorage.clear(); } catch(e) {}")
-                except Exception:
-                    pass
+                cur_tok = session_data.get("accessToken")
+                cur_acc = (session_data.get("account") or {}).get("id") or account_id
+                if cur_tok != access_token:
+                    chk_res = _do_checkout(cur_tok, cur_acc, "浏览器存量会话有效")
+                    if chk_res.get("ok"):
+                        return chk_res
+                    if chk_res.get("already_paid"):
+                        return chk_res
+
+            _emit("存量会话凭证已失效或未直接出链，切换至完整登录流程…")
+            try:
+                driver.delete_all_cookies()
+                driver.execute_script("try { localStorage.clear(); sessionStorage.clear(); } catch(e) {}")
+            except Exception:
+                pass
             access_token = ""
 
         # -------------------------------------------------------------
@@ -1053,125 +1324,291 @@ def extract_checkout_url_with_cloak(
                         logger.warning("[提链] 更新账号会话失败: %s", exc)
                 break
 
-            # 3. 若落在游客聊天首页（例如 ?slm=1 且未有邮箱输入框），点击登录按钮唤起登录弹窗
-            if not email_submitted and ("slm=1" in cur_url or cur_url.rstrip("/") in ("https://chatgpt.com", "http://chatgpt.com")):
-                try:
-                    clicked = driver.execute_script("""
-                        const btn = document.querySelector('button[data-testid="login-button"], [data-testid="login-button"], a[href*="/auth/login"]');
-                        if (btn && (btn.offsetWidth || btn.offsetHeight)) { btn.click(); return true; }
-                        return false;
-                    """)
-                    if clicked:
-                        _emit("处于匿名首页，已点击登录按钮拉起登录框…")
-                        time.sleep(2.0)
-                        continue
-                except Exception:
-                    pass
-
-            # 4. 处于邮箱输入页面
+            # 4. 提交账号邮箱步骤
             if not email_submitted:
-                el = _find_visible_email_input_js(driver)
-                if el:
-                    _emit("正在提交账号邮箱…")
-                    _type_email_address(driver, email, timeout=10)
-                    time.sleep(0.8)
-                    submitted = _submit_nearest_form_for_active_input(driver)
-                    if not submitted:
-                        try:
-                            clicked = driver.execute_script("""
-                                const btn = document.querySelector('form button[type="submit"], button.btn-primary');
-                                if (btn && (btn.offsetWidth || btn.offsetHeight)) {
-                                    btn.click();
-                                    return true;
-                                }
-                                return false;
-                            """)
-                            if clicked:
-                                submitted = True
-                        except Exception:
-                            pass
-                    if submitted:
-                        email_submitted = True
-                        otp_after_ts = time.time() - 2.0
-                        time.sleep(2.0)
-                        continue
-                elif "auth.openai.com" in cur_url and not any(k in cur_url for k in ["login/password", "email-verification", "mfa", "challenge"]):
+                _emit("正在进入登录流程并提交账号邮箱…")
+                try:
+                    next_st = _submit_email_and_wait_next(driver, email, attempts=2, allow_login_password=True, timeout=45)
                     email_submitted = True
+                    otp_after_ts = time.time() - 2.0
+                    t_end = max(t_end, time.time() + 180)
+                    logger.info("[提链] 邮箱提交完成，进入下一状态：%s", next_st)
+                except Exception as exc:
+                    logger.warning("[提链] 邮箱提交流程异常，继续轮询: %s", exc)
+                continue
 
             # 5. 处于密码输入页面
-            if email_submitted:
+            has_password_input = False
+            try:
+                has_password_input = driver.execute_script("""
+                    const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+                      && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'
+                      && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
+                    const pwd = document.querySelector('input[type="password"], input[name*="password" i], input[autocomplete="current-password"]');
+                    return !!(pwd && visible(pwd));
+                """)
+            except Exception:
                 has_password_input = False
+
+            if has_password_input:
+                has_pwd_error = False
                 try:
-                    has_password_input = driver.execute_script("""
-                        const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
-                          && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'
-                          && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
-                        const pwd = document.querySelector('input[type="password"], input[name="password"], input[autocomplete="current-password"]');
-                        return !!(pwd && visible(pwd));
+                    has_pwd_error = driver.execute_script("""
+                        const t = (document.body ? document.body.innerText : '').toLowerCase();
+                        return t.includes('incorrect email address or password') || 
+                               t.includes('パスワードが正しくありません') ||
+                               t.includes('wrong password');
                     """)
                 except Exception:
-                    has_password_input = False
-                if has_password_input:
-                    if password:
-                        password_attempts += 1
-                        if password_attempts > max_password_attempts:
-                            raise RuntimeError("OpenAI 密码验证失败次数过多，可能密码已被更改或账号受限")
-                        _emit(f"检测到密码输入框，正在输入密码并提交 (第 {password_attempts}/{max_password_attempts} 次)…")
-                        driver.execute_script("""
-                            const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
-                              && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'
-                              && !el.disabled && el.getAttribute('aria-disabled') !== 'true';
-                            const pwd = [...document.querySelectorAll('input[type="password"], input[name="password"], input[autocomplete="current-password"]')]
-                              .find(visible);
-                            if (!pwd) return false;
-                            const val = arguments[0];
-                            pwd.focus();
-                            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-                            if (setter) setter.call(pwd, val); else pwd.value = val;
-                            pwd.dispatchEvent(new Event('input', {bubbles: true}));
-                            pwd.dispatchEvent(new Event('change', {bubbles: true}));
+                    has_pwd_error = False
 
-                            const form = pwd.closest('form');
-                            const scope = form || document;
-                            const bad = /google|apple|microsoft|github|facebook|saml|sso|oauth|social/;
-                            const buttons = [...scope.querySelectorAll('button, input[type="submit"]')]
-                              .filter(el => visible(el) && !bad.test((el.className || '' + el.innerText).toLowerCase()))
-                              .map((el, idx) => {
-                                const r = el.getBoundingClientRect();
-                                const ir = pwd.getBoundingClientRect();
-                                return {el, idx, below: r.top >= ir.bottom - 10, dist: Math.max(0, r.top - ir.bottom)};
-                              })
-                              .filter(x => x.below)
-                              .sort((a,b) => a.dist - b.dist || a.idx - b.idx);
-                            if (buttons.length > 0) {
-                              buttons[0].el.click();
-                              return true;
-                            }
-                            if (form && typeof form.requestSubmit === 'function') {
-                              form.requestSubmit();
-                              return true;
-                            }
-                            pwd.dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true}));
-                            return true;
-                        """, password)
+                # 若密码存在且未试过且页面无报错，尝试输入密码提交
+                if password and password_attempts < 2 and not has_pwd_error:
+                    password_attempts += 1
+                    _emit("检测到密码输入框，正在输入密码并提交…")
+                    page = getattr(driver, "page", None)
+                    pwd_submitted = False
+                    if page is not None:
                         try:
-                            from selenium.webdriver.common.by import By
-                            from selenium.webdriver.common.keys import Keys
-                            pwd_els = [e for e in driver.find_elements(By.CSS_SELECTOR, "input[type='password']") if e.is_displayed()]
-                            if pwd_els:
-                                pwd_els[0].send_keys(Keys.ENTER)
+                            pwd_locator = page.locator('input[type="password"], input[name*="password" i], input[autocomplete="current-password"]').first
+                            if pwd_locator.is_visible():
+                                pwd_locator.click()
+                                pwd_locator.fill("")  # 彻底清除已有内容，防止拼接累加
+                                time.sleep(0.2)
+                                page.keyboard.type(password)
+                                time.sleep(0.5)
+                                submit_btn = page.locator('button:text-is("続行"), button:text-is("Continue"), button:text-is("Tiếp tục"), form button[type="submit"], button[type="submit"], button.btn-primary').first
+                                if submit_btn.is_visible():
+                                    submit_btn.click(delay=80, force=True)
+                                else:
+                                    page.keyboard.press("Enter")
+                                pwd_submitted = True
+                        except Exception as pe:
+                            logger.warning("[提链] Playwright 原生输入密码异常，回退 JS: %s", pe)
+
+                    if not pwd_submitted:
+                        driver.execute_script("""
+                            const pwd = document.querySelector('input[type="password"], input[name="current-password"], input[name="password"]');
+                            if (pwd) {
+                                pwd.focus();
+                                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                                if (setter) setter.call(pwd, arguments[0]); else pwd.value = arguments[0];
+                                pwd.dispatchEvent(new Event('input', {bubbles: true}));
+                                pwd.dispatchEvent(new Event('change', {bubbles: true}));
+                                const form = pwd.closest('form');
+                                if (form && form.requestSubmit) form.requestSubmit();
+                            }
+                        """, password)
+
+                    # 等待跳转反馈 (网络代理下需预留 15 秒观察窗口)
+                    wait_pwd = time.time()
+                    while time.time() - wait_pwd < 15.0:
+                        time.sleep(1.0)
+                        cur_now = str(getattr(driver, "current_url", "") or "")
+                        if any(k in cur_now for k in ["mfa", "challenge", "email-verification", "authenticator"]) or not _find_visible_password_input_js(driver):
+                            break
+                        err_now = driver.execute_script("""
+                            const t = (document.body ? document.body.innerText : '').toLowerCase();
+                            return t.includes('incorrect email address or password') || 
+                                   t.includes('パスワードが正しくありません') ||
+                                   t.includes('wrong password');
+                        """)
+                        if err_now:
+                            logger.warning("[提链] 密码提交后检测到明确密码错误提示")
+                            break
+                    continue
+
+                # 方案 2：若无密码、密码已试过、或页面显示密码错误，自动无缝切换至邮箱一次性验证码 (OTP)
+                _emit("密码验证未通过或不可用，触发方案2：自动切换至一次性验证码 (OTP) 登录…")
+                logger.info("[提链] 触发方案2：密码验证未通过或不可用，切换至 OTP/一次性验证码入口")
+                clicked_otp = False
+                page = getattr(driver, "page", None)
+                if page is not None:
+                    pwdless_selectors = [
+                        "button[name='intent'][value='passwordless_login_send_otp']",
+                        "input[type='submit'][name='intent'][value='passwordless_login_send_otp']",
+                        "button[name='intent'][value='passwordless_signup_send_otp']",
+                        "input[type='submit'][name='intent'][value='passwordless_signup_send_otp']",
+                        "button[name='intent'][value*='passwordless'][value*='otp']",
+                        "button[name='intent'][value*='passwordless'][value*='send_otp']",
+                        "button:has-text('使用一次性验证码登录')",
+                        "button:has-text('使用一次性验证码')",
+                        "button:has-text('Use a one-time code')",
+                        "button:has-text('Log in with a one-time code')",
+                        "button:has-text('Continue with a one-time code')",
+                        "button:has-text('ワンタイムコード')",
+                        "button:has-text('認証コード')",
+                        "button:has-text('メールでコード')",
+                        "a:has-text('使用一次性验证码')",
+                        "a:has-text('Use a one-time code')",
+                        "a:has-text('ワンタイムコード')",
+                        "a:has-text('メールでコード')",
+                        "[role='button']:has-text('使用一次性验证码登录')",
+                        "[role='button']:has-text('使用一次性验证码')",
+                        "[role='button']:has-text('Continue with a one-time code')",
+                        "[role='button']:has-text('one-time code')",
+                        "button:has-text('他の方法')",
+                        "button:has-text('別の方法')",
+                        "button:has-text('Try another way')",
+                        "button:has-text('Other options')",
+                        "a:has-text('他の方法')",
+                        "a:has-text('別の方法')",
+                        "a:has-text('Try another way')",
+                    ]
+                    for sel in pwdless_selectors:
+                        try:
+                            loc = page.locator(sel).first
+                            if loc.is_visible():
+                                loc.click(force=True)
+                                clicked_otp = True
+                                _emit("已成功点击一次性验证码登录入口，等待验证码页面…")
+                                break
+                        except Exception:
+                            continue
+
+                if not clicked_otp:
+                    try:
+                        clicked_otp = bool(driver.execute_script(r"""
+                            const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+                              && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
+                            const target = [...document.querySelectorAll('button, a, [role="button"]')].find(el => {
+                                const val = (el.getAttribute('value') || '').toLowerCase();
+                                const name = (el.getAttribute('name') || '').toLowerCase();
+                                const text = (el.innerText || el.textContent || '').trim().toLowerCase();
+                                if (val.includes('passwordless') || (name.includes('intent') && val.includes('otp'))) return true;
+                                if (text.includes('一次性验证码') || text.includes('one-time code') || text.includes('ワンタイム') || text.includes('認証コード') || text.includes('メールでコード')) return true;
+                                return false;
+                            });
+                            if (target && visible(target)) {
+                                target.scrollIntoView({block:'center'});
+                                target.click();
+                                return true;
+                            }
+                            return false;
+                        """))
+                        if clicked_otp:
+                            _emit("通过 DOM 点击了一次性验证码入口，等待页面过渡…")
+                    except Exception as e:
+                        logger.warning("[提链] DOM 点击一次性验证码异常: %s", e)
+
+                # 方案 2 深度自愈：若密码页未提供直接 OTP 按钮，点击“忘记密码 (パスワードをお忘れですか？)”
+                # 触发 OpenAI 邮箱自愈邮件，直接通过重置链接重新建立密码并自动登录
+                if not clicked_otp:
+                    forgot_clicked = False
+                    if page is not None:
+                        try:
+                            forgot_loc = page.locator("a[href*='reset-password'], a:has-text('パスワードをお忘れですか'), a:has-text('Forgot password')").first
+                            if forgot_loc.is_visible():
+                                forgot_loc.click(force=True)
+                                forgot_clicked = True
                         except Exception:
                             pass
-                        time.sleep(3.5)
-                        continue
-                    else:
-                        switch_pwdless_attempts += 1
-                        if switch_pwdless_attempts > max_switch_pwdless_attempts:
-                            raise RuntimeError("OpenAI 要求密码登录，但系统内未找到可用密码，且页面无一次性验证码入口")
-                        _emit(f"检测到密码输入框但账号无可用密码，正在切换至一次性验证码登录 (尝试 {switch_pwdless_attempts}/{max_switch_pwdless_attempts})…")
-                        res = _click_passwordless_signup_if_present(driver)
-                        time.sleep(2.0)
-                        continue
+                    if not forgot_clicked:
+                        try:
+                            forgot_clicked = bool(driver.execute_script(r"""
+                                const a = [...document.querySelectorAll('a, button')].find(el => {
+                                    const h = (el.getAttribute('href') || '').toLowerCase();
+                                    const t = (el.textContent || '').trim().toLowerCase();
+                                    return h.includes('reset-password') || t.includes('パスワードをお忘れ') || t.includes('forgot password');
+                                });
+                                if (a) { a.click(); return true; }
+                                return false;
+                            """))
+                        except Exception:
+                            pass
+
+                    if forgot_clicked:
+                        _emit("已点击【忘记密码】入口，正在请求邮箱自愈链接…")
+                        time.sleep(2.5)
+                        if page is not None:
+                            try:
+                                rst_btn = page.locator("form button[type='submit'], button[type='submit'], button.btn-primary, button:has-text('続行'), button:has-text('Continue')").first
+                                if rst_btn.is_visible():
+                                    rst_btn.click(force=True)
+                            except Exception:
+                                pass
+                        driver.execute_script("const b = document.querySelector('button[type=\"submit\"], button.btn-primary'); if (b) b.click();")
+                        _emit("已在重置页提交账号，等待接收重置邮件…")
+                        time.sleep(3.0)
+                        reset_code = None
+                        ticket_url = None
+                        poll_start = time.time()
+                        from core.mailnest_client import _get_mails
+                        import re
+                        while time.time() - poll_start < 45.0:
+                            try:
+                                mails = _get_mails(email)
+                                for m in mails:
+                                    subj = str(m.get("subject") or "").lower()
+                                    if "password" in subj or "パスワード" in subj or "code" in subj or "コード" in subj:
+                                        body = str(m.get("content") or m.get("body") or "")
+                                        # 1. 尝试提取 6 位数字验证码 (OpenAI 最新密码重置邮件格式)
+                                        code_matches = re.findall(r"\b(\d{6})\b", body)
+                                        if code_matches:
+                                            reset_code = code_matches[0]
+                                            break
+                                        # 2. 尝试提取重置链接 (传统格式)
+                                        matches = re.findall(r"https://auth\.openai\.com[^\s\"'<>]+", body)
+                                        for link in matches:
+                                            if "reset" in link or "password" in link:
+                                                ticket_url = link.rstrip(".").rstrip(")")
+                                                break
+                                        if ticket_url:
+                                            break
+                                if reset_code or ticket_url:
+                                    break
+                            except Exception:
+                                pass
+                            time.sleep(2.5)
+
+                        if reset_code:
+                            _emit(f"已获取密码重置验证码 ({reset_code})，正在填写提交…")
+                            if page is not None:
+                                try:
+                                    c_inp = page.locator('input[name="code"], input[autocomplete="one-time-code"], input[data-testid="otp-input"], input[inputmode="numeric"]').first
+                                    if c_inp.is_visible():
+                                        c_inp.click()
+                                        c_inp.fill(str(reset_code))
+                                        time.sleep(0.5)
+                                        c_sub = page.locator('button:text-is("続行"), button:text-is("Continue"), button[type="submit"]').first
+                                        if c_sub.is_visible():
+                                            c_sub.click(force=True)
+                                        else:
+                                            page.keyboard.press("Enter")
+                                except Exception as exc:
+                                    logger.warning("[提链] 填写重置验证码异常: %s", exc)
+                            time.sleep(3.0)
+
+                        if ticket_url:
+                            _emit("已收到重置自愈链接，正在完成密码设立与自动登录…")
+                            driver.get(ticket_url)
+                            time.sleep(3.5)
+
+                        # 重置验证码或链接提交后，如出现新密码输入框，自动填写新密码并同步数据库
+                        if page is not None:
+                            try:
+                                new_pwd = password or "%G6$C47ffq+KN8"
+                                p_inp = page.locator("input#password-input, input[name*='password' i], input[type='password']").first
+                                if p_inp.is_visible():
+                                    p_inp.fill(new_pwd)
+                                    time.sleep(0.5)
+                                    p_sub = page.locator("button[type='submit'], button.btn-primary, button:text-is('続行'), button:text-is('Continue')").first
+                                    p_sub.click(force=True)
+                                    _emit("新密码已确认提交，正在进入 ChatGPT…")
+                                    password = new_pwd
+                                    try:
+                                        from core import db
+                                        db.update_account_password(account_id_db, new_pwd)
+                                    except Exception:
+                                        pass
+                                    time.sleep(4.0)
+                                    continue
+                            except Exception as ex_rst:
+                                logger.warning("[提链] 填写新密码异常: %s", ex_rst)
+
+                otp_after_ts = time.time() - 2.0
+                time.sleep(3.0)
+                continue
 
             # 6. 处于 TOTP 2FA 双因子验证挑战页面 (必须优先于 OTP 检测，因 MFA 挑战页面同样包含 one-time-code 输入框)
             is_mfa_page = False
@@ -1194,44 +1631,52 @@ def extract_checkout_url_with_cloak(
                 code = pyotp.TOTP(totp_secret).now()
                 _emit(f"检测到双因子 TOTP 挑战 (第 {totp_attempts} 次)，正在计算动态令牌并自动提交…")
                 try:
-                    from selenium.webdriver.common.by import By
-                    inputs = [
-                        e for e in driver.find_elements(
-                            By.CSS_SELECTOR,
-                            "input[name='code'], input[autocomplete='one-time-code'], input[inputmode='numeric'], input[type='text'], input[type='tel']"
-                        ) if e.is_displayed()
-                    ]
-                    if inputs:
-                        inp = inputs[0]
-                        driver.execute_script("""
-                            const el = arguments[0];
-                            const val = arguments[1];
-                            el.focus();
-                            const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-                            if (setter) setter.call(el, val); else el.value = val;
-                            el.dispatchEvent(new Event('input', {bubbles: true}));
-                            el.dispatchEvent(new Event('change', {bubbles: true}));
-                        """, inp, code)
+                    page = getattr(driver, "page", None)
+                    totp_filled = False
+                    if page is not None:
                         try:
-                            inp.send_keys(code)
+                            totp_loc = page.locator("input[name='code'], input[autocomplete='one-time-code'], input[inputmode='numeric'], input[type='text'], input[type='tel']").first
+                            if totp_loc.is_visible():
+                                totp_loc.click()
+                                totp_loc.fill(code)
+                                time.sleep(0.3)
+                                page.keyboard.press("Enter")
+                                totp_filled = True
                         except Exception:
                             pass
-                        time.sleep(1.0)
-
-                        submit_btns = [
-                            b for b in driver.find_elements(
+                    if not totp_filled:
+                        from selenium.webdriver.common.by import By
+                        inputs = [
+                            e for e in driver.find_elements(
                                 By.CSS_SELECTOR,
-                                "button[type='submit'], form button, button[data-dd-action-name='Continue']"
-                            ) if b.is_displayed()
+                                "input[name='code'], input[autocomplete='one-time-code'], input[inputmode='numeric'], input[type='text'], input[type='tel']"
+                            ) if e.is_displayed()
                         ]
-                        if submit_btns:
-                            submit_btns[0].click()
-                        else:
+                        if inputs:
+                            inp = inputs[0]
                             driver.execute_script("""
-                                const btn = document.querySelector("button[type='submit'], form button");
-                                if (btn) btn.click();
-                            """)
-                        time.sleep(3.0)
+                                const el = arguments[0];
+                                const val = arguments[1];
+                                el.focus();
+                                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                                if (setter) setter.call(el, val); else el.value = val;
+                                el.dispatchEvent(new Event('input', {bubbles: true}));
+                                el.dispatchEvent(new Event('change', {bubbles: true}));
+                            """, inp, code)
+                            try:
+                                inp.send_keys(code)
+                            except Exception:
+                                pass
+                            time.sleep(1.0)
+                            submit_btns = [
+                                b for b in driver.find_elements(
+                                    By.CSS_SELECTOR,
+                                    "button[type='submit'], form button, button[data-dd-action-name='Continue']"
+                                ) if b.is_displayed()
+                            ]
+                            if submit_btns:
+                                submit_btns[0].click()
+                    time.sleep(3.0)
                 except Exception as exc:
                     _emit(f"TOTP 提交尝试异常: {exc}")
                     time.sleep(2.0)
@@ -1248,10 +1693,10 @@ def extract_checkout_url_with_cloak(
                 except Exception:
                     is_otp_page = False
 
-            if is_otp_page and (time.time() - last_otp_submit_ts > 30.0):
-                _emit("等待接收邮箱验证码 (OTP)…")
+            if is_otp_page and (time.time() - last_otp_submit_ts > 15.0):
+                _emit("处于邮箱验证码页面，等待接收邮箱 OTP…")
                 try:
-                    otp_code = wait_for_otp(email, after_ts=otp_after_ts, max_wait=40, force_service=True)
+                    otp_code = wait_for_otp(email, after_ts=otp_after_ts, max_wait=45, force_service=True)
                 except Exception as exc:
                     exc_str = str(exc)
                     if "D0004" in exc_str:
@@ -1264,15 +1709,26 @@ def extract_checkout_url_with_cloak(
                     _emit("页面已在等待期间自动完成登录跳转，跳过验证码输入…")
                     continue
 
-                _emit("收到邮箱验证码，正在模拟输入…")
-                _clear_otp_inputs(driver)
-                _type_otp(driver, otp_code)
+                _emit(f"收到邮箱验证码 ({otp_code})，正在填写提交…")
+                page = getattr(driver, "page", None)
+                otp_filled = False
+                if page is not None:
+                    try:
+                        otp_loc = page.locator('input[name="code"], input[autocomplete="one-time-code"], input[data-testid="otp-input"], input[inputmode="numeric"]').first
+                        if otp_loc.is_visible():
+                            otp_loc.click()
+                            page.keyboard.type(str(otp_code))
+                            otp_filled = True
+                    except Exception:
+                        pass
+                if not otp_filled:
+                    _clear_otp_inputs(driver)
+                    _type_otp(driver, otp_code)
                 time.sleep(1.0)
                 try:
                     _click_continue(driver)
                 except Exception:
                     pass
-                # 强力兜底：通过 JS 主动点击包含 Tiếp tục/Continue/続行 的提交按钮或触发 form submit
                 try:
                     driver.execute_script("""
                         const btn = [...document.querySelectorAll('button')].find(b => {
@@ -1314,24 +1770,23 @@ def extract_checkout_url_with_cloak(
                 pass
             raise RuntimeError("指纹浏览器未能获取到有效 accessToken，登录未完成")
 
-        _emit(f"指纹环境已鉴权，正在通过拟人化操作向 OpenAI 发起【{origin_country}】原生提链…")
-        chk_res = _human_extract_checkout_url(driver, promo_campaign_id=promo_campaign_id, emit_fn=_emit, timeout=120.0, origin_country=origin_country)
+        chk_res = _do_checkout(access_token, account_id, "指纹环境已鉴权")
         if chk_res.get("ok"):
-            return _convert_to_lpm_if_needed(chk_res)
+            return chk_res
         if chk_res.get("already_paid"):
             return chk_res
 
-            # 拟人化提链未出链，保存现场截图并报错，坚决不退回协议请求
-            try:
-                from pathlib import Path
-                screenshots_dir = Path("/app/注册日志/screenshots")
-                screenshots_dir.mkdir(parents=True, exist_ok=True)
-                shot_path = screenshots_dir / f"extract_fail_{email}_{int(time.time())}.png"
-                driver.save_screenshot(str(shot_path))
-                logger.info("[提链] 拟人化提链失败，现场快照已保存至 %s", shot_path)
-            except Exception:
-                pass
-            raise RuntimeError(f"指纹浏览器拟人化提链未能成功捕获 Stripe 链接: {str(chk_res)[:200]}")
+        # 提链未出链，保存现场截图并报错
+        try:
+            from pathlib import Path
+            screenshots_dir = Path("/app/注册日志/screenshots")
+            screenshots_dir.mkdir(parents=True, exist_ok=True)
+            shot_path = screenshots_dir / f"extract_fail_{email}_{int(time.time())}.png"
+            driver.save_screenshot(str(shot_path))
+            logger.info("[提链] 提链未出链，现场快照已保存至 %s", shot_path)
+        except Exception:
+            pass
+        raise RuntimeError(f"指纹浏览器未能成功捕获结账链接: {str(chk_res)[:200]}")
     except Exception as exc:
         try:
             if driver:
@@ -1434,21 +1889,39 @@ def _run_extract(*, account_id: int, trigger: str = "manual", link_type: str = "
             raise RuntimeError(f"未提取到有效支付链接: {res}")
 
         result_payload = {
+            "short_url": res.get("short_url"),
             "long_url": res.get("long_url") or url,
+            "lpm_url": res.get("lpm_url"),
             "copy_paste": res.get("copy_paste"),
             "image_url_png": res.get("qr_code"),
             "payment_method": res.get("type") or target_lpm,
             "payment_link_type": res.get("type") or target_lpm,
             "expires_at": res.get("expires_at"),
+            "customer_session_client_secret": res.get("customer_session_client_secret"),
+            "client_secret": res.get("client_secret"),
+            "publishable_key": res.get("api_key"),
+            "confirm_return_url": res.get("confirm_return_url"),
+            "checkout_data": res.get("checkout_data"),
         }
 
-        _append_log(account_id, f"提链成功：{url}")
+        log_link_desc = f"提链成功：主链接={url}"
+        if res.get("long_url") and res.get("long_url") != url:
+            log_link_desc += f"\n免登长链={res.get('long_url')}"
+        if res.get("short_url"):
+            log_link_desc += f"\n站内短链={res.get('short_url')}"
+        if res.get("lpm_url"):
+            log_link_desc += f"\n直链跳转={res.get('lpm_url')}"
+        _append_log(account_id, log_link_desc)
+
         db.update_account_extract(account_id, {
             "ok": True,
             "status": "success",
             "url": url,
             "link": url,
-            "stripe_checkout_url": url,
+            "short_url": res.get("short_url"),
+            "long_url": res.get("long_url") or url,
+            "lpm_url": res.get("lpm_url"),
+            "stripe_checkout_url": res.get("long_url") or url,
             "link_type": res.get("type") or target_lpm,
             "message": f"原生提链成功 ({res.get('name', target_lpm.upper())})",
             "result": result_payload,

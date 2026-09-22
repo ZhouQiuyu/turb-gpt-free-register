@@ -272,12 +272,21 @@ class CloakSeleniumDriver:
         self._page_load_timeout_ms = max(int(seconds or 90) * 1000, 5000)
         try:
             self.page.set_default_navigation_timeout(self._page_load_timeout_ms)
-            self.page.set_default_timeout(self._page_load_timeout_ms)
+            # DOM 定位与脚本求值默认超时保持在 15 秒，绝不能放大到 90 秒导致整机死锁挂起
+            self.page.set_default_timeout(15000)
         except Exception:
             pass
 
     def get(self, url: str) -> None:
-        self.page.goto(url, wait_until="domcontentloaded", timeout=self._page_load_timeout_ms)
+        nav_timeout = max(self._page_load_timeout_ms, 60000)
+        try:
+            self.page.goto(url, wait_until="commit", timeout=nav_timeout)
+        except Exception as e:
+            logger.warning("[Cloak] page.goto commit 超时/异常: %s", e)
+            try:
+                self.page.goto(url, wait_until="domcontentloaded", timeout=20000)
+            except Exception:
+                raise e
 
     @property
     def page_source(self) -> str:
@@ -463,7 +472,7 @@ class CloakSeleniumDriver:
             wrapper = """async ({script, args}) => {
               return await new Promise((resolve) => {
                 const fn = new Function(...args.map((_, i) => 'a' + i), '__cloak_done', script);
-                const timer = setTimeout(() => resolve({__cloak_timeout:true}), 120000);
+                const timer = setTimeout(() => resolve({__cloak_timeout:true}), 25000);
                 const __cloak_done = (v) => { clearTimeout(timer); resolve(v); };
                 try { fn(...args, __cloak_done); } catch (e) { clearTimeout(timer); resolve({ok:false, error:String(e)}); }
               });
@@ -472,7 +481,7 @@ class CloakSeleniumDriver:
               const args = [el, ...payload.args];
               return await new Promise((resolve) => {
                 const fn = new Function(...args.map((_, i) => 'a' + i), '__cloak_done', payload.script);
-                const timer = setTimeout(() => resolve({__cloak_timeout:true}), 120000);
+                const timer = setTimeout(() => resolve({__cloak_timeout:true}), 25000);
                 const __cloak_done = (v) => { clearTimeout(timer); resolve(v); };
                 try { fn(...args, __cloak_done); } catch (e) { clearTimeout(timer); resolve({ok:false, error:String(e)}); }
               });
@@ -484,7 +493,8 @@ class CloakSeleniumDriver:
                     else:
                         result = self.page.evaluate(wrapper, {"script": script, "args": serial_args})
                     if isinstance(result, dict) and result.get("__cloak_timeout"):
-                        raise TimeoutError("execute_async_script timeout")
+                        logger.warning("[CloakDriver] execute_async_script 超时 (25s)，返回超时响应")
+                        return {"ok": False, "error": "execute_async_script timeout", "__cloak_timeout": True}
                     return result
                 except Exception as e:
                     err_msg = str(e)

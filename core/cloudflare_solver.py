@@ -114,18 +114,18 @@ def is_cloudflare_challenge(driver: Any) -> bool:
     except Exception:
         pass
 
-    # 2. 检查 URL
+    # 2. 检查主页面 URL
     try:
         url = getattr(driver, "current_url", None)
         if isinstance(url, str) and url.strip():
             u = url.strip().lower()
-            for pattern in ("challenges.cloudflare.com", "challenge-platform", "__cf_chl", "cf-challenge", "/cdn-cgi/"):
+            for pattern in ("challenges.cloudflare.com", "__cf_chl", "cf-challenge"):
                 if pattern in u:
                     return True
     except Exception:
         pass
 
-    # 3. 检查 Playwright Page 的 Frames
+    # 3. 检查 Playwright Page 的 Frames (仅匹配 Turnstile 交互 iframe)
     page = getattr(driver, "page", None)
     if page is not None:
         try:
@@ -137,21 +137,27 @@ def is_cloudflare_challenge(driver: Any) -> bool:
                     f_url = getattr(f, "url", None)
                     if isinstance(f_url, str):
                         u = f_url.lower()
-                        if any(p in u for p in ("challenges.cloudflare.com", "challenge-platform", "turnstile", "cdn-cgi")):
+                        if "/turnstile/if/" in u or "challenges.cloudflare.com" in u:
                             return True
         except Exception:
             pass
 
-    # 4. 检查 DOM 中是否存在质询特征容器或关键文本
+    # 4. 检查 DOM 中是否存在质询特征容器或关键文本（同时排除正常可见输入框）
     try:
         if hasattr(driver, "execute_script") and callable(getattr(driver, "execute_script", None)):
             res = driver.execute_script(r"""
             try {
+              const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+                && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
+              const stage = document.querySelector('#challenge-stage, #cf-stage, .ctp-checkbox-label, iframe[src*="/turnstile/if/"], #challenge-error-text');
+              if (stage && visible(stage)) return true;
+              if (window._cf_chl_opt) return true;
+              const input = document.querySelector('input[type="email"], input[name="email"], input[type="password"], textarea#prompt-textarea, [data-testid="login-button"]');
+              if (input && visible(input)) return false;
               const text = (document.body ? document.body.innerText || '' : '').toLowerCase();
               if (text.includes('ray id') && text.includes('cloudflare')) return true;
               if (text.includes('กำลังทำการตรวจสอบความปลอดภัย')) return true;
               if (text.includes('trang web này sử dụng dịch vụ bảo mật')) return true;
-              if (document.querySelector('#challenge-stage, #cf-stage, .ctp-checkbox-label, iframe[src*="challenges.cloudflare.com"], iframe[src*="challenge-platform"], iframe[src*="cdn-cgi"]')) return true;
               return false;
             } catch (_) {
               return false;

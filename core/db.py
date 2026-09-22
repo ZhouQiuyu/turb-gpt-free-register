@@ -1428,6 +1428,10 @@ def update_account_extract(acc_id: int, result: dict | None = None) -> bool:
             if payload.get("long_url"):
                 row["extract_link_long_url"] = payload.get("long_url")
                 row["stripe_checkout_url"] = payload.get("long_url")
+            if payload.get("short_url"):
+                row["extract_link_short_url"] = payload.get("short_url")
+            if payload.get("lpm_url"):
+                row["extract_link_lpm_url"] = payload.get("lpm_url")
             row["extract_link_copy_paste"] = payload.get("copy_paste")
             row["extract_link_image_url_png"] = payload.get("image_url_png")
             row["extract_link_image_url_svg"] = payload.get("image_url_svg")
@@ -1461,24 +1465,26 @@ def recover_interrupted_extract_links() -> int:
 
 
 
-def recover_interrupted_extract_links() -> int:
-    """服务启动时恢复上次进程中断的提链状态。"""
+def get_account_by_extract_session(session_id: str) -> dict | None:
+    """按提链结账会话 ID (cs_live_* 或 oaics_*) 查找对应账号及提链资产。"""
+    sid = str(session_id or "").strip()
+    if not sid:
+        return None
     with _LOCK:
         accounts = _load_accounts()
-        recovered = 0
-        now = _now()
         for row in accounts:
-            if row.get("extract_link_status") not in {"queued", "running"}:
-                continue
-            row["extract_link_status"] = "failed"
-            row["extract_link_ok"] = False
-            row["extract_link_error"] = "WebUI 重启导致提链任务中断，请重新尝试"
-            row["extract_link_completed_at"] = now
-            row["updated_at"] = now
-            recovered += 1
-        if recovered:
-            _save_accounts(accounts)
-        return recovered
+            if str(row.get("extract_link_job_id") or "") == sid:
+                return dict(row)
+            url = str(row.get("stripe_checkout_url") or "")
+            if sid in url:
+                return dict(row)
+            for k in ("extract_link_url", "extract_link_long_url", "extract_link_short_url", "extract_link_lpm_url"):
+                if sid in str(row.get(k) or ""):
+                    return dict(row)
+            rj = row.get("extract_link_result_json")
+            if rj and sid in str(rj):
+                return dict(row)
+    return None
 
 
 
@@ -1944,6 +1950,32 @@ def update_account_session(acc_id: int, access_token: str, account_id: str | Non
             row["token_expired"] = False
         if account_id:
             row["account_id"] = str(account_id).strip()
+        row["updated_at"] = _now()
+        row["copy_line"] = _account_line(row)
+        _save_accounts(rows)
+        return True
+
+
+def update_account_password(acc_id: int, password: str) -> bool:
+    """更新账号的登录密码。"""
+    with _LOCK:
+        rows = _load_accounts()
+        row = next((r for r in rows if int(r.get("id") or 0) == int(acc_id)), None)
+        if row is None:
+            return False
+        pwd = str(password or "").strip()
+        if pwd:
+            row["password"] = pwd
+            extra = row.get("extra_json")
+            if isinstance(extra, dict):
+                extra["registration_password"] = pwd
+            elif isinstance(extra, str):
+                try:
+                    ej = json.loads(extra)
+                    ej["registration_password"] = pwd
+                    row["extra_json"] = ej
+                except Exception:
+                    pass
         row["updated_at"] = _now()
         row["copy_line"] = _account_line(row)
         _save_accounts(rows)

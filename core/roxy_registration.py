@@ -582,17 +582,17 @@ def _wait_for_email_input(driver, timeout: int | None = None):
         except Exception:
             pass
 
-        # 如果页面处于匿名游客聊天首页（例如 ?slm=1 或根路径且无邮箱输入框）
+        # 如果页面处于欢迎/登录引导页（例如 /auth/login, ?slm=1 或根路径且无邮箱输入框）
         try:
             curr_url = str(getattr(driver, "current_url", "") or "")
-            if "slm=1" in curr_url or curr_url.rstrip("/") in ("https://chatgpt.com", "http://chatgpt.com"):
+            if "/auth/login" in curr_url or "slm=1" in curr_url or curr_url.rstrip("/") in ("https://chatgpt.com", "http://chatgpt.com"):
                 page = getattr(driver, "page", None)
                 if page is not None and not type(driver).__name__.startswith("MagicMock"):
                     try:
                         slm_btn = page.locator('button[data-testid="login-button"], button[data-testid="signup-button"], [data-testid="login-button"], [data-testid="signup-button"], a[href*="/auth/login"]').first
-                        if slm_btn.is_visible() is True:
+                        if slm_btn.is_visible(timeout=500):
                             slm_btn.click(delay=60)
-                            logger.info("%s 处于匿名游客首页，已通过 Playwright 点击登录/注册按钮拉起弹窗", _log_prefix(driver))
+                            logger.info("%s 处于登录引导页/游客首页，已通过 Playwright 点击登录/注册按钮拉起弹窗", _log_prefix(driver))
                             time.sleep(1.5)
                             continue
                     except Exception:
@@ -610,10 +610,10 @@ def _wait_for_email_input(driver, timeout: int | None = None):
                 } catch (_) { return 'err'; }
                 """)
                 if res == "clicked":
-                    logger.info("%s 处于匿名游客首页，已点击登录/注册按钮拉起弹窗", _log_prefix(driver))
+                    logger.info("%s 处于登录引导页/游客首页，已点击登录/注册按钮拉起弹窗", _log_prefix(driver))
                     time.sleep(1.5)
                     continue
-                elif (end - time.time()) <= 15:
+                elif (end - time.time()) <= 15 and "slm=1" in curr_url:
                     logger.info("%s 处于匿名游客首页且未找到登录按钮，重新导航至 /auth/login", _log_prefix(driver))
                     driver.get("https://chatgpt.com/auth/login")
                     time.sleep(2.0)
@@ -875,29 +875,52 @@ def _submit_email_step(driver, email: str | None = None) -> None:
     page = getattr(driver, "page", None)
     playwright_submitted = False
     if page is not None and not type(driver).__name__.startswith("MagicMock"):
+        # 优先寻找安全的非三方登录 Continue 按钮（涵盖英/日/越/中等多语言）
         try:
-            inp = page.locator('input[type="email"], input[name="email"], input[name="username"], input[autocomplete*="email"]').first
-            if inp.is_visible():
-                inp.focus()
-                page.keyboard.press("Enter")
+            submit_btn = page.locator('button:text-is("Continue"), button:text-is("続行"), button:text-is("Tiếp tục"), button:text-is("继续"), form button[type="submit"], button[type="submit"], button[name="action"][value="default"], button.btn-primary').first
+            if submit_btn.is_visible():
+                submit_btn.click(delay=random.randint(60, 120), force=True)
                 playwright_submitted = True
-                logger.info("%s [Playwright] 已通过原生键盘 Enter 触发可信表单提交: %s", _log_prefix(driver), email_value)
+                logger.info("%s [Playwright] 已通过原生鼠标点击 Continue 按钮触发可信表单提交", _log_prefix(driver))
                 time.sleep(1.0)
         except Exception as exc:
-            logger.debug("%s [Playwright] 原生键盘 Enter 提交异常: %s", _log_prefix(driver), exc)
+            logger.debug("%s [Playwright] 原生鼠标点击 Continue 按钮异常: %s", _log_prefix(driver), exc)
 
-        curr_url = str(getattr(page, "url", "") or "")
-        if "/auth/login" in curr_url and not any(k in curr_url for k in ("password", "otp", "authorize")):
+        if not playwright_submitted:
             try:
-                # 寻找安全的非三方登录提交按钮执行真实可信鼠标点击
-                submit_btn = page.locator('form button[type="submit"], button[type="submit"], button[name="action"][value="default"], button.btn-primary').first
-                if submit_btn.is_visible():
-                    submit_btn.click(delay=random.randint(60, 120))
+                inp = page.locator('input[type="email"], input[name="email"], input[name="username"], input[autocomplete*="email"]').first
+                if inp.is_visible():
+                    inp.focus()
+                    page.keyboard.press("Enter")
                     playwright_submitted = True
-                    logger.info("%s [Playwright] 已通过原生鼠标点击提交按钮触发可信表单提交", _log_prefix(driver))
+                    logger.info("%s [Playwright] 已通过原生键盘 Enter 触发可信表单提交: %s", _log_prefix(driver), email_value)
                     time.sleep(1.0)
             except Exception as exc:
-                logger.debug("%s [Playwright] 原生鼠标点击提交按钮异常: %s", _log_prefix(driver), exc)
+                logger.debug("%s [Playwright] 原生键盘 Enter 提交异常: %s", _log_prefix(driver), exc)
+
+            if not playwright_submitted:
+                try:
+                    js_clicked = driver.execute_script(r"""
+                        const inp = document.querySelector('input[type="email"], input[name="email"], input[name="username"], input#email-input');
+                        if (!inp) return false;
+                        const form = inp.closest('form');
+                        const root = form || document;
+                        const btns = [...root.querySelectorAll('button[type="submit"], button, input[type="submit"]')];
+                        const btn = btns.find(b => {
+                            const t = (b.innerText || b.value || '').trim();
+                            const lower = t.toLowerCase();
+                            if (lower.includes('google') || lower.includes('apple') || lower.includes('phone') || lower.includes('microsoft')) return false;
+                            return t === 'Continue' || t === '続行' || t === 'Tiếp tục' || t === '继续' || b.getAttribute('type') === 'submit' || b.getAttribute('name') === 'action';
+                        });
+                        if (btn) { btn.click(); return true; }
+                        if (form && form.requestSubmit) { form.requestSubmit(); return true; }
+                        return false;
+                    """)
+                    if js_clicked:
+                        playwright_submitted = True
+                        logger.info("%s [DOM] 已通过精准 Continue 按钮点击触发表单提交", _log_prefix(driver))
+                except Exception:
+                    pass
 
     if not playwright_submitted:
         stable_submit = _submit_email_form_stable(driver, email_value)
@@ -1167,16 +1190,18 @@ def _submit_email_and_wait_next(
     email: str | None,
     attempts: int = 3,
     email_supplier: Callable[[], str] | None = None,
+    allow_login_password: bool = False,
+    timeout: int = 45,
 ) -> str:
     """填写并提交邮箱，必须确认进入 password/otp/logged_in 才返回。"""
     last_state = None
     current_email = str(email or "").strip()
     for attempt in range(1, attempts + 1):
         if current_email:
-            _type_email_address(driver, current_email, timeout=20)
+            _type_email_address(driver, current_email, timeout=timeout)
         else:
             # 先确认页面已有可用输入框，再领取邮箱；不能把领取动作放在页面导航之前。
-            email_input = _wait_for_email_input(driver, timeout=20)
+            email_input = _wait_for_email_input(driver, timeout=timeout)
             if email_supplier is None:
                 raise RuntimeError("已找到邮箱输入框，但未提供邮箱分配器")
             current_email = str(email_supplier() or "").strip()
@@ -1205,7 +1230,7 @@ def _submit_email_and_wait_next(
                     if page is not None and not type(driver).__name__.startswith("MagicMock"):
                         try:
                             slm_btn = page.locator('button[data-testid="login-button"], button[data-testid="signup-button"], [data-testid="login-button"], [data-testid="signup-button"], a[href*="/auth/login"]').first
-                            if slm_btn.is_visible():
+                            if slm_btn.is_visible(timeout=500):
                                 slm_btn.click(delay=60)
                                 btn_clicked = True
                                 logger.info("%s 已通过 Playwright 点击游客首页登录按钮", _log_prefix(driver))
@@ -1225,6 +1250,9 @@ def _submit_email_and_wait_next(
         logger.info("%s 已提交邮箱，等待进入密码页或验证码页（%s/%s）", _log_prefix(driver), attempt, attempts)
         state_name = _wait_email_submit_next_state(driver, current_email, timeout=35)
         if state_name == "login_password":
+            if allow_login_password:
+                logger.info("%s 邮箱提交后进入登录密码页（提取/登录场景）：%s", _log_prefix(driver), state_name)
+                return "login_password"
             raise RuntimeError(f"邮箱提交后进入登录密码页，按已注册/不可用邮箱处理并停用: url={getattr(driver, 'current_url', '') or 'https://auth.openai.com/log-in/password'}")
         if state_name in ("password", "otp", "logged_in"):
             logger.info("%s 邮箱提交后已进入下一步：%s", _log_prefix(driver), state_name)
@@ -1867,17 +1895,27 @@ def _click_passwordless_signup_if_present(driver) -> dict:
         const btn = candidates.find(isPasswordlessOtp);
         if (!btn) return {ok:false, reason:'missing_passwordless_button'};
         btn.scrollIntoView({block:'center'});
+        try {
+          btn.dispatchEvent(new MouseEvent('pointerdown', {bubbles:true, cancelable:true, view:window}));
+          btn.dispatchEvent(new MouseEvent('mousedown', {bubbles:true, cancelable:true, view:window}));
+          btn.dispatchEvent(new MouseEvent('mouseup', {bubbles:true, cancelable:true, view:window}));
+          btn.click();
+        } catch (e) {
+          btn.click();
+        }
         return {
           ok:true,
-          reason:'passwordless_send_otp_target',
-          button: btn,
+          reason:'clicked_passwordless_send_otp',
           name: btn.getAttribute('name') || '',
           value: btn.getAttribute('value') || '',
           text: (btn.textContent || '').trim().slice(0, 80)
         };
         """) or {"ok": False, "reason": "empty_result"}
         if result.get("ok") and result.get("button"):
-            _human_click(driver, result.get("button"), label="passwordless_otp")
+            try:
+                _human_click(driver, result.get("button"), label="passwordless_otp")
+            except Exception:
+                pass
             result["reason"] = "clicked_passwordless_send_otp"
             result.pop("button", None)
         return result
@@ -2253,20 +2291,52 @@ def _read_chatgpt_session_once(driver) -> dict | None:
             return None
     except Exception:
         return None
+
+    page = getattr(driver, "page", None)
+    if page is not None and not type(driver).__name__.startswith("MagicMock"):
+        try:
+            res = page.evaluate("""
+            async () => {
+                try {
+                    const controller = new AbortController();
+                    const timer = setTimeout(() => controller.abort(), 15000);
+                    const r = await fetch('/api/auth/session', {credentials: 'include', signal: controller.signal});
+                    clearTimeout(timer);
+                    let j = {};
+                    try { j = await r.json(); } catch(_) {}
+                    return {ok: true, data: j};
+                } catch (e) {
+                    return {ok: false, error: String(e)};
+                }
+            }
+            """)
+            if res and res.get("ok"):
+                data = res.get("data") or {}
+                if data.get("accessToken"):
+                    logger.info("%s /api/auth/session 已返回 accessToken", _log_prefix(driver))
+                    return data
+                logger.info("%s 等待 ChatGPT session 写入 accessToken，当前响应 keys=%s", _log_prefix(driver), list(data.keys()))
+            return None
+        except Exception as exc:
+            logger.debug("%s page.evaluate 读取 session 异常: %s", _log_prefix(driver), exc)
+
     script = r"""
-    const done = arguments[0];
+    const done = (typeof __cloak_done === 'function') ? __cloak_done : arguments[0];
     fetch('/api/auth/session', {credentials: 'include'})
       .then(r => r.json())
-      .then(j => done({ok: true, data: j}))
-      .catch(e => done({ok: false, error: String(e)}));
+      .then(j => { if (typeof done === 'function') done({ok: true, data: j}); })
+      .catch(e => { if (typeof done === 'function') done({ok: false, error: String(e)}); });
     """
-    result = driver.execute_async_script(script)
-    if result and result.get("ok"):
-        data = result.get("data") or {}
-        if data.get("accessToken"):
-            logger.info("%s /api/auth/session 已返回 accessToken", _log_prefix(driver))
-            return data
-        logger.info("%s 等待 ChatGPT session 写入 accessToken，当前响应 keys=%s", _log_prefix(driver), list(data.keys()))
+    try:
+        result = driver.execute_async_script(script)
+        if result and result.get("ok"):
+            data = result.get("data") or {}
+            if data.get("accessToken"):
+                logger.info("%s /api/auth/session 已返回 accessToken", _log_prefix(driver))
+                return data
+            logger.info("%s 等待 ChatGPT session 写入 accessToken，当前响应 keys=%s", _log_prefix(driver), list(data.keys()))
+    except Exception as exc:
+        logger.debug("%s execute_async_script 读取 session 异常: %s", _log_prefix(driver), exc)
     return None
 
 

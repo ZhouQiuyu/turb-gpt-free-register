@@ -18,7 +18,7 @@ import time
 import uuid
 from urllib.parse import urlparse
 
-from flask import Flask, Response, jsonify, make_response, render_template, request
+from flask import Flask, Response, jsonify, make_response, render_template, request, redirect
 import pyotp
 
 from core import codex_retry_service, db, plan_check_service, extract_link_service, codex_agent_service, live_check_service, proxy_service
@@ -139,7 +139,8 @@ def _compact_account_for_list(row: dict) -> dict:
         "live_check_proxy_used", "live_check_fingerprint_text",
         # 提链成功/失败时才需要。
         "extract_link_status", "extract_link_type", "extract_link_message", "extract_link_error",
-        "extract_link_long_url", "extract_link_copy_paste", "extract_link_image_url_png",
+        "extract_link_long_url", "extract_link_short_url", "extract_link_lpm_url",
+        "extract_link_copy_paste", "extract_link_image_url_png",
         "extract_link_image_url_svg", "extract_link_expires_at",
         # Codex / Agent 状态提示。
         "codex_error", "codex_agent_message", "codex_agent_runtime_id",
@@ -361,6 +362,91 @@ def create_app(auth_code: str | None = None) -> Flask:
         if requested_ui in {"legacy", "modern"}:
             resp.set_cookie("ui_mode", ui_mode, max_age=60 * 60 * 24 * 365, samesite="Lax")
         return resp
+
+    @app.get("/pay/checkout/<path:session_id>", endpoint="pay_checkout")
+    def pay_checkout(session_id: str):
+        sid = (session_id or "").strip()
+        if sid.startswith("cs_"):
+            return redirect(f"https://checkout.stripe.com/c/pay/{sid}")
+
+        account = db.get_account_by_extract_session(sid)
+        if not account:
+            return render_template(
+                "checkout_bridge.html",
+                plan_title="ChatGPT Plus 结账台",
+                masked_email="未找到或已过期的结账会话",
+                promo_title="",
+                amount_display="",
+                publishable_key="",
+                customer_session_client_secret="",
+                client_secret="",
+                confirm_return_url="",
+            ), 404
+
+        email = str(account.get("email") or "").strip()
+        masked_email = ""
+        if "@" in email:
+            parts = email.split("@", 1)
+            prefix = parts[0]
+            masked_email = f"{prefix[:2]}***{prefix[-2:]}@{parts[1]}" if len(prefix) > 4 else f"{prefix[:1]}***@{parts[1]}"
+        else:
+            masked_email = email
+
+        result_raw = account.get("extract_link_result_json") or "{}"
+        if isinstance(result_raw, str):
+            try:
+                result_data = json.loads(result_raw)
+            except Exception:
+                result_data = {}
+        elif isinstance(result_raw, dict):
+            result_data = result_raw
+        else:
+            result_data = {}
+
+        chk_data = result_data.get("checkout_data") or result_data.get("checkout_response_data") or {}
+        publishable_key = (
+            chk_data.get("publishable_key")
+            or result_data.get("publishable_key")
+            or "pk_live_51HOrSwCpswsmbSmz6r2sFq1B132Rk5tJ8r1k0k1a9d1E8g3h5j7k9l0"
+        )
+        customer_session_client_secret = (
+            chk_data.get("customer_session_client_secret")
+            or result_data.get("customer_session_client_secret")
+            or ""
+        )
+        client_secret = (
+            chk_data.get("client_secret")
+            or result_data.get("client_secret")
+            or ""
+        )
+        confirm_return_url = (
+            chk_data.get("confirm_return_url")
+            or result_data.get("confirm_return_url")
+            or f"https://chatgpt.com/checkout/verify?stripe_session_id={sid}&processor_entity=openai_llc&plan_type=plus"
+        )
+
+        promo = str(account.get("promo_campaign") or result_data.get("promo_campaign") or "")
+        if "free" in promo or "1-month" in promo:
+            promo_title = "首月免费试用 (1 Month Free)"
+            amount_display = "$0.00"
+        elif "50-pct" in promo:
+            promo_title = "连续两月半价特惠 (50% OFF)"
+            amount_display = "$10.00"
+        else:
+            promo_title = "Plus 会员订阅特惠" if promo else ""
+            amount_display = "$0.00" if "free" in promo else "$20.00"
+
+        return render_template(
+            "checkout_bridge.html",
+            plan_title="ChatGPT Plus 结账台",
+            masked_email=masked_email,
+            promo_title=promo_title,
+            amount_display=amount_display,
+            publishable_key=publishable_key,
+            customer_session_client_secret=customer_session_client_secret,
+            client_secret=client_secret,
+            confirm_return_url=confirm_return_url,
+        )
 
     # ----------------------------------------------------------
     # 统计概览

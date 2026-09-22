@@ -356,16 +356,16 @@ class TestNativeExtractLink(unittest.TestCase):
         self.assertIn("#fidkd_hash", res["url"])
         mock_page.on.assert_any_call("response", unittest.mock.ANY)
 
-    @patch("core.extract_link_service._human_extract_checkout_url")
+    @patch("core.extract_link_service._execute_js_checkout")
     @patch("core.extract_link_service._read_chatgpt_session_once")
     @patch("core.cloakbrowser_driver.build_cloak_driver")
     @patch("core.extract_link_service.solve_cloudflare_challenge_if_present")
-    def test_extract_checkout_url_with_cloak_session_first(self, mock_solve_cf, mock_build_driver, mock_read_session, mock_human_extract):
+    def test_extract_checkout_url_with_cloak_session_first(self, mock_solve_cf, mock_build_driver, mock_read_session, mock_js_checkout):
         mock_driver = MagicMock()
         mock_build_driver.return_value = (mock_driver, None)
         mock_solve_cf.return_value = False
         mock_read_session.return_value = {"accessToken": "valid_token", "account": {"id": "acc_direct"}}
-        mock_human_extract.return_value = {
+        mock_js_checkout.return_value = {
             "ok": True,
             "url": "https://checkout.stripe.com/c/pay/cs_direct_success",
             "checkout_session_id": "cs_direct_success",
@@ -391,22 +391,22 @@ class TestNativeExtractLink(unittest.TestCase):
         self.assertTrue(res["ok"])
         self.assertEqual(res["url"], "https://checkout.stripe.com/c/pay/cs_direct_success")
         mock_driver.get.assert_called_with("https://chatgpt.com/")
-        mock_human_extract.assert_called_once()
+        mock_js_checkout.assert_called_once()
         # Ensure it didn't navigate to login page
         for call in mock_driver.get.call_args_list:
             self.assertNotIn("auth/login", call[0][0])
 
     @patch("core.stripe_lpm_engine.StripeLPMExtractor.run")
-    @patch("core.extract_link_service._human_extract_checkout_url")
+    @patch("core.extract_link_service._execute_js_checkout")
     @patch("core.extract_link_service._read_chatgpt_session_once")
     @patch("core.cloakbrowser_driver.build_cloak_driver")
     @patch("core.extract_link_service.solve_cloudflare_challenge_if_present")
-    def test_extract_checkout_url_with_cloak_lpm_conversion(self, mock_solve_cf, mock_build_driver, mock_read_session, mock_human_extract, mock_lpm_run):
+    def test_extract_checkout_url_with_cloak_lpm_conversion(self, mock_solve_cf, mock_build_driver, mock_read_session, mock_js_checkout, mock_lpm_run):
         mock_driver = MagicMock()
         mock_build_driver.return_value = (mock_driver, None)
         mock_solve_cf.return_value = False
         mock_read_session.return_value = {"accessToken": "valid_token", "account": {"id": "acc_direct"}}
-        mock_human_extract.return_value = {
+        mock_js_checkout.return_value = {
             "ok": True,
             "url": "https://checkout.stripe.com/c/pay/cs_direct_success",
             "checkout_session_id": "cs_direct_success",
@@ -464,7 +464,102 @@ class TestNativeExtractLink(unittest.TestCase):
         dec = db._decorate_account(raw_row)
         self.assertEqual(dec.get("password"), "MySecretPassword123!")
 
+    @patch("core.extract_link_service._execute_js_checkout")
+    @patch("core.extract_link_service._read_chatgpt_session_once")
+    @patch("core.cloakbrowser_driver.build_cloak_driver")
+    @patch("core.extract_link_service.solve_cloudflare_challenge_if_present")
+    def test_form_a_oaics_standalone_bridge_url(self, mock_solve_cf, mock_build_driver, mock_read_session, mock_js_checkout):
+        """测试形态 A：针对 oaics_* 特惠账号生成免登独立收银长链 /pay/checkout/... 及站内短链。"""
+        mock_driver = MagicMock()
+        mock_build_driver.return_value = (mock_driver, None)
+        mock_solve_cf.return_value = False
+        mock_read_session.return_value = {"accessToken": "valid_token", "account": {"id": "acc_direct"}}
+        mock_js_checkout.return_value = {
+            "ok": True,
+            "url": "https://chatgpt.com/checkout/openai_ie/oaics_trial_abc123",
+            "checkout_session_id": "oaics_trial_abc123",
+            "processor_entity": "openai_ie",
+            "api_key": "pk_live_test_pk",
+            "customer_session_client_secret": "cuss_secret_test_secret",
+            "client_secret": None,
+            "confirm_return_url": "https://chatgpt.com/checkout/verify?stripe_session_id=oaics_trial_abc123",
+            "checkout_data": {
+                "checkout_session_id": "oaics_trial_abc123",
+                "customer_session_client_secret": "cuss_secret_test_secret",
+            },
+        }
+
+        account = {
+            "id": 101,
+            "email": "trial_user@example.com",
+            "access_token": "valid_token",
+            "account_id": "acc_direct",
+            "country_code": "JP",
+            "token_expired": False,
+        }
+
+        res = extract_link_service.extract_checkout_url_with_cloak(
+            account=account,
+            proxy_url="socks5h://127.0.0.1:1080",
+            target_lpm="card",
+        )
+
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["type"], "checkout_bridge")
+        self.assertEqual(res["long_url"], "/pay/checkout/oaics_trial_abc123")
+        self.assertEqual(res["url"], "/pay/checkout/oaics_trial_abc123")
+        self.assertEqual(res["short_url"], "https://chatgpt.com/checkout/openai_ie/oaics_trial_abc123")
+        self.assertEqual(res["customer_session_client_secret"], "cuss_secret_test_secret")
+
+    def test_webui_pay_checkout_bridge_endpoint(self):
+        """测试 WebUI /pay/checkout/<session_id> 免登收银台与 302 重定向。"""
+        import tempfile
+        import json
+        from webui.app import create_app
+
+        with tempfile.TemporaryDirectory() as td, patch.multiple(db, **self.storage(Path(td))):
+            db._ensure_sqlite()
+            acc_id = db.insert_account(
+                email="bridge_payer@example.com",
+                access_token="at_bridge_test",
+            )
+            db.update_account_extract(acc_id, {
+                "ok": True,
+                "status": "success",
+                "url": "/pay/checkout/oaics_sess_999",
+                "stripe_checkout_url": "/pay/checkout/oaics_sess_999",
+                "result": {
+                    "long_url": "/pay/checkout/oaics_sess_999",
+                    "short_url": "https://chatgpt.com/checkout/openai_ie/oaics_sess_999",
+                    "publishable_key": "pk_live_custom_key_123",
+                    "customer_session_client_secret": "cuss_secret_999",
+                    "promo_campaign": "plus-1-month-free",
+                }
+            })
+
+            client = create_app(auth_code="test-auth-code").test_client()
+
+            # 1. 未登录状态下直接访问 /pay/checkout/oaics_sess_999 (免登收银台)
+            resp = client.get("/pay/checkout/oaics_sess_999")
+            self.assertEqual(resp.status_code, 200)
+            html = resp.data.decode("utf-8")
+            self.assertIn("ChatGPT Plus", html)
+            self.assertIn("pk_live_custom_key_123", html)
+            self.assertIn("cuss_secret_999", html)
+            self.assertIn("br***er@example.com", html)
+            self.assertIn("首月免费试用", html)
+
+            # 2. 访问 cs_live_* 会话，应 302 重定向至 Stripe 托管长链
+            resp_stripe = client.get("/pay/checkout/cs_live_external_123")
+            self.assertEqual(resp_stripe.status_code, 302)
+            self.assertEqual(resp_stripe.headers["Location"], "https://checkout.stripe.com/c/pay/cs_live_external_123")
+
+            # 3. 访问未知会话，应返回 404 且不崩溃
+            resp_404 = client.get("/pay/checkout/oaics_non_existent")
+            self.assertEqual(resp_404.status_code, 404)
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

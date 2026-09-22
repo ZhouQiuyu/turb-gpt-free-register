@@ -107,7 +107,7 @@ def register_auth_routes(app: Any) -> None:
     @app.before_request
     def _require_auth_code():
         endpoint = request.endpoint or ""
-        if endpoint in {"auth_login", "auth_logout", "static"}:
+        if endpoint in {"auth_login", "auth_logout", "static", "pay_checkout"} or request.path.startswith("/pay/checkout"):
             return None
         if request.path in ("/favicon.ico",):
             return Response(status=204)

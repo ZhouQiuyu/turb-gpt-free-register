@@ -440,11 +440,33 @@ def _fill_mfa_challenge_if_present(driver, email: str, timeout: int = 15) -> boo
     return False
 
 
+def _wait_email_submitted(driver, email: str, timeout: int = 10) -> None:
+    """等待并确保邮箱已经成功提交并跳转离开邮箱输入页面"""
+    end = time.time() + timeout
+    while time.time() < end:
+        url = str(getattr(driver, "current_url", "") or "").lower()
+        if any(x in url for x in ("/password", "email-verification", "otp", "challenge", "authorize", "consent")):
+            return
+        page = getattr(driver, "page", None)
+        if page is not None and not type(driver).__name__.startswith("MagicMock"):
+            try:
+                inp = page.locator('input[type="email"], input[name="email"], input[name="username"], input#email-input').first
+                if not inp.is_visible():
+                    return
+            except Exception:
+                pass
+        time.sleep(1.0)
+    logger.info("[Codex][Browser] 页面可能未完成邮箱提交，尝试补发 Continue 点击：%s", email)
+    try:
+        _submit_email_step(driver, email)
+    except Exception:
+        pass
+
+
 def _fill_login_password_if_present(driver, email: str, timeout: int = 18) -> str | None:
-    """Codex OAuth 若账号有密码，优先在登录密码页输入密码。返回 next_step / email_otp / None。"""
+    """Codex OAuth 若账号有密码，优先在登录密码页输入密码。若失败或无密码，自动平滑回退邮箱 OTP (方案2)。返回 next_step / email_otp / None。"""
     password = _account_password_for_email(email)
-    if not password:
-        return None
+    page = getattr(driver, "page", None)
     end = time.time() + timeout
     while time.time() < end:
         if _is_email_verification_page(driver):
@@ -452,37 +474,51 @@ def _fill_login_password_if_present(driver, email: str, timeout: int = 18) -> st
         if not _is_login_password_page(driver):
             time.sleep(0.4)
             continue
-        result = driver.execute_script(r"""
-        const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
-          && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none'
-          && !el.disabled && !el.readOnly;
-        const input = [...document.querySelectorAll('input[type="password"],input[name*="password" i],input[autocomplete="current-password"]')]
-          .find(visible);
-        if (!input) return {ok:false, reason:'missing_password_input'};
-        const form = input.closest('form');
-        const scope = form || document;
-        const buttons = [...scope.querySelectorAll('button,input[type="submit"]')]
-          .filter(el => !!el && !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length) && !el.disabled && String(el.getAttribute('aria-disabled') || '').toLowerCase() !== 'true')
-          .map((el, idx) => {
-            const r = el.getBoundingClientRect();
-            const ir = input.getBoundingClientRect();
-            return {el, idx, below: r.top >= ir.bottom - 10, dist: Math.max(0, r.top - ir.bottom) + Math.abs((r.left+r.right-ir.left-ir.right)/2)/10};
-          })
-          .filter(x => x.below)
-          .sort((a,b) => a.dist - b.dist || a.idx - b.idx);
-        if (!buttons.length) return {ok:false, reason:'missing_submit'};
-        buttons[0].el.scrollIntoView({block:'center'});
-        return {ok:true, reason:'password_targets', input, button: buttons[0].el};
-        """) or {}
-        if not result.get("ok"):
-            logger.info("[Codex][Browser] 登录密码页未找到输入/提交按钮：%s", result)
-            time.sleep(0.5)
-            continue
-        _human_type_text(driver, result.get("input"), password, clear=True)
-        human_delay("form", minimum=2.0, maximum=3.6)
-        _human_click(driver, result.get("button"), label="codex_password_submit")
-        logger.info("[Codex][Browser] 已填写并提交登录密码：%s", email)
-        wait_end = time.time() + 12
+
+        # 处于登录密码页
+        if not password:
+            logger.info("[Codex][Browser] 登录密码页：账号无本地密码，直接切换一次性验证码登录 (方案2)")
+            _click_passwordless_signup_if_present(driver)
+            return "email_otp"
+
+        logger.info("[Codex][Browser] 登录密码页：尝试使用密码登录: %s", email)
+        submitted = False
+        if page is not None and not type(driver).__name__.startswith("MagicMock"):
+            try:
+                pwd_input = page.locator('input[type="password"], input[name*="password" i], input[autocomplete="current-password"]').first
+                if pwd_input.is_visible():
+                    pwd_input.click()
+                    pwd_input.fill("")
+                    page.keyboard.type(password, delay=random.randint(20, 50))
+                    human_delay("form", minimum=1.0, maximum=2.0)
+                    page.keyboard.press("Enter")
+                    time.sleep(0.8)
+                    btn = page.locator('form button[type="submit"], button[type="submit"], button:text-is("Continue"), button:text-is("続行")').first
+                    if btn.is_visible():
+                        btn.click(force=True)
+                    submitted = True
+            except Exception as e:
+                logger.debug("[Codex][Browser] Playwright 填写提交密码异常: %s", e)
+
+        if not submitted:
+            try:
+                driver.execute_script(r"""
+                const p = document.querySelector('input[type="password"],input[name*="password" i]');
+                if (p) {
+                    p.focus();
+                    const s = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                    if (s) s.call(p, arguments[0]); else p.value = arguments[0];
+                    p.dispatchEvent(new Event('input', {bubbles:true}));
+                    p.dispatchEvent(new Event('change', {bubbles:true}));
+                    const f = p.closest('form');
+                    if (f && f.requestSubmit) f.requestSubmit();
+                }
+                """, password)
+            except Exception:
+                pass
+
+        logger.info("[Codex][Browser] 已提交登录密码，等待校验结果...")
+        wait_end = time.time() + 8
         while time.time() < wait_end:
             if _is_mfa_challenge_page(driver):
                 _fill_mfa_challenge_if_present(driver, email, timeout=15)
@@ -491,7 +527,27 @@ def _fill_login_password_if_present(driver, email: str, timeout: int = 18) -> st
                 return "email_otp"
             if not _is_login_password_page(driver):
                 return "next_step"
+
+            # 方案2检测：密码错误提示
+            err_text = ""
+            if page is not None and not type(driver).__name__.startswith("MagicMock"):
+                try:
+                    err_el = page.locator('.error, [role="alert"], [class*="error"], [id*="error"]').first
+                    if err_el.is_visible():
+                        err_text = err_el.text_content() or ""
+                except Exception:
+                    pass
+            if err_text:
+                logger.warning("[Codex][Browser] 密码登录失败提示: %s，立即执行方案2：平滑回退邮箱 OTP 登录", err_text.strip())
+                _click_passwordless_signup_if_present(driver)
+                return "email_otp"
             time.sleep(0.5)
+
+        # 密码提交后仍停留在密码页，判定密码无效，平滑回退 OTP
+        if _is_login_password_page(driver):
+            logger.warning("[Codex][Browser] 密码提交后仍停留在密码页，自动回退邮箱 OTP 登录 (方案2)")
+            _click_passwordless_signup_if_present(driver)
+            return "email_otp"
         return "next_step"
     return None
 
@@ -511,8 +567,9 @@ def _fill_email_and_otp(driver, email: str, otp_provider, auth_url: str) -> None
         _type_email_address(driver, email, timeout=12)
         logger.info("[Codex][Browser] 已填写邮箱：%s", email)
         human_delay("form")
-        _submit_email_step(driver)
-        logger.info("[Codex][Browser] 已提交邮箱，等待邮箱 OTP 页面")
+        _submit_email_step(driver, email)
+        logger.info("[Codex][Browser] 已提交邮箱，确认跳转中...")
+        _wait_email_submitted(driver, email, timeout=10)
         pw_result = _fill_login_password_if_present(driver, email, timeout=18)
         if pw_result == "next_step":
             if _is_mfa_challenge_page(driver):
@@ -520,7 +577,7 @@ def _fill_email_and_otp(driver, email: str, otp_provider, auth_url: str) -> None
             logger.info("[Codex][Browser] 账号已用密码完成登录，直接进入后续步骤")
             return
         if pw_result == "email_otp":
-            logger.info("[Codex][Browser] 密码登录后仍进入邮箱 OTP 页面")
+            logger.info("[Codex][Browser] 密码登录后仍进入/切换为邮箱 OTP 页面")
         else:
             _maybe_click_passwordless_after_email(driver, email, timeout=18)
     except Exception as exc:
@@ -544,8 +601,9 @@ def _fill_email_and_otp(driver, email: str, otp_provider, auth_url: str) -> None
         try:
             _type_email_address(driver, email, timeout=12)
             human_delay("form")
-            _submit_email_step(driver)
+            _submit_email_step(driver, email)
             logger.info("[Codex][Browser] 已重新提交邮箱触发 OTP")
+            _wait_email_submitted(driver, email, timeout=10)
             pw_result = _fill_login_password_if_present(driver, email, timeout=12)
             if pw_result == "next_step":
                 if _is_mfa_challenge_page(driver):

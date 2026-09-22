@@ -179,7 +179,7 @@ class StripeLPMExtractor:
         if not self.session_id:
             raise ValueError("缺少有效的 Stripe Checkout Session ID")
         if self.session_id.startswith("oaics_"):
-            raise ValueError(f"oaics_* 是 ChatGPT 原生内部结账会话，无法送入 Stripe payment_pages 接口")
+            raise ValueError(f"oaics_* 是 OpenAI Custom Checkout 站内会话，需通过免登桥接收银台 (形态 A) 或浏览器 Elements 环境处理 (形态 B)")
 
         logger.info("[Stripe-LPM] 开始针对 Session %s 执行 %s 原生提链…", self.session_id[:16], self.spec["name"])
 
@@ -252,12 +252,18 @@ class StripeLPMExtractor:
         self.payment_method_types = data.get("payment_method_types") or []
         if data.get("eid"):
             self.eid = data.get("eid")
-        init_amount = data.get("expected_amount") or (data.get("line_items", [{}])[0].get("amount_total"))
-        if init_amount:
-            try:
+
+        total_obj = data.get("total") or (data.get("snapshot") or {}).get("total") or {}
+        if isinstance(total_obj, dict) and total_obj.get("minorUnitsAmount") is not None:
+            self.expected_amount = int(total_obj["minorUnitsAmount"])
+        elif isinstance(total_obj, dict) and total_obj.get("total") is not None:
+            self.expected_amount = int(total_obj["total"])
+        elif data.get("expected_amount") is not None:
+            self.expected_amount = int(data.get("expected_amount"))
+        elif data.get("line_items"):
+            init_amount = data.get("line_items", [{}])[0].get("amount_total")
+            if init_amount is not None:
                 self.expected_amount = int(init_amount)
-            except Exception:
-                pass
 
         if not self.api_key and data.get("api_key"):
             self.api_key = data.get("api_key")
@@ -291,8 +297,12 @@ class StripeLPMExtractor:
             if r.status_code == 200:
                 data = r.json()
                 snapshot = data.get("snapshot") or {}
-                amount_total = snapshot.get("amount_total") or data.get("expected_amount")
-                if amount_total:
+                amount_total = snapshot.get("amount_total")
+                if amount_total is None and isinstance(snapshot.get("total"), dict):
+                    amount_total = snapshot["total"].get("minorUnitsAmount") or snapshot["total"].get("total")
+                if amount_total is None:
+                    amount_total = data.get("expected_amount")
+                if amount_total is not None:
                     self.expected_amount = int(amount_total)
                     logger.info("[Stripe-LPM] 税费重算完成，已精准对齐 expected_amount=%s", self.expected_amount)
                 return data
