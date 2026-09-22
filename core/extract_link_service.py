@@ -986,7 +986,7 @@ def extract_checkout_url_with_cloak(
         # 针对 oaics_* 原生站内结账会话
         if cs_id.startswith("oaics_") or "oaics_" in raw_url:
             short_url = short_url or f"https://chatgpt.com/checkout/{entity}/{cs_id}"
-            bridge_url = f"/pay/checkout/{cs_id}"
+            bridge_url = f"https://gpt-register.cortexlane.cloud/pay/checkout/{cs_id}"
             _emit("检测到 OpenAI 原生特惠结账会话 (oaics_*)，已生成免登独立收银长链 (形态 A) 与站内短链")
             if lpm and lpm not in ("card", "direct", "none", "stripe", "hosted"):
                 _emit("提示：特惠试用资格官方限定绑卡/Link 签约 (无额度扣除)，已为您生成免登独立收银长链")
