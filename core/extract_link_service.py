@@ -286,7 +286,6 @@ def _human_extract_checkout_url(
 
             if (globalBtn) {
                 globalBtn.scrollIntoView({ block: 'center' });
-                try { globalBtn.click(); } catch (_) {}
                 const r = globalBtn.getBoundingClientRect();
                 return {
                     ok: true,
@@ -335,7 +334,6 @@ def _human_extract_checkout_url(
 
             if (entryBtn) {
                 entryBtn.scrollIntoView({ block: 'center' });
-                try { entryBtn.click(); } catch (_) {}
                 const r = entryBtn.getBoundingClientRect();
                 return { ok: true, text: entryBtn.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
             }
@@ -358,7 +356,6 @@ def _human_extract_checkout_url(
                 const el = document.querySelector(sel);
                 if (el && visible(el)) {
                     el.scrollIntoView({ block: 'center' });
-                    try { el.click(); } catch (_) {}
                     const r = el.getBoundingClientRect();
                     return { ok: true, text: el.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
                 }
@@ -447,7 +444,6 @@ def _human_extract_checkout_url(
 
             if (profileBtn) {
                 profileBtn.scrollIntoView({ block: 'center' });
-                try { profileBtn.click(); } catch (_) {}
                 const r = profileBtn.getBoundingClientRect();
                 return { ok: true, text: (profileBtn.innerText || '').trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
             }
@@ -496,7 +492,6 @@ def _human_extract_checkout_url(
                 });
                 if (upgradeItem) {
                     upgradeItem.scrollIntoView({ block: 'center' });
-                    try { upgradeItem.click(); } catch (_) {}
                     const r = upgradeItem.getBoundingClientRect();
                     return { ok: true, text: upgradeItem.innerText.trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
                 }
@@ -551,45 +546,46 @@ def _human_extract_checkout_url(
             page.mouse.up()
         except Exception as exc:
             logger.warning("[提链-拟人化] Playwright mouse 点击异常: %s", exc)
-
-    driver.execute_script(r"""
-        try {
-            const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || (el.getClientRects && el.getClientRects().length));
-            const dialogs = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], .modal')].filter(visible);
-            let target = null;
-            for (const dialog of dialogs) {
-                const btns = [...dialog.querySelectorAll('button, div[role="button"], a[role="button"]')].filter(b => {
-                    if (!visible(b)) return false;
-                    const r = b.getBoundingClientRect();
-                    return r.left >= 260; // 排除侧边栏
-                });
-                target = btns.find(b => {
-                    const t = (b.innerText || '').trim().toLowerCase();
-                    if (/閉じる|close|cancel|hủy|bỏ qua/i.test(t)) return false;
-                    if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中のプラン') || t.includes('current plan')) return false;
-                    return /特別オファーを利用|オファーを利用|特典を利用|利用する|無料オファーを受け取る|無料オファー|plus を試す|無料で試す|plus をはじめる|plus にアップグレード|plus を利用|アップグレード|upgrade to plus|upgrade|dùng thử ưu đãi đặc biệt|dùng thử plus|claim special offer|try special offer|try plus|start trial|claim offer/i.test(t);
-                });
-                if (target) break;
-            }
-            if (!target) {
-                const allButtons = [...document.querySelectorAll('button, div[role="button"], a[role="button"]')].filter(b => {
-                    if (!visible(b)) return false;
-                    const r = b.getBoundingClientRect();
-                    return r.left >= 260; // 排除侧边栏
-                });
-                target = allButtons.find(b => {
-                    const t = (b.innerText || '').trim().toLowerCase();
-                    if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中のプラン')) return false;
-                    if (/閉じる|close|cancel/i.test(t)) return false;
-                    return /特別オファーを利用|オファーを利用|特典を利用|無料オファーを受け取る|無料オファー|plus を試す|無料で試す|plus をはじめる|plus にアップグレード|plus を利用|アップグレード|upgrade to plus|upgrade|dùng thử ưu đãi đặc biệt|claim special offer/i.test(t);
-                });
-            }
-            if (target) {
-                target.focus();
-                target.click();
-            }
-        } catch (_) {}
-    """)
+    else:
+        # 仅在无 Playwright 鼠标环境时回退至 DOM 点击
+        driver.execute_script(r"""
+            try {
+                const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || (el.getClientRects && el.getClientRects().length));
+                const dialogs = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], .modal')].filter(visible);
+                let target = null;
+                for (const dialog of dialogs) {
+                    const btns = [...dialog.querySelectorAll('button, div[role="button"], a[role="button"]')].filter(b => {
+                        if (!visible(b)) return false;
+                        const r = b.getBoundingClientRect();
+                        return r.left >= 260; // 排除侧边栏
+                    });
+                    target = btns.find(b => {
+                        const t = (b.innerText || '').trim().toLowerCase();
+                        if (/閉じる|close|cancel|hủy|bỏ qua/i.test(t)) return false;
+                        if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中のプラン') || t.includes('current plan')) return false;
+                        return /特別オファーを利用|オファーを利用|特典を利用|利用する|無料オファーを受け取る|無料オファー|plus を試す|無料で試す|plus をはじめる|plus にアップグレード|plus を利用|アップグレード|upgrade to plus|upgrade|dùng thử ưu đãi đặc biệt|dùng thử plus|claim special offer|try special offer|try plus|start trial|claim offer/i.test(t);
+                    });
+                    if (target) break;
+                }
+                if (!target) {
+                    const allButtons = [...document.querySelectorAll('button, div[role="button"], a[role="button"]')].filter(b => {
+                        if (!visible(b)) return false;
+                        const r = b.getBoundingClientRect();
+                        return r.left >= 260; // 排除侧边栏
+                    });
+                    target = allButtons.find(b => {
+                        const t = (b.innerText || '').trim().toLowerCase();
+                        if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中のプラン')) return false;
+                        if (/閉じる|close|cancel/i.test(t)) return false;
+                        return /特別オファーを利用|オファーを利用|特典を利用|無料オファーを受け取る|無料オファー|plus を試す|無料で試す|plus をはじめる|plus にアップグレード|plus を利用|アップグレード|upgrade to plus|upgrade|dùng thử ưu đãi đặc biệt|claim special offer/i.test(t);
+                    });
+                }
+                if (target) {
+                    target.focus();
+                    target.click();
+                }
+            } catch (_) {}
+        """)
 
     # 8. 阶段五：等待捕获 Stripe Checkout 链接 (Sentinel PoW 计算需 30~80s)
     _emit("等待官方生成 Stripe 结账链接 (含 Sentinel 人机对抗计算，最长等待 120 秒)…")
@@ -609,11 +605,11 @@ def _human_extract_checkout_url(
             logger.info("[提链-拟人化] 成功提前捕获 checkout_session_id (%s)，提前退出等待", checkout_session_id)
             break
 
-        # 兜底：若 10 秒后未见任何网络请求或跳转且按钮仍可点击，再次触发双重点击
-        if not reclick_attempted and (time.time() - wait_start > 10.0) and not checkout_response_data:
+        # 兜底：若 45 秒后未见任何网络请求或跳转且按钮仍可点击，再次触发原生平滑补点击
+        if not reclick_attempted and (time.time() - wait_start > 45.0) and not checkout_response_data and not checkout_session_id:
             check_again = _find_modal_action_btn()
             if check_again.get("ok"):
-                logger.info("[提链-拟人化] 首次点击可能未被触发，执行多重补点击确认按钮...")
+                logger.info("[提链-拟人化] 首次点击可能未被触发，执行原生平滑补点击确认按钮...")
                 _emit("正在确保试用确认点击已触发…")
                 if page and check_again.get("x") and hasattr(page, "mouse"):
                     try:
@@ -624,20 +620,6 @@ def _human_extract_checkout_url(
                         page.mouse.up()
                     except Exception:
                         pass
-                if page:
-                    try:
-                        loc = page.locator('button:has-text("特別オファーを利用"), button:has-text("オファーを利用"), button:has-text("無料オファーを受け取る"), button:has-text("オファーを受け取る"), button:has-text("特典を受け取る"), button:has-text("アップグレード"), button:has-text("Upgrade")').first
-                        if loc.is_visible():
-                            loc.click(timeout=3000)
-                    except Exception:
-                        pass
-                driver.execute_script(r"""
-                    try {
-                        const btns = [...document.querySelectorAll('button')];
-                        const b = btns.find(el => /特別オファーを利用|オファーを利用|無料オファーを受け取る|オファーを受け取る|特典を受け取る|無料オファー|アップグレード|Upgrade/i.test(el.innerText || ''));
-                        if (b) { b.focus(); b.click(); }
-                    } catch (_) {}
-                """)
             reclick_attempted = True
 
         time.sleep(1.0)
@@ -1124,6 +1106,23 @@ def extract_checkout_url_with_cloak(
     def _do_checkout(tok: str, acc_id: str, phase_desc: str, allow_human: bool = True) -> dict[str, Any]:
         _emit(f"{phase_desc}，正在向 OpenAI 发起【{req_country} ({lpm.upper()})】原生结账申请 (hosted 模式)…")
 
+        # 0. 若存在特惠/试用活动资格 (promo_campaign_id)，OpenAI 后台要求严格的 Sentinel 校验，禁止无头 fetch 裸调以免触发 400 风控封锁
+        if promo_campaign_id and allow_human:
+            _emit("检测到活动资格，直接通过拟人化 UI 操作唤起官方结账 (由前端原生计算 Sentinel PoW)…")
+            human_res = _human_extract_checkout_url(
+                driver,
+                promo_campaign_id=promo_campaign_id,
+                emit_fn=_emit,
+                timeout=90.0,
+                origin_country=origin_country,
+                target_lpm=target_lpm,
+            )
+            if human_res.get("ok"):
+                return _convert_to_lpm_if_needed(human_res)
+            if human_res.get("already_paid"):
+                return human_res
+            return human_res
+
         # 1. 优先尝试以目标国家 + hosted 模式申请 (若有试用活动先带试用活动)
         chk_res = _execute_js_checkout(driver, tok, acc_id, req_country, req_currency, promo_campaign_id=promo_campaign_id)
 
@@ -1210,15 +1209,7 @@ def extract_checkout_url_with_cloak(
             time.sleep(2.0)
             solve_cloudflare_challenge_if_present(driver, max_wait=15.0, emit_fn=_emit)
 
-            # 优先尝试直接使用存量 access_token 发起结账申请 (秒级直通)
-            _emit("正在使用存量授权凭证快速发起结账会话…")
-            chk_res = _do_checkout(access_token, account_id, "存量会话直通", allow_human=False)
-            if chk_res.get("ok"):
-                return chk_res
-            if chk_res.get("already_paid"):
-                return chk_res
-
-            # 若存量凭证未直接出链，检查浏览器当前是否持有新鲜 session
+            # 优先检查浏览器当前是否持有新鲜 session
             session_data = None
             cur_check = str(getattr(driver, "current_url", "") or "")
             if "chatgpt.com" in cur_check or "mock" in cur_check.lower():
@@ -1230,12 +1221,21 @@ def extract_checkout_url_with_cloak(
             if session_data and session_data.get("accessToken"):
                 cur_tok = session_data.get("accessToken")
                 cur_acc = (session_data.get("account") or {}).get("id") or account_id
-                if cur_tok != access_token:
-                    chk_res = _do_checkout(cur_tok, cur_acc, "浏览器存量会话有效")
-                    if chk_res.get("ok"):
-                        return chk_res
-                    if chk_res.get("already_paid"):
-                        return chk_res
+                _emit("浏览器持有有效登录态，直接发起原生提链…")
+                chk_res = _do_checkout(cur_tok, cur_acc, "浏览器存量会话有效", allow_human=True)
+                if chk_res.get("ok"):
+                    return chk_res
+                if chk_res.get("already_paid"):
+                    return chk_res
+
+            # 若未在浏览器检测到已登录态，且非活动账号，可尝试存量 token 快速结账
+            if not promo_campaign_id:
+                _emit("正在使用存量授权凭证快速发起结账会话…")
+                chk_res = _do_checkout(access_token, account_id, "存量会话直通", allow_human=False)
+                if chk_res.get("ok"):
+                    return chk_res
+                if chk_res.get("already_paid"):
+                    return chk_res
 
             _emit("存量会话凭证已失效或未直接出链，切换至完整登录流程…")
             try:
