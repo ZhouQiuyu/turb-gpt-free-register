@@ -2861,6 +2861,7 @@
         <span>提链支付方式 (Local Payment Method)</span>
         <select id="extractLinkTypeSelect" onchange="onExtractLinkTypeChange()">
           <option value="ideal" selected>🇳🇱 iDEAL（荷兰/欧洲网银直跳链接 · 最稳定推荐）</option>
+          <option value="card">💳 官方免登长链（支持 0 元试用 / 50% 折扣特惠签约）</option>
           <option value="pix">🇧🇷 PIX（巴西二维码与 Copia e Cola 复制付款码）</option>
           <option value="upi">🇮🇳 UPI（印度聚合支付直链 / 扫码）</option>
           <option value="kakao_pay">🇰🇷 Kakao Pay（韩国移动端原生结账）</option>
@@ -5591,6 +5592,7 @@ let EXTRACT_LINK_TRIGGER_BTN = null;
 
 const EXTRACT_LINK_DESCRIPTIONS = {
   ideal: '<strong>🇳🇱 iDEAL 提链说明：</strong> 生成跳转至荷兰各大银行直接选择扣费的官方 Stripe 跳转链接（无需扫码，适合直链发卡结算场景）。',
+  card: '<strong>💳 官方免登长链说明：</strong> 生成官方/独立免登托管收银长链，无需输入账号密码，支持直接绑定信用卡或 Stripe Link 完成 0 元试用或 50% 折扣签约。',
   pix: '<strong>🇧🇷 PIX 提链说明：</strong> 生成巴西中央银行即时支付 PIX 二维码与 <code>Copia e Cola</code> 复制字符串付款码。',
   upi: '<strong>🇮🇳 UPI 提链说明：</strong> 生成印度统一支付接口官方结账链接或动态二维码，适合 UPI 聚合支付。',
   kakao_pay: '<strong>🇰🇷 Kakao Pay 提链说明：</strong> 生成韩国 Kakao Pay 官方收银台直跳与移动支付页面。',

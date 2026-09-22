@@ -895,14 +895,48 @@ def _submit_email_step(driver, email: str | None = None) -> None:
     if page is not None and not type(driver).__name__.startswith("MagicMock"):
         # 优先寻找安全的非三方登录 Continue 按钮（涵盖英/日/越/中等多语言）
         try:
-            submit_btn = page.locator('button:text-is("Continue"), button:text-is("続行"), button:text-is("Tiếp tục"), button:text-is("继续"), form button[type="submit"], button[type="submit"], button[name="action"][value="default"], button.btn-primary').first
+            submit_btn = page.locator('form button[type="submit"], button[type="submit"], button.btn-primary').first
             if submit_btn.is_visible():
                 submit_btn.click(delay=random.randint(60, 120), force=True)
                 playwright_submitted = True
-                logger.info("%s [Playwright] 已通过原生鼠标点击 Continue 按钮触发可信表单提交", _log_prefix(driver))
+                logger.info("%s [Playwright] 已通过原生鼠标点击 Submit 按钮触发可信表单提交", _log_prefix(driver))
                 time.sleep(1.0)
+            else:
+                for txt in ["Continue", "続行", "Tiếp tục", "继续"]:
+                    btn = page.get_by_role("button", name=txt).first
+                    if btn.is_visible():
+                        btn.click(delay=random.randint(60, 120), force=True)
+                        playwright_submitted = True
+                        logger.info("%s [Playwright] 已通过原生鼠标点击文本按钮(%s)触发提交", _log_prefix(driver), txt)
+                        time.sleep(1.0)
+                        break
         except Exception as exc:
             logger.debug("%s [Playwright] 原生鼠标点击 Continue 按钮异常: %s", _log_prefix(driver), exc)
+
+        if not playwright_submitted:
+            try:
+                js_clicked = driver.execute_script(r"""
+                    const inp = document.querySelector('input[type="email"], input[name="email"], input[name="username"], input#email-input');
+                    if (!inp) return false;
+                    const form = inp.closest('form');
+                    const root = form || document;
+                    const btns = [...root.querySelectorAll('button[type="submit"], button, input[type="submit"]')];
+                    const btn = btns.find(b => {
+                        const t = (b.innerText || b.value || '').trim();
+                        const lower = t.toLowerCase();
+                        if (lower.includes('google') || lower.includes('apple') || lower.includes('phone') || lower.includes('microsoft')) return false;
+                        return t === 'Continue' || t === '続行' || t === 'Tiếp tục' || t === '继续' || b.getAttribute('type') === 'submit' || b.getAttribute('name') === 'action';
+                    });
+                    if (btn) { btn.click(); return true; }
+                    if (form && form.requestSubmit) { form.requestSubmit(); return true; }
+                    return false;
+                """)
+                if js_clicked:
+                    playwright_submitted = True
+                    logger.info("%s [DOM] 已通过精准 Continue 按钮点击触发表单提交", _log_prefix(driver))
+                    time.sleep(1.0)
+            except Exception:
+                pass
 
         if not playwright_submitted:
             try:
@@ -915,30 +949,6 @@ def _submit_email_step(driver, email: str | None = None) -> None:
                     time.sleep(1.0)
             except Exception as exc:
                 logger.debug("%s [Playwright] 原生键盘 Enter 提交异常: %s", _log_prefix(driver), exc)
-
-            if not playwright_submitted:
-                try:
-                    js_clicked = driver.execute_script(r"""
-                        const inp = document.querySelector('input[type="email"], input[name="email"], input[name="username"], input#email-input');
-                        if (!inp) return false;
-                        const form = inp.closest('form');
-                        const root = form || document;
-                        const btns = [...root.querySelectorAll('button[type="submit"], button, input[type="submit"]')];
-                        const btn = btns.find(b => {
-                            const t = (b.innerText || b.value || '').trim();
-                            const lower = t.toLowerCase();
-                            if (lower.includes('google') || lower.includes('apple') || lower.includes('phone') || lower.includes('microsoft')) return false;
-                            return t === 'Continue' || t === '続行' || t === 'Tiếp tục' || t === '继续' || b.getAttribute('type') === 'submit' || b.getAttribute('name') === 'action';
-                        });
-                        if (btn) { btn.click(); return true; }
-                        if (form && form.requestSubmit) { form.requestSubmit(); return true; }
-                        return false;
-                    """)
-                    if js_clicked:
-                        playwright_submitted = True
-                        logger.info("%s [DOM] 已通过精准 Continue 按钮点击触发表单提交", _log_prefix(driver))
-                except Exception:
-                    pass
 
     if not playwright_submitted:
         stable_submit = _submit_email_form_stable(driver, email_value)
@@ -1009,7 +1019,7 @@ def _submit_email_via_browser_nextauth(driver, email: str) -> dict:
         try:
             result = page.evaluate(r"""async ([email, did, authLogId]) => {
               const controller = new AbortController();
-              const timer = setTimeout(() => controller.abort(), 6000);
+              const timer = setTimeout(() => controller.abort(), 25000);
               try {
                 const csrfResp = await fetch('/api/auth/csrf', {
                   method: 'GET',

@@ -198,6 +198,10 @@
     const customerSessionClientSecret = {{ customer_session_client_secret|tojson }};
     const clientSecret = {{ client_secret|tojson }};
     const confirmReturnUrl = {{ confirm_return_url|tojson }};
+    const checkoutMode = {{ (checkout_mode or "setup")|tojson }};
+    const currency = ({{ (currency or "jpy")|tojson }}).toLowerCase();
+    const amountMinor = {{ (amount_minor or 0)|tojson }};
+    const sessionId = {{ (session_id or "")|tojson }};
 
     if (!publishableKey) {
       document.getElementById("payment-element").innerHTML = '<div style="color:#ef4444;text-align:center;padding:20px;">未获取到有效 Stripe 公钥，会话可能已过期</div>';
@@ -220,10 +224,19 @@
 
       try {
         if (customerSessionClientSecret) {
-          elements = stripe.elements({
+          const elementsOptions = {
             customerSessionClientSecret: customerSessionClientSecret,
-            appearance: appearance
-          });
+            appearance: appearance,
+            currency: currency,
+          };
+          if (checkoutMode === 'payment' && amountMinor > 0) {
+            elementsOptions.mode = 'payment';
+            elementsOptions.amount = amountMinor;
+          } else {
+            elementsOptions.mode = 'setup';
+            elementsOptions.setupFutureUsage = 'off_session';
+          }
+          elements = stripe.elements(elementsOptions);
         } else if (clientSecret) {
           elements = stripe.elements({
             clientSecret: clientSecret,
@@ -249,22 +262,72 @@
         const btn = document.getElementById("btn-submit");
         const errDiv = document.getElementById("error-message");
         btn.disabled = true;
-        btn.innerHTML = '<span>处理中…</span>';
+        btn.innerHTML = '<span>正在处理安全签约与支付…</span>';
         errDiv.style.display = "none";
 
         try {
-          const { error } = await stripe.confirmPayment({
-            elements,
-            confirmParams: {
-              return_url: confirmReturnUrl || window.location.href,
-            },
-          });
-
-          if (error) {
-            errDiv.innerText = error.message || "支付/授权未成功，请检查卡号信息";
+          const { error: submitError } = await elements.submit();
+          if (submitError) {
+            errDiv.innerText = submitError.message || "请检查卡号信息填写";
             errDiv.style.display = "block";
             btn.disabled = false;
             btn.innerHTML = '<span>确认支付与授权</span>';
+            return;
+          }
+
+          if (customerSessionClientSecret) {
+            const { error: tokenError, confirmationToken } = await stripe.createConfirmationToken({
+              elements,
+            });
+
+            if (tokenError) {
+              errDiv.innerText = tokenError.message || "创建支付授权凭据失败";
+              errDiv.style.display = "block";
+              btn.disabled = false;
+              btn.innerHTML = '<span>确认支付与授权</span>';
+              return;
+            }
+
+            const resp = await fetch(`/pay/confirm/${encodeURIComponent(sessionId)}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                confirmation_token_id: confirmationToken.id,
+              })
+            });
+            const resData = await resp.json();
+
+            if (resData.ok) {
+              document.querySelector('.checkout-container').innerHTML = `
+                <div style="text-align:center;padding:30px 10px;">
+                  <div style="font-size:48px;margin-bottom:16px;">🎉</div>
+                  <h2 style="color:#10a37f;margin-bottom:12px;">支付与授权成功！</h2>
+                  <p style="color:#9ca3af;font-size:14px;line-height:1.6;">Plus 权益已成功绑定并生效。<br>您可以直接打开 ChatGPT 开始使用。</p>
+                  <div style="margin-top:24px;">
+                    <a href="https://chatgpt.com/" target="_blank" style="display:inline-block;padding:10px 24px;background:#10a37f;color:#fff;border-radius:8px;text-decoration:none;font-weight:600;">前往 ChatGPT</a>
+                  </div>
+                </div>
+              `;
+            } else {
+              errDiv.innerText = resData.error || "授权提交失败，请重试";
+              errDiv.style.display = "block";
+              btn.disabled = false;
+              btn.innerHTML = '<span>确认支付与授权</span>';
+            }
+          } else {
+            const { error } = await stripe.confirmPayment({
+              elements,
+              confirmParams: {
+                return_url: confirmReturnUrl || window.location.href,
+              },
+            });
+
+            if (error) {
+              errDiv.innerText = error.message || "支付/授权未成功，请检查卡号信息";
+              errDiv.style.display = "block";
+              btn.disabled = false;
+              btn.innerHTML = '<span>确认支付与授权</span>';
+            }
           }
         } catch (ex) {
           errDiv.innerText = String(ex);

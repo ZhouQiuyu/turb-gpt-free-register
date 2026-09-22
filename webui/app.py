@@ -381,6 +381,10 @@ def create_app(auth_code: str | None = None) -> Flask:
                 customer_session_client_secret="",
                 client_secret="",
                 confirm_return_url="",
+                checkout_mode="setup",
+                currency="usd",
+                amount_minor=0,
+                session_id=sid,
             ), 404
 
         email = str(account.get("email") or "").strip()
@@ -404,6 +408,7 @@ def create_app(auth_code: str | None = None) -> Flask:
             result_data = {}
 
         chk_data = result_data.get("checkout_data") or result_data.get("checkout_response_data") or {}
+        chk_state = chk_data.get("checkout_state") or {}
         publishable_key = (
             chk_data.get("publishable_key")
             or result_data.get("publishable_key")
@@ -425,16 +430,47 @@ def create_app(auth_code: str | None = None) -> Flask:
             or f"https://chatgpt.com/checkout/verify?stripe_session_id={sid}&processor_entity=openai_llc&plan_type=plus"
         )
 
-        promo = str(account.get("promo_campaign") or result_data.get("promo_campaign") or "")
+        currency = str(
+            chk_state.get("currency")
+            or (chk_data.get("billing_details") or {}).get("currency")
+            or account.get("billing_currency")
+            or "JPY"
+        ).lower()
+
+        total_obj = (chk_state.get("total") or {}).get("total") or {}
+        amount_minor = total_obj.get("minorUnitsAmount")
+        if amount_minor is None:
+            line_items = chk_state.get("lineItems") or []
+            if line_items:
+                amount_minor = sum(
+                    int((item.get("total") or {}).get("minorUnitsAmount") or item.get("unitAmount") or 0)
+                    for item in line_items
+                )
+            else:
+                amount_minor = 0
+        else:
+            amount_minor = int(amount_minor)
+
+        promo = str(account.get("plus_trial_campaign_id") or account.get("promo_campaign") or result_data.get("promo_campaign") or "")
         if "free" in promo or "1-month" in promo:
             promo_title = "首月免费试用 (1 Month Free)"
-            amount_display = "$0.00"
+            amount_minor = 0
+            checkout_mode = "setup"
+            amount_display = "¥0" if currency == "jpy" else "$0.00"
         elif "50-pct" in promo:
             promo_title = "连续两月半价特惠 (50% OFF)"
-            amount_display = "$10.00"
+            if not amount_minor or amount_minor == 0:
+                amount_minor = 1499 if currency == "jpy" else 1000
+            checkout_mode = "payment"
+            amount_display = f"¥{amount_minor:,}" if currency == "jpy" else f"${amount_minor/100:.2f}"
         else:
-            promo_title = "Plus 会员订阅特惠" if promo else ""
-            amount_display = "$0.00" if "free" in promo else "$20.00"
+            promo_title = "Plus 会员订阅特惠" if promo else "Plus 会员订阅"
+            if amount_minor and int(amount_minor) > 0:
+                checkout_mode = "payment"
+                amount_display = f"¥{amount_minor:,}" if currency == "jpy" else f"${amount_minor/100:.2f}"
+            else:
+                checkout_mode = "setup"
+                amount_display = "¥0" if currency == "jpy" else "$0.00"
 
         return render_template(
             "checkout_bridge.html",
@@ -446,7 +482,75 @@ def create_app(auth_code: str | None = None) -> Flask:
             customer_session_client_secret=customer_session_client_secret,
             client_secret=client_secret,
             confirm_return_url=confirm_return_url,
+            checkout_mode=checkout_mode,
+            currency=currency,
+            amount_minor=amount_minor,
+            session_id=sid,
         )
+
+    @app.post("/pay/confirm/<path:session_id>", endpoint="pay_confirm")
+    @app.post("/api/pay/confirm/<path:session_id>", endpoint="api_pay_confirm")
+    def api_pay_confirm(session_id: str):
+        sid = (session_id or "").strip()
+        account = db.get_account_by_extract_session(sid)
+        if not account:
+            return jsonify({"ok": False, "error": "未找到对应的结账会话，可能已过期"}), 404
+
+        req_body = request.get_json(silent=True) or {}
+        ctoken = req_body.get("confirmation_token_id")
+        pm_id = req_body.get("payment_method_id")
+
+        if not ctoken and not pm_id:
+            return jsonify({"ok": False, "error": "缺少支付确认凭据"}), 400
+
+        token = account.get("access_token")
+        acc_id = account.get("account_id")
+        proxy = account.get("proxy_used") or account.get("plan_check_proxy_used")
+
+        confirm_url = "https://chatgpt.com/backend-api/payments/checkout/confirm"
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+        }
+        if token:
+            clean_tok = token.replace("Bearer ", "").strip()
+            headers["Authorization"] = f"Bearer {clean_tok}"
+        if acc_id:
+            headers["chatgpt-account-id"] = str(acc_id)
+
+        payload = {
+            "checkout_session_id": sid,
+        }
+        if ctoken:
+            payload["confirmation_token_id"] = ctoken
+        if pm_id:
+            payload["payment_method_id"] = pm_id
+
+        proxies = None
+        if proxy:
+            proxies = {"http": proxy, "https": proxy}
+
+        import requests
+        try:
+            r = requests.post(confirm_url, json=payload, headers=headers, proxies=proxies, timeout=30)
+            logger.info("[WebUI-Pay] OpenAI checkout/confirm 响应: status=%s, body=%s", r.status_code, r.text[:300])
+            if r.status_code in (200, 204):
+                db.update_account_plan_check(account["id"], result={"current_plan_type": "plus", "ok": True, "status": "success", "has_active_subscription": True})
+                return jsonify({"ok": True, "message": "支付与授权成功"})
+            else:
+                resp_json = {}
+                try:
+                    resp_json = r.json()
+                except Exception:
+                    pass
+                err_detail = resp_json.get("detail") or resp_json.get("error") or r.text[:200]
+                if "already" in str(err_detail).lower():
+                    db.update_account_plan_check(account["id"], result={"current_plan_type": "plus", "ok": True, "status": "success", "has_active_subscription": True})
+                    return jsonify({"ok": True, "message": "Plus 会员已处于生效状态"})
+                return jsonify({"ok": False, "error": f"OpenAI 授权确认失败: {err_detail}"}), 400
+        except Exception as exc:
+            logger.warning("[WebUI-Pay] 确认请求异常: %s", exc)
+            return jsonify({"ok": False, "error": f"网络通信异常: {str(exc)}"}), 502
 
     # ----------------------------------------------------------
     # 统计概览

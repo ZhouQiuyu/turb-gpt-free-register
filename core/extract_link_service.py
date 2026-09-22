@@ -88,6 +88,7 @@ def _human_extract_checkout_url(
     emit_fn: Any = None,
     timeout: float = 120.0,
     origin_country: str = "JP",
+    target_lpm: str = "",
 ) -> dict[str, Any]:
     """
     通过真实浏览器拟人化 UI 点击操作触发原生试用提链。
@@ -176,8 +177,11 @@ def _human_extract_checkout_url(
     # 1. 确保进入 ChatGPT 主界面 (若有活动直接带参唤起定价弹窗)
     cur_url = str(getattr(driver, "current_url", "") or "")
     target_home_url = "https://chatgpt.com/"
-    if promo_campaign_id and promo_campaign_id != "none":
+    is_lpm = bool(target_lpm and target_lpm.lower() not in ("card", "direct", "none", "stripe", "hosted"))
+    if promo_campaign_id and promo_campaign_id != "none" and not is_lpm:
         target_home_url = f"https://chatgpt.com/?promo_campaign={promo_campaign_id}#pricing"
+    else:
+        target_home_url = "https://chatgpt.com/#pricing"
 
     _emit(f"正在导航进入 ChatGPT 主界面 ({target_home_url})…")
     logger.info("[提链-拟人化] 导航进入: %s", target_home_url)
@@ -554,7 +558,7 @@ def _human_extract_checkout_url(
                     const t = (b.innerText || '').trim().toLowerCase();
                     if (/閉じる|close|cancel|hủy|bỏ qua/i.test(t)) return false;
                     if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中のプラン') || t.includes('current plan')) return false;
-                    return /特別オファーを利用|オファーを利用|特典を利用|利用する|plus を試す|無料で試す|dùng thử ưu đãi đặc biệt|dùng thử plus|claim special offer|try special offer|try plus|start trial|claim offer/i.test(t);
+                    return /特別オファーを利用|オファーを利用|特典を利用|利用する|plus を試す|無料で試す|plus にアップグレード|アップグレード|upgrade to plus|dùng thử ưu đãi đặc biệt|dùng thử plus|claim special offer|try special offer|try plus|start trial|claim offer/i.test(t);
                 });
                 if (target) break;
             }
@@ -562,9 +566,9 @@ def _human_extract_checkout_url(
                 const allButtons = [...document.querySelectorAll('button, div[role="button"], a[role="button"]')].filter(visible);
                 target = allButtons.find(b => {
                     const t = (b.innerText || '').trim().toLowerCase();
-                    if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中的プラン')) return false;
+                    if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中のプラン')) return false;
                     if (/閉じる|close|cancel/i.test(t)) return false;
-                    return /特別オファーを利用|オファーを利用|特典を利用|plus を試す|無料で試す|dùng thử ưu đãi đặc biệt|claim special offer/i.test(t);
+                    return /特別オファーを利用|オファーを利用|特典を利用|plus を試す|無料で試す|plus にアップグレード|アップグレード|upgrade to plus|dùng thử ưu đãi đặc biệt|claim special offer/i.test(t);
                 });
             }
             if (target) {
@@ -609,7 +613,7 @@ def _human_extract_checkout_url(
                         pass
                 if page:
                     try:
-                        loc = page.locator('button:has-text("特別オファーを利用"), button:has-text("オファーを利用")').first
+                        loc = page.locator('button:has-text("特別オファーを利用"), button:has-text("オファーを利用"), button:has-text("アップグレード"), button:has-text("Upgrade")').first
                         if loc.is_visible():
                             loc.click(timeout=3000)
                     except Exception:
@@ -617,7 +621,7 @@ def _human_extract_checkout_url(
                 driver.execute_script(r"""
                     try {
                         const btns = [...document.querySelectorAll('button')];
-                        const b = btns.find(el => /特別オファーを利用|オファーを利用/i.test(el.innerText || ''));
+                        const b = btns.find(el => /特別オファーを利用|オファーを利用|アップグレード|Upgrade/i.test(el.innerText || ''));
                         if (b) { b.focus(); b.click(); }
                     } catch (_) {}
                 """)
@@ -1131,7 +1135,7 @@ def extract_checkout_url_with_cloak(
         # 5. 若接口方式未成功且非 401，且允许拟人化 (已处于登录环境中)，最后尝试拟人化 UI 模拟点击兜底
         if allow_human and chk_res.get("status") != 401:
             _emit("接口请求未直接出链，尝试通过拟人化 UI 操作唤起…")
-            human_res = _human_extract_checkout_url(driver, promo_campaign_id=promo_campaign_id, emit_fn=_emit, timeout=60.0, origin_country=origin_country)
+            human_res = _human_extract_checkout_url(driver, promo_campaign_id=promo_campaign_id, emit_fn=_emit, timeout=60.0, origin_country=origin_country, target_lpm=target_lpm)
             if human_res.get("ok"):
                 return _convert_to_lpm_if_needed(human_res)
             if human_res.get("already_paid"):
@@ -1366,8 +1370,10 @@ def extract_checkout_url_with_cloak(
                             logger.info("[提链] NextAuth 协议直达完成，进入下一状态: %s", na_res)
                             time.sleep(2.0)
                             continue
+                        else:
+                            logger.info("[提链] NextAuth 协议直达未成功，准备回退表单: %s", na_res)
                     except Exception as na_err:
-                        logger.debug("[提链] NextAuth 尝试异常: %s", na_err)
+                        logger.warning("[提链] NextAuth 尝试异常: %s", na_err)
 
                 try:
                     next_st = _submit_email_and_wait_next(driver, email, attempts=2, allow_login_password=True, timeout=45)

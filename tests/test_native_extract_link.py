@@ -506,8 +506,8 @@ class TestNativeExtractLink(unittest.TestCase):
 
         self.assertTrue(res["ok"])
         self.assertEqual(res["type"], "checkout_bridge")
-        self.assertEqual(res["long_url"], "/pay/checkout/oaics_trial_abc123")
-        self.assertEqual(res["url"], "/pay/checkout/oaics_trial_abc123")
+        self.assertEqual(res["long_url"], "https://gpt-register.cortexlane.cloud/pay/checkout/oaics_trial_abc123")
+        self.assertEqual(res["url"], "https://gpt-register.cortexlane.cloud/pay/checkout/oaics_trial_abc123")
         self.assertEqual(res["short_url"], "https://chatgpt.com/checkout/openai_ie/oaics_trial_abc123")
         self.assertEqual(res["customer_session_client_secret"], "cuss_secret_test_secret")
 
@@ -548,6 +548,8 @@ class TestNativeExtractLink(unittest.TestCase):
             self.assertIn("cuss_secret_999", html)
             self.assertIn("br***er@example.com", html)
             self.assertIn("首月免费试用", html)
+            self.assertIn('"setup"', html)
+            self.assertIn('"oaics_sess_999"', html)
 
             # 2. 访问 cs_live_* 会话，应 302 重定向至 Stripe 托管长链
             resp_stripe = client.get("/pay/checkout/cs_live_external_123")
@@ -557,6 +559,26 @@ class TestNativeExtractLink(unittest.TestCase):
             # 3. 访问未知会话，应返回 404 且不崩溃
             resp_404 = client.get("/pay/checkout/oaics_non_existent")
             self.assertEqual(resp_404.status_code, 404)
+
+            # 4. 测试 POST /pay/confirm/oaics_sess_999
+            # 4.1 缺少 token
+            resp_no_token = client.post("/pay/confirm/oaics_sess_999", json={})
+            self.assertEqual(resp_no_token.status_code, 400)
+
+            # 4.2 成功提交 confirmationToken 并中继 OpenAI
+            with patch("requests.post") as mock_post:
+                mock_post.return_value.status_code = 200
+                mock_post.return_value.text = '{"status": "success"}'
+                resp_confirm = client.post("/pay/confirm/oaics_sess_999", json={
+                    "confirmation_token_id": "ctoken_test_12345"
+                })
+                self.assertEqual(resp_confirm.status_code, 200)
+                data = resp_confirm.get_json()
+                self.assertTrue(data["ok"])
+
+                # 验证账号已更新为 plus
+                updated_acc = db.get_account(acc_id)
+                self.assertEqual(updated_acc.get("plan_type"), "plus")
 
 
 if __name__ == "__main__":
