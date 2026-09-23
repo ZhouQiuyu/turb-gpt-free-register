@@ -438,6 +438,62 @@ class TestNativeExtractLink(unittest.TestCase):
         self.assertIn("hooks.stripe.com", res["url"])
         mock_lpm_run.assert_called_once()
 
+    @patch("core.db.pick_proxy_by_country")
+    @patch("core.stripe_lpm_engine.StripeLPMExtractor.__init__", return_value=None)
+    @patch("core.stripe_lpm_engine.StripeLPMExtractor.run")
+    @patch("core.extract_link_service._execute_js_checkout")
+    @patch("core.extract_link_service._read_chatgpt_session_once")
+    @patch("core.cloakbrowser_driver.build_cloak_driver")
+    @patch("core.extract_link_service.solve_cloudflare_challenge_if_present")
+    def test_extract_checkout_url_with_cloak_two_stage_proxy_for_upi(
+        self, mock_solve_cf, mock_build_driver, mock_read_session, mock_js_checkout, mock_lpm_run, mock_lpm_init, mock_pick_proxy
+    ):
+        mock_driver = MagicMock()
+        mock_build_driver.return_value = (mock_driver, None)
+        mock_solve_cf.return_value = False
+        mock_read_session.return_value = {"accessToken": "valid_token", "account": {"id": "acc_direct"}}
+        mock_js_checkout.return_value = {
+            "ok": True,
+            "url": "https://checkout.stripe.com/c/pay/cs_direct_success",
+            "checkout_session_id": "cs_direct_success",
+        }
+        mock_lpm_run.return_value = {
+            "ok": True,
+            "url": "https://payments.stripe.com/upi/instructions/test",
+            "payment_method": "upi",
+            "checkout_session_id": "cs_direct_success",
+        }
+        # 模拟数据库中存在专门的印度代理
+        mock_pick_proxy.return_value = "socks5h://indian_proxy:854"
+
+        account = {
+            "id": 1,
+            "email": "japan_user@example.com",
+            "access_token": "valid_token",
+            "account_id": "acc_direct",
+            "country_code": "JP",
+            "token_expired": False,
+        }
+
+        # 第 1 阶段使用日本代理传入
+        res = extract_link_service.extract_checkout_url_with_cloak(
+            account=account,
+            proxy_url="socks5h://japan_proxy:2718",
+            target_lpm="upi",
+        )
+
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["payment_method"], "upi")
+        # 验证 build_cloak_driver 使用的是第 1 阶段日本代理
+        mock_build_driver.assert_called_with(proxy="socks5h://japan_proxy:2718")
+        # 验证 pick_proxy_by_country 查询了目标国 IN
+        mock_pick_proxy.assert_called_with("IN", strict=False)
+        # 验证 StripeLPMExtractor 实例化时动态切换为了第 2 阶段印度代理
+        mock_lpm_init.assert_called_once()
+        call_kwargs = mock_lpm_init.call_args[1]
+        self.assertEqual(call_kwargs.get("proxy"), "socks5h://indian_proxy:854")
+        self.assertEqual(call_kwargs.get("target_lpm"), "upi")
+
     def test_extract_log_helpers(self):
         p = extract_link_service.log_path(999)
         self.assertTrue(str(p).endswith("extract-link-999.log"))

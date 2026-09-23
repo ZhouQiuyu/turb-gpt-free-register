@@ -165,6 +165,82 @@ class TestStripeLPMEngine(unittest.TestCase):
         # Kakao Pay 必须调用 4 次 post (包括 pre_confirm)
         self.assertEqual(mock_session.post.call_count, 4)
 
+    @patch("core.stripe_lpm_engine.curl_requests", None)
+    def test_upi_full_flow(self):
+        extractor = StripeLPMExtractor(self.dummy_session, target_lpm="upi", api_key=self.dummy_key)
+
+        mock_session = MagicMock()
+        extractor.session = mock_session
+
+        mock_init = MagicMock(status_code=200)
+        mock_init.json.return_value = {
+            "account_id": "acct_1M6xxxOpenAI",
+            "expected_amount": 199900,
+            "eid": "NA",
+            "payment_method_types": ["card", "upi"],
+        }
+
+        mock_tax = MagicMock(status_code=200)
+        mock_tax.json.return_value = {
+            "snapshot": {"amount_total": 199900},
+        }
+
+        mock_confirm = MagicMock(status_code=200)
+        mock_confirm.json.return_value = {
+            "payment_intent": {
+                "next_action": {
+                    "type": "redirect_to_url",
+                    "redirect_to_url": {
+                        "url": "https://hooks.stripe.com/redirect/authenticate/src_upi_test?client_secret=src_client_secret_upi",
+                    },
+                },
+            },
+        }
+
+        mock_session.post.side_effect = [mock_init, mock_tax, mock_confirm]
+
+        result = extractor.run()
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["type"], "upi")
+        self.assertEqual(result["url"], "https://hooks.stripe.com/redirect/authenticate/src_upi_test?client_secret=src_client_secret_upi")
+        self.assertEqual(mock_session.post.call_count, 3)
+
+    @patch("core.stripe_lpm_engine.curl_requests", None)
+    def test_upi_qr_code_flow(self):
+        extractor = StripeLPMExtractor(self.dummy_session, target_lpm="upi", api_key=self.dummy_key)
+
+        mock_session = MagicMock()
+        extractor.session = mock_session
+
+        mock_init = MagicMock(status_code=200)
+        mock_init.json.return_value = {"expected_amount": 199900}
+
+        mock_tax = MagicMock(status_code=200)
+        mock_tax.json.return_value = {"snapshot": {"amount_total": 199900}}
+
+        mock_confirm = MagicMock(status_code=200)
+        mock_confirm.json.return_value = {
+            "payment_intent": {
+                "next_action": {
+                    "type": "display_upi_qr_code",
+                    "display_upi_qr_code": {
+                        "hosted_instructions_url": "https://payments.stripe.com/upi/instructions/test_upi_voucher",
+                        "qr_code_url": "upi://pay?pa=stripe@icici&pn=OpenAI&am=1999.00",
+                        "data_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
+                    },
+                },
+            },
+        }
+
+        mock_session.post.side_effect = [mock_init, mock_tax, mock_confirm]
+
+        result = extractor.run()
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["type"], "upi")
+        self.assertEqual(result["url"], "https://payments.stripe.com/upi/instructions/test_upi_voucher")
+        self.assertEqual(result["copy_paste"], "upi://pay?pa=stripe@icici&pn=OpenAI&am=1999.00")
+        self.assertTrue(result["qr_code"].startswith("data:image/png;base64,"))
+
 
 if __name__ == "__main__":
     unittest.main()

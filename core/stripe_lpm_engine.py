@@ -229,7 +229,7 @@ class StripeLPMExtractor:
 
         payload = {
             "browser_locale": self.spec["language"].split(",")[0],
-            "browser_timezone": "Europe/Amsterdam" if self.spec["country"] == "NL" else "America/Sao_Paulo",
+            "browser_timezone": "Europe/Amsterdam" if self.spec["country"] == "NL" else ("Asia/Kolkata" if self.spec["country"] == "IN" else ("Asia/Seoul" if self.spec["country"] == "KR" else "America/Sao_Paulo")),
             "elements_session_client[client_betas][0]": "custom_checkout_server_updates_1",
             "elements_session_client[client_betas][1]": "custom_checkout_manual_approval_1",
             "elements_session_client[elements_init_source]": "custom_checkout",
@@ -351,6 +351,11 @@ class StripeLPMExtractor:
             payload["payment_method_data[billing_details][name]"] = "Subscriber"
         elif self.target_lpm == "upi":
             payload["payment_method_data[upi][vpa]"] = "customer@okaxis"
+            payload["payment_method_data[billing_details][name]"] = "Subscriber"
+            payload["payment_method_data[billing_details][address][line1]"] = "Connaught Place"
+            payload["payment_method_data[billing_details][address][city]"] = "New Delhi"
+            payload["payment_method_data[billing_details][address][state]"] = "DL"
+            payload["payment_method_data[billing_details][address][postal_code]"] = "110001"
 
         r = self.session.post(url, data=payload, headers=headers, timeout=self.timeout)
         if r.status_code != 200:
@@ -398,8 +403,20 @@ class StripeLPMExtractor:
             logger.info("[Stripe-LPM] 🎉 成功捕获 PIX 付款指引外链: %s", (out["url"] or "")[:60])
             return out
 
-        # 3. 兜底提取顶层 url
-        top_url = data.get("url") or data.get("redirect_url")
+        # 3. 动态二维码/凭证展示型 (UPI / display_upi_qr_code / display_qr_code)
+        upi_action = next_action.get("display_upi_qr_code") or next_action.get("display_qr_code") or next_action.get("upi_handle_redirect_or_display_qr_code")
+        if action_type in ("display_upi_qr_code", "display_qr_code") or upi_action:
+            upi_info = upi_action or {}
+            out["url"] = upi_info.get("hosted_instructions_url") or upi_info.get("qr_code_url") or data.get("url")
+            out["long_url"] = out["url"]
+            out["qr_code"] = upi_info.get("data_url") or upi_info.get("image_url_png") or upi_info.get("image_url_svg") or upi_info.get("qr_code_url")
+            out["copy_paste"] = upi_info.get("qr_code_url") or upi_info.get("vpa") or upi_info.get("hosted_instructions_url")
+            out["expires_at"] = upi_info.get("expires_at")
+            logger.info("[Stripe-LPM] 🎉 成功捕获 %s 支付凭据与二维码外链: %s", self.spec["name"], (out["url"] or "")[:60])
+            return out
+
+        # 4. 兜底提取顶层 url 或 stripe_hosted_url
+        top_url = data.get("url") or data.get("redirect_url") or data.get("stripe_hosted_url")
         if top_url:
             out["url"] = top_url
             out["long_url"] = top_url

@@ -573,6 +573,7 @@ def _wait_for_email_input(driver, timeout: int | None = None):
     for refresh_retry in range(_MISSING_PAGE_ELEMENT_REFRESH_RETRIES + 1):
         end = time.time() + timeout_val
         clicked_email_option = False
+        clicked_guest_login = False
         while time.time() < end:
             if solve_cloudflare_challenge_if_present(driver, max_wait=45.0):
                 # Cloudflare 穿透消耗了较多时间，为后续页面渲染与输入框查找补偿等待时间
@@ -615,47 +616,53 @@ def _wait_for_email_input(driver, timeout: int | None = None):
                 pass
 
             # 如果页面处于欢迎/登录引导页（例如 /auth/login, ?slm=1 或根路径且无邮箱输入框）
-            try:
-                curr_url = str(getattr(driver, "current_url", "") or "")
-                if "/auth/login" in curr_url or "slm=1" in curr_url or curr_url.rstrip("/") in ("https://chatgpt.com", "http://chatgpt.com"):
-                    page = getattr(driver, "page", None)
-                    if page is not None and not type(driver).__name__.startswith("MagicMock"):
-                        try:
-                            slm_btn = page.locator('button[data-testid="login-button"], button:text-is("Log in"), button:text-is("ログイン"), button:text-is("Sign in"), [data-testid="login-button"], a[href*="/auth/login"]').first
-                            if slm_btn.is_visible(timeout=500):
-                                slm_btn.click(delay=60)
-                                logger.info("%s 处于登录引导页/游客首页，已通过 Playwright 点击登录按钮拉起弹窗", _log_prefix(driver))
-                                time.sleep(1.5)
+            if not clicked_guest_login:
+                try:
+                    curr_url = str(getattr(driver, "current_url", "") or "")
+                    if "/auth/login" in curr_url or "slm=1" in curr_url or curr_url.rstrip("/") in ("https://chatgpt.com", "http://chatgpt.com"):
+                        page = getattr(driver, "page", None)
+                        btn_clicked = False
+                        if page is not None and not type(driver).__name__.startswith("MagicMock"):
+                            try:
+                                slm_btn = page.locator('button[data-testid="login-button"], button:text-is("Log in"), button:text-is("ログイン"), button:text-is("Sign in"), [data-testid="login-button"], a[href*="/auth/login"]').first
+                                if slm_btn.is_visible(timeout=500):
+                                    slm_btn.click(delay=60)
+                                    logger.info("%s 处于登录引导页/游客首页，已通过 Playwright 点击登录按钮拉起弹窗", _log_prefix(driver))
+                                    clicked_guest_login = True
+                                    btn_clicked = True
+                                    time.sleep(2.0)
+                                    continue
+                            except Exception:
+                                pass
+                        if not btn_clicked:
+                            res = driver.execute_script(r"""
+                            try {
+                              const btns = [...document.querySelectorAll('button, a, div[role="button"]')];
+                              const btn = btns.find(b => {
+                                  const t = (b.innerText || '').trim().toLowerCase();
+                                  return t === 'log in' || t === 'ログイン' || t === 'sign in' || t === 'サインイン' || b.getAttribute('data-testid') === 'login-button';
+                              }) || document.querySelector(
+                                'button[data-testid="login-button"], button[data-testid="signup-button"], [data-testid="login-button"], [data-testid="signup-button"], button.login-button, button.signup-button, a[href*="/auth/login"]'
+                              );
+                              if (btn && (btn.offsetWidth || btn.offsetHeight || btn.getClientRects().length)) {
+                                btn.click();
+                                return 'clicked';
+                              }
+                              return 'none';
+                            } catch (_) { return 'err'; }
+                            """)
+                            if res == "clicked":
+                                logger.info("%s 处于登录引导页/游客首页，已点击登录按钮拉起弹窗", _log_prefix(driver))
+                                clicked_guest_login = True
+                                time.sleep(2.0)
                                 continue
-                        except Exception:
-                            pass
-                    res = driver.execute_script(r"""
-                    try {
-                      const btns = [...document.querySelectorAll('button, a, div[role="button"]')];
-                      const btn = btns.find(b => {
-                          const t = (b.innerText || '').trim().toLowerCase();
-                          return t === 'log in' || t === 'ログイン' || t === 'sign in' || t === 'サインイン' || b.getAttribute('data-testid') === 'login-button';
-                      }) || document.querySelector(
-                        'button[data-testid="login-button"], button[data-testid="signup-button"], [data-testid="login-button"], [data-testid="signup-button"], button.login-button, button.signup-button, a[href*="/auth/login"]'
-                      );
-                      if (btn && (btn.offsetWidth || btn.offsetHeight || btn.getClientRects().length)) {
-                        btn.click();
-                        return 'clicked';
-                      }
-                      return 'none';
-                    } catch (_) { return 'err'; }
-                    """)
-                    if res == "clicked":
-                        logger.info("%s 处于登录引导页/游客首页，已点击登录按钮拉起弹窗", _log_prefix(driver))
-                        time.sleep(1.5)
-                        continue
-                    elif (end - time.time()) <= 15 and "slm=1" in curr_url:
-                        logger.info("%s 处于匿名游客首页且未找到登录按钮，重新导航至 /auth/login", _log_prefix(driver))
-                        driver.get("https://chatgpt.com/auth/login")
-                        time.sleep(2.0)
-                        continue
-            except Exception:
-                pass
+                            elif (end - time.time()) <= 15 and "slm=1" in curr_url:
+                                logger.info("%s 处于匿名游客首页且未找到登录按钮，重新导航至 /auth/login", _log_prefix(driver))
+                                driver.get("https://chatgpt.com/auth/login")
+                                time.sleep(2.0)
+                                continue
+                except Exception:
+                    pass
 
             last_state = _email_entry_state(driver)
             if not clicked_email_option and _click_email_entry_option(driver):

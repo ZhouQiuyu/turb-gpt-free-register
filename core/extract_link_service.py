@@ -89,6 +89,8 @@ def _human_extract_checkout_url(
     timeout: float = 120.0,
     origin_country: str = "JP",
     target_lpm: str = "",
+    req_country: str = "",
+    req_currency: str = "",
 ) -> dict[str, Any]:
     """
     通过真实浏览器拟人化 UI 点击操作触发原生试用提链。
@@ -108,6 +110,45 @@ def _human_extract_checkout_url(
     captured_pk = None
 
     if page:
+        is_lpm = bool(target_lpm and target_lpm.lower() not in ("card", "direct", "none", "stripe", "hosted"))
+        if not req_country and is_lpm:
+            from core.stripe_lpm_engine import LPM_SPECS
+            if target_lpm.lower() in LPM_SPECS:
+                req_country = LPM_SPECS[target_lpm.lower()]["country"]
+                req_currency = LPM_SPECS[target_lpm.lower()]["currency"].upper()
+
+        # 0. 注册 CDP 请求拦截器：当需要提取 LPM (如 UPI/iDEAL) 时，拦截并重写 checkout_ui_mode 为 hosted，对齐目标国家币种
+        if hasattr(page, "route"):
+            def handle_route(route, request):
+                try:
+                    if "/backend-api/payments/checkout" in request.url and request.method == "POST":
+                        post_data = request.post_data
+                        if post_data:
+                            try:
+                                payload = json.loads(post_data)
+                                logger.info("[CDP-Route] 拦截到 /payments/checkout 请求，原 mode=%s", payload.get("checkout_ui_mode"))
+                                if is_lpm:
+                                    payload["checkout_ui_mode"] = "hosted"
+                                    payload.pop("promo_campaign", None)
+                                    if req_country and req_currency and (not origin_country or origin_country.upper() == req_country.upper()):
+                                        payload["billing_details"] = {
+                                            "country": req_country.upper(),
+                                            "currency": req_currency.upper(),
+                                        }
+                                    logger.info("[CDP-Route] LPM 模式: 已重写为 hosted, billing=%s 并移除 promo_campaign", payload.get("billing_details"))
+                                route.continue_(post_data=json.dumps(payload))
+                                return
+                            except Exception as ex:
+                                logger.warning("[CDP-Route] 解析/重写 post_data 失败: %s", ex)
+                except Exception as exc:
+                    logger.warning("[CDP-Route] 路由处理异常: %s", exc)
+                route.continue_()
+
+            try:
+                page.route("**/backend-api/payments/checkout", handle_route)
+                logger.info("[CDP-Route] 已注册 **/backend-api/payments/checkout 拦截重写钩子")
+            except Exception as e:
+                logger.warning("[CDP-Route] 注册路由拦截器异常: %s", e)
 
 
         # 1. 注册网络请求监听器：自动嗅探 Stripe 公钥 (pk_live_...) 及全量支付交互
@@ -195,7 +236,7 @@ def _human_extract_checkout_url(
             time.sleep(2.0)
     time.sleep(3.5)
 
-    solve_cloudflare_challenge_if_present(driver, max_wait=10.0, emit_fn=_emit)
+    solve_cloudflare_challenge_if_present(driver, max_wait=45.0, emit_fn=_emit)
 
     # 2. 检查并关闭欢迎/通知弹窗 (Got it / 了解 / 閉じる / dismiss)
     try:
@@ -421,18 +462,19 @@ def _human_extract_checkout_url(
 
             const all = [...document.querySelectorAll('button, a, div[role="button"], div[aria-haspopup="menu"], [tabindex="0"], nav div, nav button')].filter(visible);
             
-            // 1. 直接通过 data-testid 定位
-            let profileBtn = document.querySelector('button[data-testid="profile-button"], [data-testid="profile-button"]');
+            // 优先定位左下角整块用户按钮 (避免定位到头像内部导致无法触发菜单)
+            let profileBtn = all.find(el => {
+                const t = (el.innerText || '').toLowerCase();
+                const r = el.getBoundingClientRect();
+                return (t.includes('無料版') || t.includes('free') || t.includes('plus')) && r.top > (window.innerHeight - 150) && r.left < 280 && r.width > 50;
+            });
+            if (!profileBtn) {
+                profileBtn = document.querySelector('button[data-testid="profile-button"], [data-testid="profile-button"]');
+            }
             if (!profileBtn) {
                 profileBtn = all.find(el => {
                     const attr = ((el.getAttribute('data-testid') || '') + ' ' + (el.getAttribute('aria-label') || '')).toLowerCase();
                     return attr.includes('profile') || attr.includes('user') || attr.includes('account');
-                });
-            }
-            if (!profileBtn) {
-                profileBtn = all.find(el => {
-                    const t = (el.innerText || '').toLowerCase();
-                    return (t.includes('free') || t.includes('plus') || t.includes('upgrade') || t.includes('無料') || t.includes('プラン')) && !t.includes('new chat') && !t.includes('start');
                 });
             }
             if (!profileBtn) {
@@ -443,9 +485,10 @@ def _human_extract_checkout_url(
             }
 
             if (profileBtn) {
-                profileBtn.scrollIntoView({ block: 'center' });
-                const r = profileBtn.getBoundingClientRect();
-                return { ok: true, text: (profileBtn.innerText || '').trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
+                const target = profileBtn.closest('button, [role="button"]') || profileBtn;
+                target.scrollIntoView({ block: 'center' });
+                const r = target.getBoundingClientRect();
+                return { ok: true, text: (target.innerText || '').trim(), x: r.left + r.width / 2, y: r.top + r.height / 2 };
             }
             return {
                 ok: false,
@@ -459,13 +502,23 @@ def _human_extract_checkout_url(
         """)
         logger.info("[提链-拟人化] 左下角账户按钮定位: %s", profile_btn_info)
         if profile_btn_info and profile_btn_info.get("ok") and profile_btn_info.get("x"):
-            if page and hasattr(page, "mouse"):
+            profile_clicked = False
+            if page is not None:
+                try:
+                    p_loc = page.locator('button:has-text("無料版"), button:has-text("Free"), [data-testid="profile-button"]').first
+                    if p_loc.is_visible(timeout=1500):
+                        p_loc.click(timeout=3000)
+                        profile_clicked = True
+                        time.sleep(2.0)
+                except Exception:
+                    pass
+            if not profile_clicked and page and hasattr(page, "mouse"):
                 page.mouse.move(float(profile_btn_info["x"]), float(profile_btn_info["y"]))
                 time.sleep(0.08)
                 page.mouse.down()
                 time.sleep(0.06)
                 page.mouse.up()
-            time.sleep(2.0)
+                time.sleep(2.0)
 
             menu_info = driver.execute_script(r"""
                 const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || (el.getBoundingClientRect && (el.getBoundingClientRect().width > 0 || el.getBoundingClientRect().height > 0)));
@@ -1041,6 +1094,7 @@ def extract_checkout_url_with_cloak(
     currency = get_currency_for_country(origin_country)
 
     lpm = str(target_lpm or "ideal").strip().lower()
+    is_lpm = bool(target_lpm and target_lpm.lower() not in ("card", "direct", "none", "stripe", "hosted"))
     from core.stripe_lpm_engine import LPM_SPECS
     if lpm in LPM_SPECS:
         req_country = LPM_SPECS[lpm]["country"]
@@ -1094,10 +1148,15 @@ def extract_checkout_url_with_cloak(
             _emit(f"已捕获 Stripe 结账会话 ({cs_id[:16]}…)，正在调用 Stripe LPM 引擎提取【{lpm.upper()}】原生支付直链…")
             from core.stripe_lpm_engine import StripeLPMExtractor
             try:
+                from core import db
+                lpm_proxy = db.pick_proxy_by_country(req_country, strict=False) or proxy_url
+                if lpm_proxy and lpm_proxy != proxy_url:
+                    _emit(f"已自动切换至【{req_country}】专属代理发起 Stripe LPM 握手…")
+                    logger.info("[提链-LPM] 自动切换至目标国【%s】专属代理: %s", req_country, lpm_proxy)
                 extractor = StripeLPMExtractor(
                     session_url_or_id=cs_id,
                     target_lpm=lpm,
-                    proxy=proxy_url,
+                    proxy=lpm_proxy,
                     api_key=res.get("api_key"),
                 )
                 lpm_res = extractor.run()
@@ -1163,15 +1222,23 @@ def extract_checkout_url_with_cloak(
         _emit(f"{phase_desc}，正在向 OpenAI 发起【{req_country} ({lpm.upper()})】原生结账申请 (hosted 模式)…")
 
         # 0. 若存在特惠/试用活动资格 (promo_campaign_id)，OpenAI 后台要求严格的 Sentinel 校验，禁止无头 fetch 裸调以免触发 400 风控封锁
-        if promo_campaign_id and allow_human:
+        # 注意：第三方本地支付 (LPM: UPI/iDEAL/PIX 等) 不支持 0 元免单试用，必须请求实际 Plus 结算
+        is_lpm = bool(target_lpm and target_lpm.lower() not in ("card", "direct", "none", "stripe", "hosted"))
+        effective_promo = "" if is_lpm else promo_campaign_id
+
+        # 若存在活动资格且允许拟人化操作，通过拟人化进入活动定价页，由前端原生运行 Sentinel 质询；
+        # 针对 LPM，CDP 路由层会自动剥离 promo_campaign 并重写为目标国家的 hosted 付费会话
+        if effective_promo and allow_human:
             _emit("检测到活动资格，直接通过拟人化 UI 操作唤起官方结账 (由前端原生计算 Sentinel PoW)…")
             human_res = _human_extract_checkout_url(
                 driver,
-                promo_campaign_id=promo_campaign_id,
+                promo_campaign_id=effective_promo,
                 emit_fn=_emit,
                 timeout=90.0,
                 origin_country=origin_country,
                 target_lpm=target_lpm,
+                req_country=req_country,
+                req_currency=req_currency,
             )
             if human_res.get("ok"):
                 return _convert_to_lpm_if_needed(human_res)
@@ -1179,19 +1246,19 @@ def extract_checkout_url_with_cloak(
                 return human_res
             logger.warning("[提链] 拟人化 UI 提取未出链，尝试通过页面内 JS 原生结账兜底: %s", human_res)
 
-        # 1. 优先尝试以目标国家 + hosted 模式申请 (若有试用活动先带试用活动)
-        chk_res = _execute_js_checkout(driver, tok, acc_id, req_country, req_currency, promo_campaign_id=promo_campaign_id)
+        # 1. 优先尝试以目标国家 + hosted 模式申请 (若有试用活动先带试用活动，LPM 除外)
+        chk_res = _execute_js_checkout(driver, tok, acc_id, req_country, req_currency, promo_campaign_id=effective_promo)
 
         # 2. 若带 promo 失败且非 401，尝试不带 promo 的常规 Plus 申请
-        if not chk_res.get("ok") and promo_campaign_id and chk_res.get("status") != 401:
+        if not chk_res.get("ok") and effective_promo and chk_res.get("status") != 401:
             _emit("带活动申请未成功，自动切换至常规 Plus 套餐请求…")
             chk_res = _execute_js_checkout(driver, tok, acc_id, req_country, req_currency, promo_campaign_id="")
 
         # 3. 若针对目标国家失败且目标国家不是原属地，且非 401，尝试以原属地申请
         if not chk_res.get("ok") and req_country != origin_country and chk_res.get("status") != 401:
             _emit(f"目标属地申请未成功，尝试原属地【{origin_country}】免登长链申请…")
-            chk_res = _execute_js_checkout(driver, tok, acc_id, origin_country, currency, promo_campaign_id=promo_campaign_id)
-            if not chk_res.get("ok") and promo_campaign_id:
+            chk_res = _execute_js_checkout(driver, tok, acc_id, origin_country, currency, promo_campaign_id=effective_promo)
+            if not chk_res.get("ok") and effective_promo:
                 chk_res = _execute_js_checkout(driver, tok, acc_id, origin_country, currency, promo_campaign_id="")
 
         # 4. 若接口成功出链或已是 Plus，进行转换与返回
@@ -1203,7 +1270,16 @@ def extract_checkout_url_with_cloak(
         # 5. 若接口方式未成功且非 401，且允许拟人化 (已处于登录环境中)，最后尝试拟人化 UI 模拟点击兜底
         if allow_human and chk_res.get("status") != 401:
             _emit("接口请求未直接出链，尝试通过拟人化 UI 操作唤起…")
-            human_res = _human_extract_checkout_url(driver, promo_campaign_id=promo_campaign_id, emit_fn=_emit, timeout=90.0, origin_country=origin_country, target_lpm=target_lpm)
+            human_res = _human_extract_checkout_url(
+                driver,
+                promo_campaign_id=promo_campaign_id,
+                emit_fn=_emit,
+                timeout=90.0,
+                origin_country=origin_country,
+                target_lpm=target_lpm,
+                req_country=req_country,
+                req_currency=req_currency,
+            )
             if human_res.get("ok"):
                 return _convert_to_lpm_if_needed(human_res)
             if human_res.get("already_paid"):
@@ -1263,7 +1339,7 @@ def extract_checkout_url_with_cloak(
             except Exception as e:
                 logger.warning("访问 chatgpt.com 发生警告: %s", e)
             time.sleep(2.0)
-            solve_cloudflare_challenge_if_present(driver, max_wait=15.0, emit_fn=_emit)
+            solve_cloudflare_challenge_if_present(driver, max_wait=45.0, emit_fn=_emit)
 
             # 优先检查浏览器当前是否持有新鲜 session
             session_data = None
@@ -1284,8 +1360,8 @@ def extract_checkout_url_with_cloak(
                 if chk_res.get("already_paid"):
                     return chk_res
 
-            # 若未在浏览器检测到已登录态，且非活动账号，可尝试存量 token 快速结账
-            if not promo_campaign_id:
+            # 若未在浏览器检测到已登录态，且非活动账号 (或为本地支付 LPM 模式)，可尝试存量 token 快速结账
+            if not promo_campaign_id or is_lpm:
                 _emit("正在使用存量授权凭证快速发起结账会话…")
                 chk_res = _do_checkout(access_token, account_id, "存量会话直通", allow_human=False)
                 if chk_res.get("ok"):
@@ -1306,9 +1382,11 @@ def extract_checkout_url_with_cloak(
                     f"账号 {email} 未设置密码，且注册时使用的临时邮箱已过期无可用接信通道，无法在全新浏览器中接收 OTP 验证码以建立网页登录态"
                 )
             _emit(f"正在打开 ChatGPT 登录页以建立新会话 ({email})…")
-            from core.roxy_registration import _safe_get
-            _safe_get(driver, "https://chatgpt.com/", timeout=45, attempts=2, accept_hosts=("chatgpt.com", "auth.openai.com"))
-            time.sleep(2.5)
+            cur = str(getattr(driver, "current_url", "") or "")
+            if "chatgpt.com" not in cur and "auth.openai.com" not in cur:
+                from core.roxy_registration import _safe_get
+                _safe_get(driver, "https://chatgpt.com/", timeout=45, attempts=2, accept_hosts=("chatgpt.com", "auth.openai.com"))
+                time.sleep(2.5)
 
         otp_after_ts = time.time() - 2.0
         email_submitted = False
@@ -1345,7 +1423,7 @@ def extract_checkout_url_with_cloak(
                 continue
 
             # 1. 穿透 Cloudflare 质询
-            if solve_cloudflare_challenge_if_present(driver, max_wait=15.0, emit_fn=_emit):
+            if solve_cloudflare_challenge_if_present(driver, max_wait=45.0, emit_fn=_emit):
                 time.sleep(1.0)
                 continue
 
@@ -1431,33 +1509,41 @@ def extract_checkout_url_with_cloak(
                         did = str(uuid.uuid4())
                         auth_log_id = str(uuid.uuid4())
                         auth_url = page.evaluate("""async ([email, did, authLogId]) => {
-                            const csrfResp = await fetch('/api/auth/csrf', {credentials: 'include'});
-                            const csrfData = await csrfResp.json();
-                            const csrfToken = csrfData.csrfToken;
-                            const q = new URLSearchParams({
-                                prompt: 'login',
-                                'ext-oai-did': did,
-                                auth_session_logging_id: authLogId,
-                                'ext-passkey-client-capabilities': '11111',
-                                screen_hint: 'login_or_signup',
-                                login_hint: email
-                            });
-                            const body = new URLSearchParams({
-                                callbackUrl: 'https://chatgpt.com/',
-                                csrfToken,
-                                json: 'true'
-                            });
-                            const resp = await fetch('/api/auth/signin/openai?' + q.toString(), {
-                                method: 'POST',
-                                credentials: 'include',
-                                headers: {
-                                    'accept': 'application/json',
-                                    'content-type': 'application/x-www-form-urlencoded'
-                                },
-                                body: body.toString()
-                            });
-                            const data = await resp.json();
-                            return data.url;
+                            try {
+                                const controller = new AbortController();
+                                const timer = setTimeout(() => controller.abort(), 15000);
+                                const csrfResp = await fetch('/api/auth/csrf', {credentials: 'include', signal: controller.signal});
+                                const csrfData = await csrfResp.json();
+                                const csrfToken = csrfData.csrfToken;
+                                const q = new URLSearchParams({
+                                    prompt: 'login',
+                                    'ext-oai-did': did,
+                                    auth_session_logging_id: authLogId,
+                                    'ext-passkey-client-capabilities': '11111',
+                                    screen_hint: 'login_or_signup',
+                                    login_hint: email
+                                });
+                                const body = new URLSearchParams({
+                                    callbackUrl: 'https://chatgpt.com/',
+                                    csrfToken,
+                                    json: 'true'
+                                });
+                                const resp = await fetch('/api/auth/signin/openai?' + q.toString(), {
+                                    method: 'POST',
+                                    credentials: 'include',
+                                    headers: {
+                                        'accept': 'application/json',
+                                        'content-type': 'application/x-www-form-urlencoded'
+                                    },
+                                    body: body.toString(),
+                                    signal: controller.signal
+                                });
+                                clearTimeout(timer);
+                                const data = await resp.json();
+                                return data.url;
+                            } catch (err) {
+                                return null;
+                            }
                         }""", [email, did, auth_log_id])
                     except Exception as auth_ex:
                         logger.warning("[提链] 获取直接授权链接异常，回退传统表单: %s", auth_ex)
@@ -2083,10 +2169,29 @@ def _run_extract(*, account_id: int, trigger: str = "manual", link_type: str = "
     original_country_code = str(acc.get("country_code") or "").strip().upper()
     country_code = original_country_code or "JP"
 
+    from config import extract_link as _extract_cfg
+    target_lpm = str(link_type or acc.get("extract_link_type") or getattr(_extract_cfg, "EXTRACT_LINK_TYPE", "ideal") or "ideal").strip().lower()
+    is_lpm = bool(target_lpm and target_lpm.lower() not in ("card", "direct", "none", "stripe", "hosted"))
+
+    # 针对第三方本地支付 (LPM: UPI/iDEAL/PIX/Kakao Pay)，优先匹配目标支付属地专属代理以防 OpenAI "Billing country must match request country" 拦截
+    matching_proxy = None
+    lpm_country = ""
+    if is_lpm:
+        from core.stripe_lpm_engine import LPM_SPECS
+        if target_lpm.lower() in LPM_SPECS:
+            lpm_country = LPM_SPECS[target_lpm.lower()]["country"].upper()
+            matching_proxy = db.pick_proxy_by_country(lpm_country, strict=True)
+            if matching_proxy:
+                country_code = lpm_country
+                logger.info("[提链调度] 目标支付方式【%s】优先匹配到目标属地【%s】专属代理: %s", target_lpm.upper(), lpm_country, matching_proxy)
+            else:
+                logger.warning("[提链调度] 目标支付方式【%s】未能匹配到目标属地【%s】专属代理，尝试降级回退至账号属地代理", target_lpm.upper(), lpm_country)
+
     # 优先匹配同属地活跃代理；对于未标记国别的存量账号，优先 JP，若无活跃 JP 代理则平滑降级至任意活跃代理
-    matching_proxy = db.pick_proxy_by_country(country_code, strict=bool(original_country_code))
-    if not matching_proxy and not original_country_code:
-        matching_proxy = db.pick_proxy_by_country(country_code, strict=False)
+    if not matching_proxy:
+        matching_proxy = db.pick_proxy_by_country(country_code, strict=bool(original_country_code))
+        if not matching_proxy and not original_country_code:
+            matching_proxy = db.pick_proxy_by_country(country_code, strict=False)
 
     if matching_proxy:
         p_info = db.find_proxy_by_url(matching_proxy)
@@ -2119,9 +2224,6 @@ def _run_extract(*, account_id: int, trigger: str = "manual", link_type: str = "
 
     acc_for_extract = dict(acc)
     acc_for_extract["country_code"] = country_code
-
-    from config import extract_link as _extract_cfg
-    target_lpm = str(link_type or acc.get("extract_link_type") or getattr(_extract_cfg, "EXTRACT_LINK_TYPE", "ideal") or "ideal").strip().lower()
 
     _append_log(account_id, f"提链任务启动：账号={email}，目标支付方式={target_lpm.upper()}，代理属地={country_badge}", clear=True)
 
