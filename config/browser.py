@@ -88,6 +88,9 @@ CLOUD_PROXY_ORG_KEYWORDS = [
 # 该模式仅应用于 Roxy/Cloak，本地浏览器才需要节省带宽；Browser Use/Skyvern 云端
 # 浏览器不会安装省流量拦截器。Selenium/CDP 只能按 URL 后缀拦截，若验证码异常可关闭。
 BROWSER_DATA_SAVER_MODE: bool = False
+# 注册已经拿到 accessToken 后，阻断不再需要的 ChatGPT 应用壳/遥测资源。
+# 仅在 Roxy/Cloak 注册后阶段生效，不影响邮箱、验证码和登录页面。
+BROWSER_DATA_SAVER_DEEP_MODE: bool = True
 # 每行一个 Playwright resource_type。可选 image/media/font/manifest/texttrack 等；
 # 默认只拦截 image、media；也可配置 stylesheet/font 等资源；Roxy 还会通过 Chromium 启动参数关闭图片加载，
 # 遇到页面布局或验证码异常时可关闭模式。
@@ -100,6 +103,7 @@ BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES: list[str] = ["image", "media"]
 # `**` 用于匹配 URL 中的任意路径；Roxy/Cloak 的 Playwright/Selenium 会读取这组规则。
 BROWSER_DATA_SAVER_BLOCKED_URL_PATTERNS: list[str] = [
     "**://auth.openai.com/awe/api/v2/rum**",
+    "**://chatgpt.com/awe/api/v2/rum**",
     "**://chatgpt.com/ces/statsc/flush**",
     "**://connect.facebook.net/**",
     "**://analytics.tiktok.com/**",
@@ -272,7 +276,7 @@ WINDOW_KEY_SAMPLES = [
 SCRIPT_SRC_SAMPLES = [
     "https://accounts.google.com/gsi/client",
     "https://chatgpt.com/cdn-cgi/challenge-platform/scripts/jsd/api.js?onload=jsdOnload",
-    "https://sentinel.openai.com/sentinel/20260219f9f6/sdk.js",
+    "https://sentinel.openai.com/sentinel/20260810913b/sdk.js",
 ]
 
 WINDOW_FEATURE_FLAGS = {
@@ -344,6 +348,23 @@ def build_browser_environment(geo: dict | None = None, base_profile: dict | None
         "window_feature_flags": dict(WINDOW_FEATURE_FLAGS),
         "build_id": __import__("config.openai_protocol", fromlist=["OPENAI_BUILD_ID"]).OPENAI_BUILD_ID,
     })
+    # Sentinel VM 与 HTTP 指纹必须使用同一组 screen/window/viewport/GPU 画像。
+    screen_width = int(profile.get("screen_width", 1680))
+    screen_height = int(profile.get("screen_height", 1050))
+    profile.setdefault("screen_avail_width", screen_width)
+    profile.setdefault("screen_avail_height", max(0, screen_height - 25))
+    profile.setdefault("color_depth", 24)
+    profile.setdefault("outer_width", int(profile["screen_avail_width"]))
+    profile.setdefault("outer_height", int(profile["screen_avail_height"]))
+    profile.setdefault("viewport_width", int(profile["outer_width"]))
+    profile.setdefault("viewport_height", max(0, int(profile["outer_height"]) - 87))
+    cores = int(profile.get("hardware_concurrency", 8))
+    chip = "Apple M2 Max" if cores >= 12 else "Apple M2 Pro" if cores >= 10 else "Apple M2"
+    profile.setdefault("webgl_vendor", "Google Inc. (Apple)")
+    profile.setdefault(
+        "webgl_renderer",
+        f"ANGLE (Apple, ANGLE Metal Renderer: {chip}, Unspecified Version)",
+    )
     return profile
 
 
@@ -380,4 +401,4 @@ def validate_browser_profile(profile: dict) -> list[str]:
     return issues
 
 # ---- .env overrides for WebUI editable fields ----
-apply_env_overrides(globals(), {'BROWSER_LOCALE_PROFILE': 'str', 'AUTO_BROWSER_LOCALE_FROM_IP': 'bool', 'IP_GEO_TIMEOUT': 'float', 'REJECT_CLOUD_PROXY': 'bool', 'BROWSER_DATA_SAVER_MODE': 'bool', 'BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES': 'list_str_multiline', 'BROWSER_DATA_SAVER_BLOCKED_URL_PATTERNS': 'list_str_multiline', 'BROWSER_TRAFFIC_DETAIL_LOG': 'bool', 'BROWSER_TRAFFIC_DETAIL_MAX_ENTRIES': 'int', 'BROWSER_JS_COVERAGE_LOG': 'bool', 'BROWSER_JS_COVERAGE_MAX_ENTRIES': 'int'})
+apply_env_overrides(globals(), {'BROWSER_LOCALE_PROFILE': 'str', 'AUTO_BROWSER_LOCALE_FROM_IP': 'bool', 'IP_GEO_TIMEOUT': 'float', 'REJECT_CLOUD_PROXY': 'bool', 'BROWSER_DATA_SAVER_MODE': 'bool', 'BROWSER_DATA_SAVER_DEEP_MODE': 'bool', 'BROWSER_DATA_SAVER_BLOCKED_RESOURCE_TYPES': 'list_str_multiline', 'BROWSER_DATA_SAVER_BLOCKED_URL_PATTERNS': 'list_str_multiline', 'BROWSER_TRAFFIC_DETAIL_LOG': 'bool', 'BROWSER_TRAFFIC_DETAIL_MAX_ENTRIES': 'int', 'BROWSER_JS_COVERAGE_LOG': 'bool', 'BROWSER_JS_COVERAGE_MAX_ENTRIES': 'int'})

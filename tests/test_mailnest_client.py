@@ -21,6 +21,8 @@ class MailNestClientTests(unittest.TestCase):
         request.return_value = response
 
         with patch.object(mailnest_client._email_cfg, "MAIL_NEST_API_KEY", "key-123", create=True), patch.object(
+            mailnest_client._email_cfg, "MAIL_NEST_MODE", "temporary", create=True
+        ), patch.object(
             mailnest_client._email_cfg, "MAIL_NEST_PROJECT_CODE", "chatgpt001", create=True
         ):
             account = mailnest_client.pick_account()
