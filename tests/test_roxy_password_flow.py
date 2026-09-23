@@ -123,3 +123,25 @@ class RoxyPasswordFlowTests(unittest.TestCase):
             self.assertEqual(el, fake_input)
             self.assertTrue(state["refreshed"])
 
+    def test_wait_for_email_input_compensates_timeout_when_cf_solved(self):
+        driver = MagicMock()
+        fake_input = MagicMock()
+        state = {"cf_solved": False}
+
+        def fake_solve_cf(drv, max_wait=45.0):
+            if not state["cf_solved"]:
+                state["cf_solved"] = True
+                return True
+            return False
+
+        def fake_find_input(drv):
+            return fake_input if state["cf_solved"] else None
+
+        with patch.object(roxy, "_find_visible_email_input_js", side_effect=fake_find_input), \
+             patch.object(roxy, "solve_cloudflare_challenge_if_present", side_effect=fake_solve_cf), \
+             patch("time.sleep", return_value=None):
+            el = roxy._wait_for_email_input(driver, timeout=2)
+            self.assertEqual(el, fake_input)
+            self.assertTrue(state["cf_solved"])
+
+

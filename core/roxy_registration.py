@@ -540,11 +540,14 @@ def _click_email_entry_option(driver) -> bool:
 
 def _wait_for_email_input(driver, timeout: int | None = None):
     """进入邮箱登录/注册方式并返回已找到的可见邮箱输入框。"""
-    end = time.time() + (timeout or int(_cfg.ROXY_SELENIUM_TIMEOUT))
+    timeout_val = float(timeout or int(_cfg.ROXY_SELENIUM_TIMEOUT))
+    end = time.time() + timeout_val
     last_state = None
     clicked_email_option = False
     while time.time() < end:
         if solve_cloudflare_challenge_if_present(driver, max_wait=45.0):
+            # Cloudflare 穿透消耗了较多时间，为后续页面渲染与输入框查找补偿等待时间
+            end = max(end, time.time() + max(timeout_val, 25.0))
             time.sleep(1.0)
             continue
         # 如果遇到迎新/协议遮罩弹窗（如 close-button），自动尝试关闭以暴露下层表单

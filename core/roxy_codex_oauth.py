@@ -564,13 +564,13 @@ def _fill_email_and_otp(driver, email: str, otp_provider, auth_url: str) -> None
     # 可能已经处于账号选择/授权页；如果有邮箱输入框则完整登录。
     # 非日本出口时按钮文案/顺序会变，不能按可见文字点“继续”，否则可能误点 Google。
     try:
-        _type_email_address(driver, email, timeout=12)
+        _type_email_address(driver, email, timeout=35)
         logger.info("[Codex][Browser] 已填写邮箱：%s", email)
         human_delay("form")
         _submit_email_step(driver, email)
         logger.info("[Codex][Browser] 已提交邮箱，确认跳转中...")
-        _wait_email_submitted(driver, email, timeout=10)
-        pw_result = _fill_login_password_if_present(driver, email, timeout=18)
+        _wait_email_submitted(driver, email, timeout=15)
+        pw_result = _fill_login_password_if_present(driver, email, timeout=20)
         if pw_result == "next_step":
             if _is_mfa_challenge_page(driver):
                 _fill_mfa_challenge_if_present(driver, email, timeout=15)
@@ -581,8 +581,36 @@ def _fill_email_and_otp(driver, email: str, otp_provider, auth_url: str) -> None
         else:
             _maybe_click_passwordless_after_email(driver, email, timeout=18)
     except Exception as exc:
-        logger.info("[Codex][Browser] 未检测到邮箱输入框，可能已登录或进入下一步：%s", str(exc)[:120])
-        return
+        curr = str(getattr(driver, "current_url", "") or "").lower()
+        is_next = (
+            any(k in curr for k in ("consent", "workspace", "authorize", "localhost:1455", "callback"))
+            or _is_mfa_challenge_page(driver)
+            or _is_email_verification_page(driver)
+        )
+        if is_next:
+            logger.info("[Codex][Browser] 未检测到邮箱输入框，但页面已处于授权/下一步状态 (url=%s)：%s", curr[:80], str(exc)[:120])
+            return
+
+        logger.warning("[Codex][Browser] 未能填写邮箱，当前页面仍处于登录状态 (url=%s)：%s，尝试补救重新探测并提交", curr[:80], str(exc)[:120])
+        try:
+            _type_email_address(driver, email, timeout=20)
+            logger.info("[Codex][Browser] 补救成功填写邮箱：%s", email)
+            human_delay("form")
+            _submit_email_step(driver, email)
+            logger.info("[Codex][Browser] 补救已提交邮箱，确认跳转中...")
+            _wait_email_submitted(driver, email, timeout=15)
+            pw_result = _fill_login_password_if_present(driver, email, timeout=20)
+            if pw_result == "next_step":
+                if _is_mfa_challenge_page(driver):
+                    _fill_mfa_challenge_if_present(driver, email, timeout=15)
+                logger.info("[Codex][Browser] 补救后账号已用密码完成登录，直接进入后续步骤")
+                return
+            if pw_result == "email_otp":
+                logger.info("[Codex][Browser] 补救密码登录后仍进入/切换为邮箱 OTP 页面")
+            else:
+                _maybe_click_passwordless_after_email(driver, email, timeout=18)
+        except Exception as retry_exc:
+            raise RuntimeError(f"未能进入邮箱登录流程（当前页面停留在 {curr[:80]}）: {retry_exc}") from retry_exc
 
     # 提交邮箱后不再执行任何全局“继续/授权/分支”兜底点击；后续只等待验证码页。
     # 避免页面已进入 OAuth consent 时误点授权按钮。
@@ -599,19 +627,19 @@ def _fill_email_and_otp(driver, email: str, otp_provider, auth_url: str) -> None
         human_delay("navigate")
         _maybe_accept(driver)
         try:
-            _type_email_address(driver, email, timeout=12)
+            _type_email_address(driver, email, timeout=30)
             human_delay("form")
             _submit_email_step(driver, email)
             logger.info("[Codex][Browser] 已重新提交邮箱触发 OTP")
-            _wait_email_submitted(driver, email, timeout=10)
-            pw_result = _fill_login_password_if_present(driver, email, timeout=12)
+            _wait_email_submitted(driver, email, timeout=15)
+            pw_result = _fill_login_password_if_present(driver, email, timeout=20)
             if pw_result == "next_step":
                 if _is_mfa_challenge_page(driver):
                     _fill_mfa_challenge_if_present(driver, email, timeout=15)
                 logger.info("[Codex][Browser] 重新提交邮箱后已用密码完成登录，进入后续步骤")
                 return
             if pw_result != "email_otp":
-                _maybe_click_passwordless_after_email(driver, email, timeout=12)
+                _maybe_click_passwordless_after_email(driver, email, timeout=18)
         except Exception as exc:
             # 如果重进授权地址后已经停在验证码/下一步页面，就不要再强行提交。
             if not _is_email_verification_page(driver):
