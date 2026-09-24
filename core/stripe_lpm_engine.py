@@ -253,18 +253,24 @@ class StripeLPMExtractor:
         if data.get("eid"):
             self.eid = data.get("eid")
 
-        total_obj = data.get("total") or (data.get("snapshot") or {}).get("total") or {}
-        if isinstance(total_obj, dict):
-            if total_obj.get("minorUnitsAmount") is not None:
-                self.expected_amount = int(total_obj["minorUnitsAmount"])
-            elif total_obj.get("total") is not None:
-                self.expected_amount = int(total_obj["total"])
-        elif data.get("expected_amount") is not None:
-            self.expected_amount = int(data.get("expected_amount"))
-        elif data.get("line_items"):
-            init_amount = data.get("line_items", [{}])[0].get("amount_total")
-            if init_amount is not None:
-                self.expected_amount = int(init_amount)
+        total_summary = data.get("total_summary") or {}
+        if isinstance(total_summary, dict) and total_summary.get("due") is not None:
+            self.expected_amount = int(total_summary["due"])
+        elif isinstance(total_summary, dict) and total_summary.get("total") is not None:
+            self.expected_amount = int(total_summary["total"])
+        else:
+            total_obj = data.get("total") or (data.get("snapshot") or {}).get("total") or {}
+            if isinstance(total_obj, dict):
+                if total_obj.get("minorUnitsAmount") is not None:
+                    self.expected_amount = int(total_obj["minorUnitsAmount"])
+                elif total_obj.get("total") is not None:
+                    self.expected_amount = int(total_obj["total"])
+            elif data.get("expected_amount") is not None:
+                self.expected_amount = int(data.get("expected_amount"))
+            elif data.get("line_items"):
+                init_amount = data.get("line_items", [{}])[0].get("amount_total")
+                if init_amount is not None:
+                    self.expected_amount = int(init_amount)
 
         if not self.api_key and data.get("api_key"):
             self.api_key = data.get("api_key")
@@ -298,7 +304,16 @@ class StripeLPMExtractor:
             if r.status_code == 200:
                 data = r.json()
                 snapshot = data.get("snapshot") or {}
-                amount_total = snapshot.get("amount_total")
+                amount_total = None
+                total_summary = data.get("total_summary") or snapshot.get("total_summary")
+                if isinstance(total_summary, dict):
+                    if total_summary.get("due") is not None:
+                        amount_total = total_summary.get("due")
+                    elif total_summary.get("total") is not None:
+                        amount_total = total_summary.get("total")
+
+                if amount_total is None:
+                    amount_total = snapshot.get("amount_total")
                 if amount_total is None and isinstance(snapshot.get("total"), dict):
                     if snapshot["total"].get("minorUnitsAmount") is not None:
                         amount_total = snapshot["total"].get("minorUnitsAmount")
