@@ -254,10 +254,11 @@ class StripeLPMExtractor:
             self.eid = data.get("eid")
 
         total_obj = data.get("total") or (data.get("snapshot") or {}).get("total") or {}
-        if isinstance(total_obj, dict) and total_obj.get("minorUnitsAmount") is not None:
-            self.expected_amount = int(total_obj["minorUnitsAmount"])
-        elif isinstance(total_obj, dict) and total_obj.get("total") is not None:
-            self.expected_amount = int(total_obj["total"])
+        if isinstance(total_obj, dict):
+            if total_obj.get("minorUnitsAmount") is not None:
+                self.expected_amount = int(total_obj["minorUnitsAmount"])
+            elif total_obj.get("total") is not None:
+                self.expected_amount = int(total_obj["total"])
         elif data.get("expected_amount") is not None:
             self.expected_amount = int(data.get("expected_amount"))
         elif data.get("line_items"):
@@ -299,7 +300,10 @@ class StripeLPMExtractor:
                 snapshot = data.get("snapshot") or {}
                 amount_total = snapshot.get("amount_total")
                 if amount_total is None and isinstance(snapshot.get("total"), dict):
-                    amount_total = snapshot["total"].get("minorUnitsAmount") or snapshot["total"].get("total")
+                    if snapshot["total"].get("minorUnitsAmount") is not None:
+                        amount_total = snapshot["total"].get("minorUnitsAmount")
+                    elif snapshot["total"].get("total") is not None:
+                        amount_total = snapshot["total"].get("total")
                 if amount_total is None:
                     amount_total = data.get("expected_amount")
                 if amount_total is not None:
@@ -367,8 +371,8 @@ class StripeLPMExtractor:
 
     def parse_final_result(self, data: dict[str, Any]) -> dict[str, Any]:
         """解析 confirm 响应中的 next_action，输出标准化的提链资产。"""
-        payment_intent = data.get("payment_intent") or data
-        next_action = payment_intent.get("next_action") or {}
+        intent = data.get("payment_intent") or data.get("setup_intent") or data
+        next_action = intent.get("next_action") or data.get("next_action") or {}
         action_type = next_action.get("type") or ""
 
         out = {

@@ -242,5 +242,48 @@ class TestStripeLPMEngine(unittest.TestCase):
         self.assertTrue(result["qr_code"].startswith("data:image/png;base64,"))
 
 
+    @patch("core.stripe_lpm_engine.curl_requests", None)
+    def test_upi_zero_amount_trial_flow(self):
+        extractor = StripeLPMExtractor(self.dummy_session, target_lpm="upi", api_key=self.dummy_key)
+
+        mock_session = MagicMock()
+        extractor.session = mock_session
+
+        # 0元免单试用：minorUnitsAmount: 0
+        mock_init = MagicMock(status_code=200)
+        mock_init.json.return_value = {
+            "total": {"minorUnitsAmount": 0, "amount": None},
+            "payment_method_types": ["card", "upi"],
+        }
+
+        mock_tax = MagicMock(status_code=200)
+        mock_tax.json.return_value = {
+            "snapshot": {"total": {"minorUnitsAmount": 0, "amount": None}},
+        }
+
+        mock_confirm = MagicMock(status_code=200)
+        mock_confirm.json.return_value = {
+            "setup_intent": {
+                "next_action": {
+                    "type": "redirect_to_url",
+                    "redirect_to_url": {
+                        "url": "https://hooks.stripe.com/redirect/authenticate/src_upi_trial?client_secret=secret_trial"
+                    },
+                },
+            },
+        }
+
+        mock_session.post.side_effect = [mock_init, mock_tax, mock_confirm]
+
+        result = extractor.run()
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["type"], "upi")
+        self.assertEqual(result["url"], "https://hooks.stripe.com/redirect/authenticate/src_upi_trial?client_secret=secret_trial")
+        self.assertEqual(extractor.expected_amount, 0)
+        # 确认传给 confirm 接口的 expected_amount 为 0
+        confirm_call_kwargs = mock_session.post.call_args_list[2]
+        self.assertEqual(confirm_call_kwargs[1]["data"]["expected_amount"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -494,6 +494,55 @@ class TestNativeExtractLink(unittest.TestCase):
         self.assertEqual(call_kwargs.get("proxy"), "socks5h://indian_proxy:854")
         self.assertEqual(call_kwargs.get("target_lpm"), "upi")
 
+    @patch("core.db.pick_proxy_by_country")
+    @patch("core.stripe_lpm_engine.StripeLPMExtractor.__init__", return_value=None)
+    @patch("core.stripe_lpm_engine.StripeLPMExtractor.run")
+    @patch("core.extract_link_service._human_extract_checkout_url")
+    @patch("core.extract_link_service._read_chatgpt_session_once")
+    @patch("core.cloakbrowser_driver.build_cloak_driver")
+    @patch("core.extract_link_service.solve_cloudflare_challenge_if_present")
+    def test_extract_checkout_url_with_cloak_lpm_with_free_trial_promo(
+        self, mock_solve_cf, mock_build_driver, mock_read_session, mock_human_extract, mock_lpm_run, mock_lpm_init, mock_pick_proxy
+    ):
+        mock_driver = MagicMock()
+        mock_build_driver.return_value = (mock_driver, None)
+        mock_solve_cf.return_value = False
+        mock_read_session.return_value = {"accessToken": "valid_token", "account": {"id": "acc_direct"}}
+        mock_human_extract.return_value = {
+            "ok": True,
+            "url": "https://checkout.stripe.com/c/pay/cs_trial_123",
+            "checkout_session_id": "cs_trial_123",
+        }
+        mock_lpm_run.return_value = {
+            "ok": True,
+            "url": "https://hooks.stripe.com/redirect/authenticate/src_upi_trial",
+            "payment_method": "upi",
+            "checkout_session_id": "cs_trial_123",
+        }
+        mock_pick_proxy.return_value = "socks5h://indian_proxy:854"
+
+        account = {
+            "id": 1,
+            "email": "trial_user@example.com",
+            "access_token": "valid_token",
+            "account_id": "acc_direct",
+            "country_code": "JP",
+            "token_expired": False,
+            "plus_trial_campaign_id": "plus-1-month-free",
+        }
+
+        res = extract_link_service.extract_checkout_url_with_cloak(
+            account=account,
+            proxy_url="socks5h://japan_proxy:2718",
+            target_lpm="upi",
+        )
+
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["payment_method"], "upi")
+        mock_human_extract.assert_called_once()
+        self.assertEqual(mock_human_extract.call_args[1].get("promo_campaign_id"), "plus-1-month-free")
+        self.assertEqual(mock_human_extract.call_args[1].get("target_lpm"), "upi")
+
     def test_extract_log_helpers(self):
         p = extract_link_service.log_path(999)
         self.assertTrue(str(p).endswith("extract-link-999.log"))

@@ -129,13 +129,18 @@ def _human_extract_checkout_url(
                                 logger.info("[CDP-Route] 拦截到 /payments/checkout 请求，原 mode=%s", payload.get("checkout_ui_mode"))
                                 if is_lpm:
                                     payload["checkout_ui_mode"] = "hosted"
-                                    payload.pop("promo_campaign", None)
-                                    if req_country and req_currency and (not origin_country or origin_country.upper() == req_country.upper()):
+                                    if promo_campaign_id and promo_campaign_id != "none":
+                                        if not payload.get("promo_campaign"):
+                                            payload["promo_campaign"] = {
+                                                "promo_campaign_id": promo_campaign_id,
+                                                "is_coupon_from_query_param": False,
+                                            }
+                                    if req_country and req_currency:
                                         payload["billing_details"] = {
                                             "country": req_country.upper(),
                                             "currency": req_currency.upper(),
                                         }
-                                    logger.info("[CDP-Route] LPM 模式: 已重写为 hosted, billing=%s 并移除 promo_campaign", payload.get("billing_details"))
+                                    logger.info("[CDP-Route] LPM 模式: 已重写为 hosted, billing=%s, promo=%s", payload.get("billing_details"), payload.get("promo_campaign"))
                                 route.continue_(post_data=json.dumps(payload))
                                 return
                             except Exception as ex:
@@ -219,7 +224,7 @@ def _human_extract_checkout_url(
     cur_url = str(getattr(driver, "current_url", "") or "")
     target_home_url = "https://chatgpt.com/"
     is_lpm = bool(target_lpm and target_lpm.lower() not in ("card", "direct", "none", "stripe", "hosted"))
-    if promo_campaign_id and promo_campaign_id != "none" and not is_lpm:
+    if promo_campaign_id and promo_campaign_id != "none":
         target_home_url = f"https://chatgpt.com/?promo_campaign={promo_campaign_id}#pricing"
     else:
         target_home_url = "https://chatgpt.com/#pricing"
@@ -1222,12 +1227,12 @@ def extract_checkout_url_with_cloak(
         _emit(f"{phase_desc}，正在向 OpenAI 发起【{req_country} ({lpm.upper()})】原生结账申请 (hosted 模式)…")
 
         # 0. 若存在特惠/试用活动资格 (promo_campaign_id)，OpenAI 后台要求严格的 Sentinel 校验，禁止无头 fetch 裸调以免触发 400 风控封锁
-        # 注意：第三方本地支付 (LPM: UPI/iDEAL/PIX 等) 不支持 0 元免单试用，必须请求实际 Plus 结算
+        # 注意：第三方本地支付 (LPM: UPI/iDEAL/PIX 等) 也完整支持 0 元免单试用与折扣活动
         is_lpm = bool(target_lpm and target_lpm.lower() not in ("card", "direct", "none", "stripe", "hosted"))
-        effective_promo = "" if is_lpm else promo_campaign_id
+        effective_promo = promo_campaign_id
 
         # 若存在活动资格且允许拟人化操作，通过拟人化进入活动定价页，由前端原生运行 Sentinel 质询；
-        # 针对 LPM，CDP 路由层会自动剥离 promo_campaign 并重写为目标国家的 hosted 付费会话
+        # 针对 LPM，CDP 路由层会自动将 checkout_ui_mode 重写为 hosted 并保留 promo_campaign
         if effective_promo and allow_human:
             _emit("检测到活动资格，直接通过拟人化 UI 操作唤起官方结账 (由前端原生计算 Sentinel PoW)…")
             human_res = _human_extract_checkout_url(
@@ -1360,8 +1365,8 @@ def extract_checkout_url_with_cloak(
                 if chk_res.get("already_paid"):
                     return chk_res
 
-            # 若未在浏览器检测到已登录态，且非活动账号 (或为本地支付 LPM 模式)，可尝试存量 token 快速结账
-            if not promo_campaign_id or is_lpm:
+            # 若未在浏览器检测到已登录态，且非活动账号，可尝试存量 token 快速结账
+            if not promo_campaign_id:
                 _emit("正在使用存量授权凭证快速发起结账会话…")
                 chk_res = _do_checkout(access_token, account_id, "存量会话直通", allow_human=False)
                 if chk_res.get("ok"):
