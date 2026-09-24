@@ -520,7 +520,9 @@ def setup_2fa(
     email: str,
     otp_code: str | None = None,
     access_token: str | None = None,
-) -> str:
+    *,
+    return_token: bool = False,
+) -> str | tuple[str, str]:
     """
     完整的 2FA 设置流程。
     会触发再发一份邮箱验证码：
@@ -620,7 +622,8 @@ def setup_2fa(
 
     logger.info("=" * 60)
     logger.info(f"✅ 2FA 设置完成! Secret: {secret[:4]}...{secret[-4:]}")
-    logger.info("=" * 60)
+    if return_token:
+        return secret, new_token
     return secret
 
 

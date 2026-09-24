@@ -432,7 +432,7 @@ def _fill_mfa_challenge_if_present(driver, email: str, timeout: int = 15) -> boo
                 if not _is_mfa_challenge_page(driver):
                     return True
                 time.sleep(0.4)
-            return True
+            return not _is_mfa_challenge_page(driver)
         except Exception as exc:
             logger.warning("[Codex][Browser] MFA challenge 处理异常：%s", exc)
             time.sleep(0.5)

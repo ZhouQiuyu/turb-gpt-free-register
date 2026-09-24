@@ -117,11 +117,18 @@ def _run_twofa(
             f"source={proxy_source} device_id={session.device_id}",
         )
         _append_log(email, f"[2FA] 指纹摘要：{session.fingerprint_summary_text()}")
-        secret = setup_2fa(session, email, access_token=access_token)
+        secret, fresh_token = setup_2fa(session, email, access_token=access_token, return_token=True)
         db.update_account_totp_secret(
             account_id,
             {"ok": True, "status": "success", "totp_secret": secret, "message": "2FA 设置完成"},
         )
+        if fresh_token:
+            try:
+                db.update_account_session(acc_id=account_id, access_token=fresh_token)
+                _append_log(email, "[2FA] 已同步更新存量 accessToken 到数据库")
+                logger.info("[2FA] 已同步写回 fresh accessToken: email=%s", email)
+            except Exception as se:
+                logger.warning("[2FA] 同步 accessToken 失败: %s", se)
         _append_log(email, f"[2FA] 完成：secret={secret[:4]}...{secret[-4:]}")
         logger.info("[2FA] 完成：email=%s secret=%s...%s", email, secret[:4], secret[-4:])
         return {"ok": True, "status": "success", "totp_secret": secret, "message": "2FA 设置完成"}

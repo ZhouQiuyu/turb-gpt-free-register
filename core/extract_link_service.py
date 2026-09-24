@@ -1383,9 +1383,9 @@ def extract_checkout_url_with_cloak(
                 )
             _emit(f"正在打开 ChatGPT 登录页以建立新会话 ({email})…")
             cur = str(getattr(driver, "current_url", "") or "")
-            if "chatgpt.com" not in cur and "auth.openai.com" not in cur:
+            if "auth.openai.com" not in cur and "/auth/login" not in cur:
                 from core.roxy_registration import _safe_get
-                _safe_get(driver, "https://chatgpt.com/", timeout=45, attempts=2, accept_hosts=("chatgpt.com", "auth.openai.com"))
+                _safe_get(driver, "https://chatgpt.com/auth/login", timeout=45, attempts=2, accept_hosts=("chatgpt.com", "auth.openai.com"))
                 time.sleep(2.5)
 
         otp_after_ts = time.time() - 2.0
@@ -1393,7 +1393,7 @@ def extract_checkout_url_with_cloak(
         otp_submitted = False
         last_otp_submit_ts = 0.0
         totp_attempts = 0
-        max_totp_attempts = 3
+        max_totp_attempts = 6
         password_attempts = 0
         max_password_attempts = 3
         switch_pwdless_attempts = 0
@@ -1501,62 +1501,22 @@ def extract_checkout_url_with_cloak(
             # 4. 提交账号邮箱步骤 (优先使用 Direct-Authorize 凭据跳转，绕过无头渲染空白页)
             if not email_submitted:
                 _emit(f"正在请求直接授权登录入口 ({email})…")
-                auth_url = None
-                page = getattr(driver, "page", None)
-                if page is not None and not type(driver).__name__.startswith("MagicMock"):
-                    try:
-                        import uuid
-                        did = str(uuid.uuid4())
-                        auth_log_id = str(uuid.uuid4())
-                        auth_url = page.evaluate("""async ([email, did, authLogId]) => {
-                            try {
-                                const controller = new AbortController();
-                                const timer = setTimeout(() => controller.abort(), 15000);
-                                const csrfResp = await fetch('/api/auth/csrf', {credentials: 'include', signal: controller.signal});
-                                const csrfData = await csrfResp.json();
-                                const csrfToken = csrfData.csrfToken;
-                                const q = new URLSearchParams({
-                                    prompt: 'login',
-                                    'ext-oai-did': did,
-                                    auth_session_logging_id: authLogId,
-                                    'ext-passkey-client-capabilities': '11111',
-                                    screen_hint: 'login_or_signup',
-                                    login_hint: email
-                                });
-                                const body = new URLSearchParams({
-                                    callbackUrl: 'https://chatgpt.com/',
-                                    csrfToken,
-                                    json: 'true'
-                                });
-                                const resp = await fetch('/api/auth/signin/openai?' + q.toString(), {
-                                    method: 'POST',
-                                    credentials: 'include',
-                                    headers: {
-                                        'accept': 'application/json',
-                                        'content-type': 'application/x-www-form-urlencoded'
-                                    },
-                                    body: body.toString(),
-                                    signal: controller.signal
-                                });
-                                clearTimeout(timer);
-                                const data = await resp.json();
-                                return data.url;
-                            } catch (err) {
-                                return null;
-                            }
-                        }""", [email, did, auth_log_id])
-                    except Exception as auth_ex:
-                        logger.warning("[提链] 获取直接授权链接异常，回退传统表单: %s", auth_ex)
+                auth_res = None
+                try:
+                    from core.roxy_registration import _submit_email_via_browser_nextauth
+                    auth_res = _submit_email_via_browser_nextauth(driver, email)
+                except Exception as auth_ex:
+                    logger.warning("[提链] _submit_email_via_browser_nextauth 异常: %s", auth_ex)
 
-                if auth_url:
+                if auth_res and isinstance(auth_res, dict) and auth_res.get("ok"):
                     _emit("已获取授权跳转链接，直接进入认证页面…")
-                    driver.get(auth_url)
                     email_submitted = True
                     otp_after_ts = time.time() - 2.0
                     t_end = max(t_end, time.time() + 180)
                     time.sleep(2.0)
                     continue
                 else:
+                    logger.warning("[提链] 直接授权未直接出链 (%s)，尝试常规表单提交", auth_res)
                     try:
                         next_st = _submit_email_and_wait_next(driver, email, attempts=2, allow_login_password=True, timeout=45)
                         email_submitted = True
@@ -1945,47 +1905,92 @@ def extract_checkout_url_with_cloak(
                 except Exception:
                     pass
 
-            if is_mfa_page and (time.time() - last_totp_submit_time >= 5.0) and totp_attempts < max_totp_attempts:
+            if is_mfa_page and (time.time() - last_totp_submit_time >= 6.0) and totp_attempts < max_totp_attempts:
                 if not totp_secret:
                     raise RuntimeError("账号触发了双因子 TOTP 验证，但系统内未存储 totp_secret")
                 totp_attempts += 1
                 last_totp_submit_time = time.time()
+                _emit(f"检测到双因子 TOTP 挑战 (第 {totp_attempts}/{max_totp_attempts} 次)，正在计算动态令牌并自动提交…")
                 import pyotp
                 code = pyotp.TOTP(totp_secret).now()
-                _emit(f"检测到双因子 TOTP 挑战 (第 {totp_attempts} 次)，正在计算动态令牌并自动提交…")
-                try:
-                    page = getattr(driver, "page", None)
-                    totp_filled = False
-                    if page is not None:
-                        try:
-                            totp_loc = page.locator("input[name='code'], input[autocomplete='one-time-code'], input[inputmode='numeric'], input[type='text'], input[type='tel']").first
-                            if totp_loc.is_visible():
-                                totp_loc.click(force=True)
-                                totp_loc.fill("")
-                                totp_loc.press_sequentially(code, delay=50)
-                                time.sleep(0.3)
-                                page.evaluate("""() => {
-                                    const c = document.querySelector('input[name="code"], input[autocomplete="one-time-code"], input[inputmode="numeric"]');
-                                    if (c) {
-                                        c.dispatchEvent(new Event('input', {bubbles: true}));
-                                        c.dispatchEvent(new Event('change', {bubbles: true}));
-                                    }
-                                }""")
-                                time.sleep(0.3)
-                                sub_btn = page.locator("button[type='submit'], button.btn-primary, button:has-text('Continue'), button:has-text('続行')").first
-                                for _ in range(10):
-                                    if sub_btn.is_visible() and not sub_btn.is_disabled():
-                                        break
-                                    time.sleep(0.2)
+                page = getattr(driver, "page", None)
+
+                # 提取 factor_id
+                factor_id = ""
+                if "/mfa-challenge/" in cur_url:
+                    factor_id = cur_url.rstrip("/").split("/")[-1].split("?")[0]
+
+                mfa_jumped = False
+
+                # 方案 A：在当前已鉴权浏览器环境中直接调用 Auth0 MFA verify 接口
+                if page is not None and factor_id:
+                    try:
+                        api_res = page.evaluate("""async ({factorId, code}) => {
+                            try {
+                                try {
+                                    await fetch('/api/accounts/mfa/issue_challenge', {
+                                        method: 'POST',
+                                        headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+                                        body: JSON.stringify({id: factorId, type: 'totp', force_fresh_challenge: false})
+                                    });
+                                } catch(e) {}
+
+                                const resp = await fetch('/api/accounts/mfa/verify', {
+                                    method: 'POST',
+                                    headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+                                    body: JSON.stringify({id: factorId, type: 'totp', code: code})
+                                });
+                                const data = await resp.json().catch(() => ({}));
+                                const nextUrl = data.continue_url || (data.page && data.page.continue_url) || data.url || '';
+                                return {status: resp.status, ok: resp.ok, data: data, continue_url: nextUrl};
+                            } catch(err) {
+                                return {status: 0, ok: false, error: String(err)};
+                            }
+                        }""", {"factorId": factor_id, "code": code})
+                        logger.info("[提链] MFA API 交互响应: %s", api_res)
+                        if api_res and api_res.get("continue_url"):
+                            c_url = api_res["continue_url"]
+                            _emit("MFA 接口验证通过，直接跳转回调地址…")
+                            try:
+                                page.goto(c_url)
+                            except Exception:
+                                driver.get(c_url)
+                            mfa_jumped = True
+                    except Exception as api_err:
+                        logger.warning("[提链] MFA API 验证异常: %s", api_err)
+
+                # 方案 B：Playwright 原生 DOM 拟人化输入与点击
+                if not mfa_jumped and page is not None:
+                    try:
+                        totp_loc = page.locator("input[name='code'], input[autocomplete='one-time-code'], input[inputmode='numeric'], input[type='text'], input[type='tel']").first
+                        if totp_loc.is_visible(timeout=3000):
+                            totp_loc.click(force=True)
+                            totp_loc.fill("")
+                            totp_loc.press_sequentially(code, delay=45)
+                            time.sleep(0.3)
+                            page.evaluate("""() => {
+                                const c = document.querySelector('input[name="code"], input[autocomplete="one-time-code"], input[inputmode="numeric"]');
+                                if (c) {
+                                    c.dispatchEvent(new Event('input', {bubbles: true}));
+                                    c.dispatchEvent(new Event('change', {bubbles: true}));
+                                }
+                            }""")
+                            time.sleep(0.3)
+                            sub_btn = page.locator("button[type='submit'], form button, button.btn-primary, button:has-text('Continue'), button:has-text('続行'), button:has-text('Tiếp tục'), button:has-text('继续')").first
+                            for _ in range(12):
                                 if sub_btn.is_visible() and not sub_btn.is_disabled():
-                                    sub_btn.click(force=True)
-                                else:
-                                    page.keyboard.press("Enter")
-                                totp_filled = True
-                                t_end = max(t_end, time.time() + 180)
-                        except Exception:
-                            pass
-                    if not totp_filled:
+                                    break
+                                time.sleep(0.2)
+                            if sub_btn.is_visible() and not sub_btn.is_disabled():
+                                sub_btn.click(force=True)
+                            else:
+                                page.keyboard.press("Enter")
+                    except Exception as ui_ex:
+                        logger.warning("[提链] Playwright MFA UI 交互异常: %s", ui_ex)
+
+                # 方案 C：若 Playwright 未能操作，回退 Selenium 风格适配层
+                if not mfa_jumped and not page:
+                    try:
                         from selenium.webdriver.common.by import By
                         inputs = [
                             e for e in driver.find_elements(
@@ -1995,20 +2000,9 @@ def extract_checkout_url_with_cloak(
                         ]
                         if inputs:
                             inp = inputs[0]
-                            driver.execute_script("""
-                                const el = arguments[0];
-                                const val = arguments[1];
-                                el.focus();
-                                const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-                                if (setter) setter.call(el, val); else el.value = val;
-                                el.dispatchEvent(new Event('input', {bubbles: true}));
-                                el.dispatchEvent(new Event('change', {bubbles: true}));
-                            """, inp, code)
-                            try:
-                                inp.send_keys(code)
-                            except Exception:
-                                pass
-                            time.sleep(1.0)
+                            inp.click()
+                            inp.send_keys(code)
+                            time.sleep(0.5)
                             submit_btns = [
                                 b for b in driver.find_elements(
                                     By.CSS_SELECTOR,
@@ -2017,11 +2011,39 @@ def extract_checkout_url_with_cloak(
                             ]
                             if submit_btns:
                                 submit_btns[0].click()
-                    time.sleep(3.0)
-                except Exception as exc:
-                    _emit(f"TOTP 提交尝试异常: {exc}")
+                            else:
+                                from selenium.webdriver.common.keys import Keys
+                                inp.send_keys(Keys.ENTER)
+                    except Exception as sel_ex:
+                        logger.warning("[提链] Selenium MFA 交互异常: %s", sel_ex)
+
+                # 统一等待观察页面是否流转离开 MFA 页面 (最多观察 12 秒)
+                obs_start = time.time()
+                while time.time() - obs_start < 12.0:
+                    time.sleep(0.6)
+                    cur_now = str(getattr(driver, "current_url", "") or "")
+                    if not any(k in cur_now.lower() for k in ["/mfa-challenge", "mfa-challenge"]):
+                        mfa_jumped = True
+                        break
+
+                if mfa_jumped:
+                    _emit("TOTP 挑战提交成功，已流转离开双因子验证页面…")
+                    t_end = max(t_end, time.time() + 180)
                     time.sleep(2.0)
-                continue
+                    continue
+                else:
+                    err_hint = ""
+                    try:
+                        err_hint = driver.execute_script("""
+                            const el = document.querySelector('.error-msg, [data-testid="error-message"], .alert-danger, [role="alert"]');
+                            return el ? el.innerText : '';
+                        """) or ""
+                    except Exception:
+                        pass
+                    logger.warning("[提链] TOTP 提交后未离开 MFA 页面 (提示: %s, url: %s)", err_hint, getattr(driver, "current_url", ""))
+                    _emit(f"TOTP 提交后页面尚未跳转 (提示: {err_hint or '无特定提示'})，等待重试…")
+                    time.sleep(2.0)
+                    continue
 
             # 7. 处于邮箱验证码 (OTP) 页面 (严格排除 MFA 页面及已跳转至主站页面的情况)
             is_otp_page = ("email-verification" in cur_url or "auth.openai.com/u/email-verification" in cur_url)
