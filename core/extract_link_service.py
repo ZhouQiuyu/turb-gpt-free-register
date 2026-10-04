@@ -117,6 +117,7 @@ def _human_extract_checkout_url(
                 req_country = LPM_SPECS[target_lpm.lower()]["country"]
                 req_currency = LPM_SPECS[target_lpm.lower()]["currency"].upper()
 
+        origin_currency = get_currency_for_country(origin_country)
         # 0. 注册 CDP 请求拦截器：当需要提取 LPM (如 UPI/iDEAL) 时，拦截并重写 checkout_ui_mode 为 hosted，对齐目标国家币种
         if hasattr(page, "route"):
             def handle_route(route, request):
@@ -126,21 +127,40 @@ def _human_extract_checkout_url(
                         if post_data:
                             try:
                                 payload = json.loads(post_data)
-                                logger.info("[CDP-Route] 拦截到 /payments/checkout 请求，原 mode=%s", payload.get("checkout_ui_mode"))
+                                logger.info("[CDP-Route] 拦截到 /payments/checkout 请求，原始完整 payload: %s", json.dumps(payload, ensure_ascii=False))
+                                if is_lpm and target_lpm.lower() == "upi":
+                                    # 对于 UPI：由于出口 IP 本身已是印度，前端原生发出的 payload 已经具备正确的 INR 币种与 custom 模式，
+                                    # 切勿篡改 post_data，否则会破坏浏览器前端计算的 Sentinel PoW 签名导致 400 风控封锁！
+                                    # 会话建立后，优惠活动将由双代理机制通过 checkout/update 注入。
+                                    logger.info("[CDP-Route] UPI 模式放行原生请求，保留 Sentinel 签名，payload: %s", json.dumps(payload, ensure_ascii=False))
+                                    route.continue_()
+                                    return
+
                                 if is_lpm:
                                     payload["checkout_ui_mode"] = "hosted"
                                     if promo_campaign_id and promo_campaign_id != "none":
                                         if not payload.get("promo_campaign"):
                                             payload["promo_campaign"] = {
                                                 "promo_campaign_id": promo_campaign_id,
-                                                "is_coupon_from_query_param": False,
+                                                "is_coupon_from_query_param": True,
                                             }
-                                    if req_country and req_currency:
+                                        else:
+                                            promo_obj = payload.get("promo_campaign")
+                                            if isinstance(promo_obj, dict):
+                                                promo_obj.setdefault("is_coupon_from_query_param", True)
+                                    # 保持与当前代理/请求属地一致的 billing_details，切勿跨区强行修改为目标 LPM 国家，
+                                    # 否则 OpenAI 会直接拦截并返回 HTTP 400 "Billing country must match request country."
+                                    if not payload.get("billing_details"):
+                                        payload["billing_details"] = {
+                                            "country": origin_country.upper(),
+                                            "currency": origin_currency.upper(),
+                                        }
+                                    elif req_country and req_currency and req_country.upper() == origin_country.upper():
                                         payload["billing_details"] = {
                                             "country": req_country.upper(),
                                             "currency": req_currency.upper(),
                                         }
-                                    logger.info("[CDP-Route] LPM 模式: 已重写为 hosted, billing=%s, promo=%s", payload.get("billing_details"), payload.get("promo_campaign"))
+                                    logger.info("[CDP-Route] LPM 模式: 已重写为 hosted, billing=%s, promo=%s, entry=%s", payload.get("billing_details"), payload.get("promo_campaign"), payload.get("entry_point"))
                                 route.continue_(post_data=json.dumps(payload))
                                 return
                             except Exception as ex:
@@ -154,6 +174,106 @@ def _human_extract_checkout_url(
                 logger.info("[CDP-Route] 已注册 **/backend-api/payments/checkout 拦截重写钩子")
             except Exception as e:
                 logger.warning("[CDP-Route] 注册路由拦截器异常: %s", e)
+
+            if promo_campaign_id and promo_campaign_id != "none":
+                def handle_check_coupon(route, request):
+                    try:
+                        logger.info("[CDP-Route] 拦截到 check_coupon 促销资格检查: %s", request.url)
+                        mock_eligible = {
+                            "coupon": promo_campaign_id,
+                            "state": "eligible",
+                            "redemption": {
+                                "redeemed": False,
+                                "redeemed_at": None,
+                                "redeemed_by_user": False,
+                                "redeemed_by_workspace": False,
+                                "user_redeemed_at": None,
+                                "workspace_redeemed_at": None,
+                                "promotion_length_days": None,
+                                "expires_at": None,
+                            },
+                        }
+                        route.fulfill(
+                            status=200,
+                            content_type="application/json",
+                            body=json.dumps(mock_eligible),
+                        )
+                        logger.info("[CDP-Route] 成功放行并模拟 check_coupon 为 eligible: %s", promo_campaign_id)
+                        return
+                    except Exception as ex:
+                        logger.warning("[CDP-Route] check_coupon 处理异常: %s", ex)
+                        route.continue_()
+
+                try:
+                    page.route("**/backend-api/promo_campaign/check_coupon*", handle_check_coupon)
+                    logger.info("[CDP-Route] 已注册 **/backend-api/promo_campaign/check_coupon* 拦截重写钩子")
+                except Exception as e:
+                    logger.warning("[CDP-Route] 注册 check_coupon 路由拦截器异常: %s", e)
+
+                def handle_accounts_check(route, request):
+                    try:
+                        logger.info("[CDP-Route] 拦截到 accounts/check 响应请求: %s", request.url)
+                        response = route.fetch()
+                        text = response.text()
+                        data = json.loads(text)
+                        accounts = data.get("accounts", {})
+                        modified = False
+                        for acc_key, acc_val in accounts.items():
+                          if isinstance(acc_val, dict):
+                            if not acc_val.get("eligible_promo_campaigns"):
+                              acc_val["eligible_promo_campaigns"] = {}
+                            acc_val["eligible_promo_campaigns"]["plus"] = {
+                                "id": promo_campaign_id,
+                                "metadata": {
+                                    "plan_name": "chatgptplusplan",
+                                    "title": "Try Plus free for 1 month",
+                                    "summary": (
+                                        "Bạn có mã khuyến mãi giảm giá cho"
+                                        " Plus trong 1 tháng."
+                                    ),
+                                    "discount": {"percentage": 100},
+                                    "credit_grant": None,
+                                    "duration": {"num_periods": 1, "period": "month"},
+                                    "schedule": None,
+                                    "price_period": "recurring",
+                                    "promotion_type": "discount",
+                                    "promotion_type_label": "1-month free trial",
+                                    "no_auto_renewal_at_discount_end": False,
+                                    "promotion_context": None,
+                                    "plan_type_change": None,
+                                    "processor": "stripe",
+                                },
+                            }
+                            modified = True
+                        if modified:
+                          hdrs = dict(response.headers)
+                          hdrs["content-type"] = "application/json"
+                          route.fulfill(
+                              response=response,
+                              body=json.dumps(data),
+                              headers=hdrs,
+                          )
+                          logger.info(
+                              "[CDP-Route] 成功为 accounts/check 注入"
+                              " eligible_promo_campaigns.plus"
+                          )
+                          return
+                    except Exception as ex:
+                      logger.warning("[CDP-Route] accounts/check 处理异常: %s", ex)
+                    route.continue_()
+
+                try:
+                  page.route(
+                      "**/backend-api/accounts/check/v4-*", handle_accounts_check
+                  )
+                  logger.info(
+                      "[CDP-Route] 已注册 **/backend-api/accounts/check/v4-*"
+                      " 拦截重写钩子"
+                  )
+                except Exception as e:
+                  logger.warning(
+                      "[CDP-Route] 注册 accounts/check 路由拦截器异常: %s", e
+                  )
 
 
         # 1. 注册网络请求监听器：自动嗅探 Stripe 公钥 (pk_live_...) 及全量支付交互
@@ -220,12 +340,12 @@ def _human_extract_checkout_url(
         page.on("response", handle_response)
         page.on("framenavigated", handle_framenavigated)
 
-    # 1. 确保进入 ChatGPT 主界面 (若有活动直接带参唤起定价弹窗)
+    # 1. 确保进入 ChatGPT 主界面 (若有活动直接带参唤起专属特惠弹窗，优先使用 ?coupon= 对齐前端规范)
     cur_url = str(getattr(driver, "current_url", "") or "")
     target_home_url = "https://chatgpt.com/"
     is_lpm = bool(target_lpm and target_lpm.lower() not in ("card", "direct", "none", "stripe", "hosted"))
     if promo_campaign_id and promo_campaign_id != "none":
-        target_home_url = f"https://chatgpt.com/?promo_campaign={promo_campaign_id}#pricing"
+        target_home_url = f"https://chatgpt.com/?coupon={promo_campaign_id}&promo_campaign={promo_campaign_id}#pricing"
     else:
         target_home_url = "https://chatgpt.com/#pricing"
 
@@ -269,25 +389,40 @@ def _human_extract_checkout_url(
         坚决排除 Free / Go / Pro 套餐按钮，且排除外部“受け取る/nhận”类入口按钮。
         """
         return driver.execute_script(r"""
+            const isTrial = !!arguments[0];
+            const isLpm = !!arguments[1];
+            const trialRegex = /特別オファーを利用|オファーを利用|特典を利用|利用する|無料オファーを受け取る|無料オファー|plus を試す|無料で試す|plus をはじめる|plus を利用|dùng thử ưu đãi đặc biệt|dùng thử plus|dùng thử miễn phí|dùng thử 1 tháng|dùng thử|ưu đãi đặc biệt|nhận ưu đãi|bắt đầu dùng thử|bắt đầu dùng thử miễn phí|bắt đầu|miễn phí|claim special offer|try special offer|try plus free|try for free|try free|start free trial|start trial|get 1 month free|claim 1 month free|free trial|start free|claim offer|get offer|try plus/i;
             const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight || (el.getClientRects && el.getClientRects().length));
             const allButtons = [...document.querySelectorAll('button, div[role="button"], a[role="button"]')].filter(visible);
 
-            // 1. 优先在 dialog / modal 弹窗容器内寻找
+            // 1. 必须在已渲染的 dialog / modal 弹窗容器内寻找提交按钮
             const dialogs = [...document.querySelectorAll('[role="dialog"], [aria-modal="true"], .modal')].filter(visible);
+            if (dialogs.length === 0) {
+                return {
+                    ok: false,
+                    dialog_count: 0,
+                    all_buttons: allButtons.slice(0, 10).map(b => (b.innerText || '').trim()).filter(Boolean)
+                };
+            }
+
             for (const dialog of dialogs) {
                 const dialogBtns = [...dialog.querySelectorAll('button, div[role="button"], a[role="button"]')].filter(b => {
                     if (!visible(b)) return false;
                     const r = b.getBoundingClientRect();
-                    return r.left >= 260; // 严格排除侧边栏区域 (< 260px)
+                    return r.left >= 200; // 排除侧边栏区域
                 });
+
                 const btn = dialogBtns.find(b => {
                     const t = (b.innerText || '').trim().toLowerCase();
                     if (/閉じる|close|cancel|hủy|bỏ qua/i.test(t)) return false;
                     if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中のプラン') || t.includes('current plan')) return false;
                     if (/(?:^|\s)(?:go|pro|team|business|enterprise)(?:\s|$)/.test(t) && !t.includes('plus')) return false;
 
-                    // 精准动作关键词 (JP/VN/EN) - 排除纯侧栏入口「オファーを受け取る」
-                    return /特別オファーを利用|オファーを利用|特典を利用|利用する|無料オファーを受け取る|無料オファー|plus を試す|無料で試す|plus をはじめる|plus にアップグレード|plus を利用|アップグレード|upgrade to plus|upgrade|dùng thử ưu đãi đặc biệt|dùng thử plus|ưu đãi đặc biệt|claim special offer|try special offer|try plus|start trial|claim offer/i.test(t);
+                    if (isTrial && !isLpm) {
+                        return trialRegex.test(t);
+                    } else {
+                        return trialRegex.test(t) || /upgrade to plus|upgrade|アップグレード/i.test(t);
+                    }
                 }) || dialogBtns.find(b => {
                     // 弹窗内主要蓝色/高亮按钮 (非当前套餐和关闭)
                     const style = window.getComputedStyle(b);
@@ -295,9 +430,13 @@ def _human_extract_checkout_url(
                     const t = (b.innerText || '').trim().toLowerCase();
                     if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中のプラン')) return false;
                     const isBlue = bg.includes('37, 99, 235') || bg.includes('16, 163, 127') || (bg.includes('rgb(') && !bg.includes('255, 255, 255') && !bg.includes('0, 0, 0'));
-                    return isBlue && /オファー|特典|plus|ưu đãi|trial|offer|はじめる|アップグレード|upgrade/i.test(t);
+                    if (isTrial && !isLpm) {
+                        return isBlue && /オファー|特典|ưu đãi|trial|offer|free|miễn phí|試す|無料/i.test(t);
+                    }
+                    return isBlue && /オファー|特典|plus|ưu đãi|trial|offer|free|はじめる|アップグレード|upgrade/i.test(t);
                 }) || dialogBtns.find(b => {
-                    // 弹窗内 ChatGPT Plus 卡片内部的按钮
+                    // 弹窗内 ChatGPT Plus 卡片内部的按钮 (非试用账号才允许点击普通 upgrade)
+                    if (isTrial && !isLpm) return false;
                     const card = b.closest('div, section');
                     const cardText = card ? (card.innerText || '').toLowerCase() : '';
                     const t = (b.innerText || '').trim().toLowerCase();
@@ -319,36 +458,17 @@ def _human_extract_checkout_url(
                 }
             }
 
-            // 2. 若无 dialog 容器标示，全局检索中央区域具有明确提交语义的按钮
-            const globalBtn = allButtons.filter(b => {
-                const r = b.getBoundingClientRect();
-                return r.left >= 260; // 排除侧边栏
-            }).find(b => {
-                const t = (b.innerText || '').trim().toLowerCase();
-                if (t.includes('lên go') || t.includes('lên pro') || t.includes('gói hiện tại') || t.includes('ご利用中のプラン') || t.includes('current plan')) return false;
-                if (/閉じる|close|cancel|hủy|bỏ qua/i.test(t)) return false;
-                return /特別オファーを利用|オファーを利用|特典を利用|無料オファーを受け取る|無料オファー|plus を試す|無料で試す|plus をはじめる|plus にアップグレード|plus を利用|アップグレード|upgrade to plus|upgrade|dùng thử ưu đãi đặc biệt|dùng thử plus|claim special offer|try special offer/i.test(t);
-            });
-
-            if (globalBtn) {
-                globalBtn.scrollIntoView({ block: 'center' });
-                const r = globalBtn.getBoundingClientRect();
-                return {
-                    ok: true,
-                    in_dialog: false,
-                    text: globalBtn.innerText.trim(),
-                    x: r.left + r.width / 2,
-                    y: r.top + r.height / 2
-                };
-            }
-
-            return { ok: false, all_buttons: allButtons.map(b => b.innerText.trim()).filter(Boolean) };
-        """)
+            return {
+                ok: false,
+                all_buttons: allButtons.slice(0, 20).map(b => (b.innerText || '').trim()).filter(Boolean),
+                dialog_count: dialogs.length
+            };
+        """, bool(promo_campaign_id), bool(is_lpm))
 
     def _find_pricing_entry_btn():
         """
         在页面主界面/侧边栏中定位唤出定价弹窗的入口按钮。
-        例如侧边栏的「オファーを受け取る」/「Nhận ưu đãi」/「アップグレード」/「Upgrade」，以及右上角的「無料オファー」。
+        例如侧边栏的「オファーを受け取る」/「Nhận ưu đãi」/「Ưu đãi miễn phí」/「Claim offer」以及右上角的「Try Plus」/「無料オファー」。
         """
         return driver.execute_script(r"""
             const visible = el => !!el && !!(el.offsetWidth || el.offsetHeight);
@@ -365,10 +485,17 @@ def _human_extract_checkout_url(
                     t.includes('特別オファー') ||
                     t.includes('オファー') ||
                     t.includes('特典') ||
+                    t.includes('ưu đãi miễn phí') ||
                     t.includes('nhận ưu đãi') ||
+                    t.includes('ưu đãi đặc biệt') ||
+                    t.includes('ưu đãi') ||
+                    t.includes('claim special offer') ||
                     t.includes('claim offer') ||
                     t.includes('get offer') ||
-                    t.includes('ưu đãi đặc biệt') ||
+                    t.includes('try plus free') ||
+                    t.includes('start free trial') ||
+                    t.includes('start trial') ||
+                    t.includes('try plus') ||
                     t.includes('plus にアップグレード') ||
                     t.includes('upgrade to plus') ||
                     t.includes('nâng cấp lên plus') ||
@@ -386,13 +513,14 @@ def _human_extract_checkout_url(
 
             // 2. 选择器备用匹配
             const selectors = [
-                'button[aria-label*="Claim offer"]',
-                'button[aria-label*="オファー"]',
-                'button[aria-label*="特典"]',
-                'button[aria-label*="Nhận ưu đãi"]',
-                'button[aria-label*="ưu đãi"]',
-                'button[aria-label*="Nâng cấp"]',
-                'button[aria-label*="アップグレード"]',
+                'button[aria-label*="Claim offer" i]',
+                'button[aria-label*="Try Plus" i]',
+                'button[aria-label*="オファー" i]',
+                'button[aria-label*="特典" i]',
+                'button[aria-label*="Nhận ưu đãi" i]',
+                'button[aria-label*="ưu đãi" i]',
+                'button[aria-label*="Nâng cấp" i]',
+                'button[aria-label*="アップグレード" i]',
                 'button[data-testid="upgrade-button"]',
                 'button[data-testid="pricing-button"]',
                 'button[data-testid="sidebar-upgrade-button"]',
@@ -409,24 +537,26 @@ def _human_extract_checkout_url(
             return { ok: false };
         """)
 
-    # 4. 阶段一：等待并确认定价弹窗是否已展开
+    # 4. 阶段一：等待并确认定价弹窗是否已自动展开
     _emit("等待 ChatGPT 渲染定价与优惠弹窗…")
     btn_info = {"ok": False}
-    t_find_end = time.time() + 15.0
+    t_find_end = time.time() + 8.0
     while time.time() < t_find_end:
         btn_info = _find_modal_action_btn()
         if btn_info.get("ok"):
             logger.info("[提链-拟人化] 定价弹窗已就绪，检测到确认按钮: %s", btn_info)
             break
-        time.sleep(1.5)
+        time.sleep(1.0)
+    if not btn_info.get("ok"):
+        logger.info("[提链-拟人化] 阶段一定价弹窗尚未自动弹出，开始通过入口唤起: %s", btn_info)
 
     # 5. 阶段二：若弹窗未自动弹出，点击侧边栏 / 菜单「Claim offer / Upgrade」唤出弹窗
     if not btn_info.get("ok") and not stripe_url:
-        _emit("未见直接弹窗，正在寻找侧边栏「Claim offer / Upgrade / オファー」入口…")
+        _emit("正在寻找「Claim offer / Upgrade / Ưu đãi / オファー」入口以展开弹窗…")
         entry_info = _find_pricing_entry_btn()
-        logger.info("[提链-拟人化] 定位侧边栏升级/优惠入口: %s", entry_info)
+        logger.info("[提链-拟人化] 定位升级/优惠入口: %s", entry_info)
         if entry_info.get("ok") and entry_info.get("x") and entry_info.get("y"):
-            _emit(f"点击侧边栏入口【{entry_info.get('text')}】唤出定价弹窗…")
+            _emit(f"点击入口【{entry_info.get('text')}】唤出定价弹窗…")
             x = float(entry_info["x"])
             y = float(entry_info["y"])
             if page and hasattr(page, "mouse") and x > 0 and y > 0:
@@ -437,12 +567,12 @@ def _human_extract_checkout_url(
                 page.mouse.up()
             time.sleep(3.0)
 
-            # 点击侧边栏后，循环等待弹窗及确认按钮渲染
-            t_modal_wait = time.time() + 20.0
+            # 点击入口后，循环等待弹窗及确认按钮渲染
+            t_modal_wait = time.time() + 25.0
             while time.time() < t_modal_wait:
                 btn_info = _find_modal_action_btn()
                 if btn_info.get("ok"):
-                    logger.info("[提链-拟人化] 点击侧边栏入口后成功唤出弹窗，锁定确认按钮: %s", btn_info)
+                    logger.info("[提链-拟人化] 点击入口后成功唤出弹窗，锁定确认按钮: %s", btn_info)
                     break
                 time.sleep(1.5)
 
@@ -766,10 +896,17 @@ def _human_extract_checkout_url(
 
     def _format_checkout_url(cs_id: str, processor_entity: str = "", origin_country: str = "") -> str:
         cs = str(cs_id or "").strip()
+        client_secret = (checkout_response_data or {}).get("client_secret") or ""
+        fid_hash = ""
+        if client_secret and "_secret_" in client_secret:
+            secret_part = client_secret.split("_secret_")[-1]
+            if secret_part.startswith("fid"):
+                fid_hash = f"#{secret_part}"
+
         if cs.startswith("oaics_"):
             entity = processor_entity or ("openai_llc" if (origin_country or "").upper() == "US" else "openai_ie")
             return f"https://chatgpt.com/checkout/{entity}/{cs}"
-        return f"https://checkout.stripe.com/c/pay/{cs}"
+        return f"https://checkout.stripe.com/c/pay/{cs}{fid_hash}"
 
 
     if stripe_url:
@@ -1075,7 +1212,83 @@ def is_jwt_expired(token: str) -> bool:
             return time.time() >= float(exp)
     except Exception:
         pass
-    return False
+def inject_checkout_promo(
+    session_id: str,
+    access_token: str,
+    promo_campaign_id: str,
+    processor_entity: str = "openai_llc",
+    promo_proxy: str | None = None,
+    emit_fn: Any = None,
+) -> dict[str, Any]:
+    """
+    通过特惠属地代理 (根据账号注册属地或特惠活动属地动态匹配，如越南代理)
+    向 /backend-api/payments/checkout/update 端点注入 100% 免单试用特惠 (如 plus-1-month-free)，
+    将结算会话应付金额清零 (实现 0 元免单试用)。
+    """
+    if not session_id or not access_token or not promo_campaign_id:
+        return {"ok": False, "error": "缺少必要会话或凭据参数"}
+
+    from curl_cffi import requests as curl_requests
+    import uuid
+
+    device_id = str(uuid.uuid4())
+    headers_promo = {
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36",
+        "accept": "*/*",
+        "accept-language": "vi-VN,vi;q=0.9,en;q=0.8",
+        "authorization": f"Bearer {access_token}",
+        "origin": "https://chatgpt.com",
+        "referer": f"https://chatgpt.com/checkout/{processor_entity}/{session_id}",
+        "content-type": "application/json",
+        "oai-device-id": device_id,
+        "oai-language": "vi-VN",
+        "oai-session-id": str(uuid.uuid4()),
+        "oai-client-version": "prod-db390ebea64862bf1899c420a4c736e0cf639747",
+        "oai-client-build-number": "7904904",
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-origin",
+        "x-openai-target-path": "/backend-api/payments/checkout/update",
+        "x-openai-target-route": "/backend-api/payments/checkout/update",
+    }
+
+    body = {
+        "checkout_session_id": session_id,
+        "processor_entity": processor_entity,
+        "plan_name": "chatgptplusplan",
+        "price_interval": "month",
+        "seat_quantity": 1,
+        "promo_campaign": {
+            "promo_campaign_id": promo_campaign_id,
+            "is_coupon_from_query_param": False,
+        },
+    }
+
+    logger.info("[提链-双代理] 发起特惠注入: session=%s, promo=%s, proxy=%s", session_id, promo_campaign_id, promo_proxy)
+    if emit_fn:
+        emit_fn(f"正在通过特惠专属代理为会话注入 100% 免单折扣 ({promo_campaign_id})…")
+
+    try:
+        r = curl_requests.post(
+            "https://chatgpt.com/backend-api/payments/checkout/update",
+            headers=headers_promo,
+            json=body,
+            proxy=promo_proxy,
+            impersonate="chrome124",
+            timeout=30,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            logger.info("[提链-双代理] 特惠注入成功: %s", data)
+            if emit_fn:
+                emit_fn("🎉 特惠免单折扣注入成功，会话金额已清零！")
+            return {"ok": True, "data": data}
+        else:
+            logger.warning("[提链-双代理] 特惠注入失败 HTTP %s: %s", r.status_code, r.text[:200])
+            return {"ok": False, "error": f"HTTP {r.status_code}: {r.text[:200]}", "status": r.status_code}
+    except Exception as e:
+        logger.warning("[提链-双代理] 特惠注入异常: %s", e)
+        return {"ok": False, "error": str(e)}
 
 
 def extract_checkout_url_with_cloak(
@@ -1150,6 +1363,62 @@ def extract_checkout_url_with_cloak(
 
         # 针对标准 Stripe cs_* 会话且要求三方支付 (LPM)
         if lpm and lpm not in ("card", "direct", "none", "stripe", "hosted") and cs_id.startswith("cs_"):
+            # 双代理特惠注入：若账号具备免单试用资格 (如 plus-1-month-free)，在进入 Stripe 握手前先注入优惠清零金额
+            has_trial_promo = bool(account.get("plus_trial_eligible") or promo_campaign_id or account.get("plus_trial_campaign_id"))
+            if has_trial_promo:
+                target_promo = promo_campaign_id or account.get("plus_trial_campaign_id") or "plus-1-month-free"
+                from core import db
+                # 严格依据账号注册归属地动态确定代理 (严禁硬编码)
+                reg_country = (account.get("registration_country_code") or account.get("country_code") or "").strip().upper()
+                if not reg_country:
+                    from core.db import normalize_country_code
+                    reg_country = normalize_country_code(account.get("country") or "") or ""
+
+                summary = str(account.get("plus_trial_summary") or "").lower()
+                if not summary and isinstance(account.get("eligible_promo_campaigns"), dict):
+                    summary = str(account.get("eligible_promo_campaigns", {}).get("plus", {}).get("metadata", {}).get("summary") or "").lower()
+
+                # 首先优先使用账号自身注册归属地的动态代理
+                promo_country = reg_country
+                if not promo_country:
+                    if "bạn có" in summary or "khuyến mãi" in summary or target_promo == "plus-1-month-free":
+                        promo_country = "VN"
+                    elif "日" in str(account.get("country") or ""):
+                        promo_country = "JP"
+                    else:
+                        promo_country = "VN"
+
+                promo_proxy = db.pick_proxy_by_country(promo_country, strict=False) or account.get("proxy_used")
+                token_for_update = res.get("access_token") or access_token
+                entity_for_update = res.get("processor_entity") or entity
+
+                inject_res = None
+                if promo_proxy:
+                    _emit(f"检测到免单试用资格 ({target_promo})，正在通过账号归属地【{promo_country}】代理注入 100% 免单折扣…")
+                    inject_res = inject_checkout_promo(
+                        session_id=cs_id,
+                        access_token=token_for_update,
+                        promo_campaign_id=target_promo,
+                        processor_entity=entity_for_update,
+                        promo_proxy=promo_proxy,
+                        emit_fn=_emit
+                    )
+
+                # 若账号属地代理注入未成功（例如账号登记属地与活动实际生效区不一致），且特惠语系指示其他属地，则自动切换对应属地代理重试
+                if (not inject_res or not inject_res.get("ok")) and promo_country != "VN" and ("bạn có" in summary or "khuyến mãi" in summary or target_promo == "plus-1-month-free"):
+                    fallback_country = "VN"
+                    fallback_proxy = db.pick_proxy_by_country(fallback_country, strict=False)
+                    if fallback_proxy:
+                        _emit(f"账号归属地【{promo_country}】代理注入未生效，正在切换至特惠属地【{fallback_country}】代理重试注入…")
+                        inject_checkout_promo(
+                            session_id=cs_id,
+                            access_token=token_for_update,
+                            promo_campaign_id=target_promo,
+                            processor_entity=entity_for_update,
+                            promo_proxy=fallback_proxy,
+                            emit_fn=_emit
+                        )
+
             _emit(f"已捕获 Stripe 结账会话 ({cs_id[:16]}…)，正在调用 Stripe LPM 引擎提取【{lpm.upper()}】原生支付直链…")
             from core.stripe_lpm_engine import StripeLPMExtractor
             try:
@@ -1232,14 +1501,13 @@ def extract_checkout_url_with_cloak(
         effective_promo = promo_campaign_id
 
         # 若存在活动资格且允许拟人化操作，通过拟人化进入活动定价页，由前端原生运行 Sentinel 质询；
-        # 针对 LPM，CDP 路由层会自动将 checkout_ui_mode 重写为 hosted 并保留 promo_campaign
         if effective_promo and allow_human:
             _emit("检测到活动资格，直接通过拟人化 UI 操作唤起官方结账 (由前端原生计算 Sentinel PoW)…")
             human_res = _human_extract_checkout_url(
                 driver,
                 promo_campaign_id=effective_promo,
                 emit_fn=_emit,
-                timeout=90.0,
+                timeout=120.0,
                 origin_country=origin_country,
                 target_lpm=target_lpm,
                 req_country=req_country,
@@ -2200,9 +2468,13 @@ def _run_extract(*, account_id: int, trigger: str = "manual", link_type: str = "
     target_lpm = str(link_type or acc.get("extract_link_type") or getattr(_extract_cfg, "EXTRACT_LINK_TYPE", "ideal") or "ideal").strip().lower()
     is_lpm = bool(target_lpm and target_lpm.lower() not in ("card", "direct", "none", "stripe", "hosted"))
 
-    # 针对第三方本地支付 (LPM: UPI/iDEAL/PIX/Kakao Pay)，优先匹配目标支付属地专属代理以防 OpenAI "Billing country must match request country" 拦截
+    has_trial = bool(acc.get("plus_trial_eligible") or acc.get("plus_trial_campaign_id"))
+    trial_campaign = str(acc.get("plus_trial_campaign_id") or "").strip()
+    summary_text = str(acc.get("plus_trial_summary") or "")
+
     matching_proxy = None
     lpm_country = ""
+
     if is_lpm:
         from core.stripe_lpm_engine import LPM_SPECS
         if target_lpm.lower() in LPM_SPECS:
@@ -2210,9 +2482,23 @@ def _run_extract(*, account_id: int, trigger: str = "manual", link_type: str = "
             matching_proxy = db.pick_proxy_by_country(lpm_country, strict=True)
             if matching_proxy:
                 country_code = lpm_country
-                logger.info("[提链调度] 目标支付方式【%s】优先匹配到目标属地【%s】专属代理: %s", target_lpm.upper(), lpm_country, matching_proxy)
+                logger.info("[提链调度] 目标支付方式【%s】匹配到目标属地【%s】专属代理: %s", target_lpm.upper(), lpm_country, matching_proxy)
             else:
                 logger.warning("[提链调度] 目标支付方式【%s】未能匹配到目标属地【%s】专属代理，尝试降级回退至账号属地代理", target_lpm.upper(), lpm_country)
+
+    if not matching_proxy and has_trial:
+        # 特惠免单试用账号：优先锁定试用资格属地代理访问 ChatGPT，以防目标 IP 属地无该特惠导致弹窗被屏蔽
+        if trial_campaign == "plus-1-month-free" or "Bạn có" in summary_text or original_country_code == "VN":
+            trial_country = "VN"
+        else:
+            trial_country = original_country_code or "JP"
+
+        matching_proxy = db.pick_proxy_by_country(trial_country, strict=True) or acc.get("proxy_used") or db.pick_proxy_by_country(trial_country, strict=False)
+        if matching_proxy:
+            country_code = trial_country
+            logger.info("[提链调度] 特惠试用账号【%s】锁定试用属地【%s】专属代理: %s", trial_campaign or "trial", trial_country, matching_proxy)
+        else:
+            logger.warning("[提链调度] 特惠试用账号【%s】未能匹配到试用属地【%s】代理，回退常规调度", trial_campaign or "trial", trial_country)
 
     # 优先匹配同属地活跃代理；对于未标记国别的存量账号，优先 JP，若无活跃 JP 代理则平滑降级至任意活跃代理
     if not matching_proxy:
@@ -2250,6 +2536,7 @@ def _run_extract(*, account_id: int, trigger: str = "manual", link_type: str = "
     })
 
     acc_for_extract = dict(acc)
+    acc_for_extract["registration_country_code"] = original_country_code
     acc_for_extract["country_code"] = country_code
 
     _append_log(account_id, f"提链任务启动：账号={email}，目标支付方式={target_lpm.upper()}，代理属地={country_badge}", clear=True)

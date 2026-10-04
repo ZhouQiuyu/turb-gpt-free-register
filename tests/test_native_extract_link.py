@@ -685,6 +685,28 @@ class TestNativeExtractLink(unittest.TestCase):
                 updated_acc = db.get_account(acc_id)
                 self.assertEqual(updated_acc.get("plan_type"), "plus")
 
+    @patch("curl_cffi.requests.post")
+    def test_inject_checkout_promo_success(self, mock_post):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {"success": True, "checkout_session": {"tag": "custom_checkout_session"}}
+        mock_post.return_value = mock_resp
+
+        res = extract_link_service.inject_checkout_promo(
+            session_id="cs_live_test_12345",
+            access_token="tok_test_jwt",
+            promo_campaign_id="plus-1-month-free",
+            processor_entity="openai_llc",
+            promo_proxy="socks5h://vn-proxy:1080",
+        )
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["data"]["success"], True)
+        mock_post.assert_called_once()
+        args, kwargs = mock_post.call_args
+        self.assertIn("https://chatgpt.com/backend-api/payments/checkout/update", args[0])
+        self.assertEqual(kwargs["proxy"], "socks5h://vn-proxy:1080")
+        self.assertEqual(kwargs["json"]["promo_campaign"]["promo_campaign_id"], "plus-1-month-free")
+
 
 if __name__ == "__main__":
     unittest.main()
