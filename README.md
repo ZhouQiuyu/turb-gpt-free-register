@@ -476,7 +476,10 @@ CLOAK_USER_DATA_DIR = ""        # 留空临时环境；填路径可持久化 pro
 REGISTRATION_DRIVER = "protocol"
 ```
 
-协议注册会使用 `curl_cffi`、Sentinel/PoW、代理池等配置。
+协议注册会使用 `curl_cffi`、Sentinel/PoW、代理池等配置，并强制走
+`create-account/password` 邮箱密码注册流程。注册密码与浏览器驱动一致：
+优先使用 `config/register.py` 的 `REGISTER_PASSWORD`，未配置时随机生成，
+并保存到账号的 `extra_json.registration_password`。
 
 #### 使用 Browser Use Cloud 注册
 

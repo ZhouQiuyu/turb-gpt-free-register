@@ -19,6 +19,9 @@ _CONFIG_DIR = _PROJECT_ROOT / "config"
 EXPLICIT_EMPTY_LIST_KEYS = {
     "PROXY_POOL",
 }
+EXPLICIT_EMPTY_STRING_KEYS = {
+    "GENERIC_API_PROXY",
+}
 
 
 # ============================================================
@@ -54,6 +57,10 @@ EDITABLE_FIELDS = [
     {
         "key": "AUTO_PLAN_CHECK_AFTER_REGISTER", "file": "register.py", "type": "bool", "group": "注册方式",
         "label": "注册后自动查套餐", "help": "注册成功后自动入队查询套餐/Plus 资格；关闭后仅保存账号，不自动查套餐",
+    },
+    {
+        "key": "PROTOCOL_REUSE_FINGERPRINT_BY_EMAIL", "file": "register.py", "type": "bool", "group": "注册方式",
+        "label": "同邮箱保持协议指纹", "help": "仅影响纯协议注册；开启后同一邮箱重复任务复用稳定设备指纹，关闭后每次任务创建全新指纹",
     },
 
     # ---- CloakBrowser ----
@@ -285,12 +292,20 @@ EDITABLE_FIELDS = [
         "label": "启用 2FA(TOTP)", "help": "注册完成后自动设置动态口令（会多收一封 OTP 邮件）",
     },
     {
+        "key": "TWOFA_PROXY_MODE", "file": "twofa.py", "type": "str", "group": "功能开关",
+        "label": "2FA代理模式", "help": "saved=优先使用账号保存的代理；pool=忽略保存代理，每次从代理池随机取一个；修改后需重启服务",
+        "choices": [
+            {"value": "saved", "label": "使用账号保存的代理"},
+            {"value": "pool", "label": "每次从代理池随机获取"},
+        ],
+    },
+    {
         "key": "TWOFA_WORKERS", "file": "twofa.py", "type": "int", "group": "功能开关",
-        "label": "2FA并发数", "help": "同时执行的2FA设置任务数，默认4，范围1-16；修改后需重启服务",
+        "label": "2FA并发数", "help": "同时执行的2FA设置任务数，默认4，范围1-16；保存后立即生效",
     },
     {
         "key": "TWOFA_QUEUE_LIMIT", "file": "twofa.py", "type": "int", "group": "功能开关",
-        "label": "2FA队列容量", "help": "允许排队等待的2FA任务总数，默认200",
+        "label": "2FA队列容量", "help": "允许排队和执行中的2FA任务总数，默认200；保存后立即生效",
     },
     {
         "key": "ENABLE_FLOW_TRIGGER", "file": "flow_trigger.py", "type": "bool", "group": "功能开关",
@@ -331,7 +346,7 @@ EDITABLE_FIELDS = [
     },
     {
         "key": "GENERIC_API_PROXY", "file": "email.py", "type": "str", "group": "邮箱 / OTP",
-        "label": "通用 API 取码代理", "help": "仅用于 generic_api 接口取码；默认直接走本地 HTTP 代理 http://127.0.0.1:7897，不读取代理池，也不套用代理池上游链式；留空则直连",
+        "label": "通用 API 取码代理", "help": "仅用于 generic_api 接口取码；不读取注册代理池，也不套用代理池上游链式；留空则直连，例如可填 http://127.0.0.1:7897",
         "storage": "env",
     },
     {
@@ -943,10 +958,16 @@ def get_config() -> list[dict]:
             raw_env_value = env_file_values[key]
             if field["type"] == "list_str_multiline" and key in EXPLICIT_EMPTY_LIST_KEYS and str(raw_env_value).strip() == "":
                 value = []
+            elif field["type"] == "str" and key in EXPLICIT_EMPTY_STRING_KEYS and str(raw_env_value).strip() == "":
+                value = ""
             else:
                 value = _coerce_raw_value(raw_env_value, fallback, field["type"])
         elif os.getenv(key) is not None:
-            value = _coerce_raw_value(os.getenv(key, ""), fallback, field["type"])
+            raw_env_value = os.getenv(key, "")
+            if field["type"] == "str" and key in EXPLICIT_EMPTY_STRING_KEYS and str(raw_env_value).strip() == "":
+                value = ""
+            else:
+                value = _coerce_raw_value(raw_env_value, fallback, field["type"])
         else:
             value = fallback
 
@@ -1117,6 +1138,11 @@ def update_config(updates: dict) -> dict:
             continue
         if value is None and field["type"] in ("int", "float") and current_values.get(key) is None:
             continue
+        choices = field.get("choices") or []
+        if choices:
+            allowed = {str(item.get("value")) for item in choices}
+            if str(value) not in allowed:
+                raise ValueError(f"{key} 的值无效，可选：{', '.join(sorted(allowed))}")
         env_updates[key] = _format_env_value(
             value,
             field["type"],

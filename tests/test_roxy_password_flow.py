@@ -34,9 +34,15 @@ class RoxyPasswordFlowTests(unittest.TestCase):
                 return {"ok": True, "reason": "clicked_continue_with_password"}
             return {"ok": False, "reason": "missing_continue_with_password"}
 
+        pwd_calls = [0]
+
+        def fake_is_signup_pwd(drv):
+            pwd_calls[0] += 1
+            return pwd_calls[0] <= 2
+
         with patch.object(roxy, "_is_email_verification_page", side_effect=fake_is_email_verif), \
              patch.object(roxy, "_click_continue_with_password_if_present", side_effect=fake_click_continue), \
-             patch.object(roxy, "_is_signup_password_page", return_value=True), \
+             patch.object(roxy, "_is_signup_password_page", side_effect=fake_is_signup_pwd), \
              patch.object(roxy, "_is_login_password_page", return_value=False), \
              patch.object(roxy, "_has_access_token", return_value=False), \
              patch.object(roxy, "_password_page_state", return_value={"inputs": [], "buttons": []}), \
