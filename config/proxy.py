@@ -66,20 +66,31 @@ def normalize_proxy_url(value: str, default_scheme: str = "http") -> str:
     text = str(value or "").strip()
     if not text:
         return ""
+
+    scheme = ""
+    rest = text
+    if "://" in text:
+        scheme, rest = text.split("://", 1)
+        if scheme.lower() == "socks5":
+            scheme = "socks5h"
+    else:
+        scheme = default_scheme
+
+    parts = rest.split(":", 3)
+    if len(parts) == 4 and parts[0] and _valid_port(parts[1]) and parts[2] and parts[3]:
+        host, port, username, password = parts
+        res = f"{scheme}://{quote(username, safe='')}:{quote(password, safe='')}@{host}:{port}"
+        return f"socks5h://{res[9:]}" if res.startswith("socks5://") else res
+    if len(parts) == 4 and parts[0] and parts[1] and parts[2] and _valid_port(parts[3]):
+        username, password, host, port = parts
+        res = f"{scheme}://{quote(username, safe='')}:{quote(password, safe='')}@{host}:{port}"
+        return f"socks5h://{res[9:]}" if res.startswith("socks5://") else res
+
     if "://" in text:
         if text.startswith("socks5://"):
             return f"socks5h://{text[9:]}"
         return text
 
-    parts = text.split(":", 3)
-    if len(parts) == 4 and parts[0] and _valid_port(parts[1]) and parts[2] and parts[3]:
-        host, port, username, password = parts
-        res = f"{default_scheme}://{quote(username, safe='')}:{quote(password, safe='')}@{host}:{port}"
-        return f"socks5h://{res[9:]}" if res.startswith("socks5://") else res
-    if len(parts) == 4 and parts[0] and parts[1] and parts[2] and _valid_port(parts[3]):
-        username, password, host, port = parts
-        res = f"{default_scheme}://{quote(username, safe='')}:{quote(password, safe='')}@{host}:{port}"
-        return f"socks5h://{res[9:]}" if res.startswith("socks5://") else res
     parsed = urlparse(f"//{text}")
     try:
         port = parsed.port

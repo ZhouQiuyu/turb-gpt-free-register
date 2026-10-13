@@ -35,6 +35,16 @@ class ProxyNormalizationTests(unittest.TestCase):
             "proxy.example.test:not-a-port",
         )
 
+    def test_scheme_with_host_port_user_pass_is_normalized(self):
+        self.assertEqual(
+            normalize_proxy_url("socks5h://64.205.179.222:2325:922a98f4af7d:dxndszvdj89nsnscvet3"),
+            "socks5h://922a98f4af7d:dxndszvdj89nsnscvet3@64.205.179.222:2325",
+        )
+        self.assertEqual(
+            normalize_proxy_url("socks5://64.205.179.222:2325:user:pass"),
+            "socks5h://user:pass@64.205.179.222:2325",
+        )
+
     def test_list_filters_blank_entries(self):
         self.assertEqual(
             normalize_proxy_list(["", "  ", "127.0.0.1:7897"]),
@@ -44,3 +54,4 @@ class ProxyNormalizationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
