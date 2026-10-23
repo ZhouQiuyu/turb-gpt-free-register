@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,44 @@ from core import db
 
 
 class AccountPlanFilterTests(unittest.TestCase):
+    def test_other_discount_sql_and_python_agree(self):
+        def campaign(value):
+            return {"metadata": {"discount": {"percentage": value}}}
+
+        cases = [
+            ({"plus": campaign(25)}, True),
+            ({"plus": campaign(75.5)}, True),
+            ({"plus": campaign(50)}, False),
+            ({"plus": campaign(100)}, False),
+            ({"plus": campaign(0)}, False),
+            ({"plus": campaign(-10)}, False),
+            ({"plus": campaign(101)}, False),
+            ({"plus": campaign(None)}, False),
+            ({"plus": campaign(True)}, False),
+            ({"plus": campaign("unknown")}, False),
+            ({"plus": {}}, False),
+            ({}, False),
+            ({"plus": campaign(50), "go": campaign(25)}, True),
+        ]
+        with sqlite3.connect(":memory:") as conn:
+            conn.execute("CREATE TABLE accounts (payload TEXT)")
+            for campaigns, expected in cases:
+                row = {"current_plan_type": "free", "eligible_promo_campaigns": campaigns}
+                conn.execute("DELETE FROM accounts")
+                conn.execute("INSERT INTO accounts VALUES (?)", (json.dumps(row),))
+                for filter_name in ("promo:*:other", "promo::other", "promo:plus:other", "promo:go:other"):
+                    with self.subTest(campaigns=campaigns, filter=filter_name):
+                        where, params = db._account_filter_sql(plan_filter=filter_name)
+                        sql_match = bool(conn.execute(
+                            "SELECT COUNT(*) FROM accounts WHERE " + " AND ".join(where), params
+                        ).fetchone()[0])
+                        python_match = db._account_matches_plan_filter(row, filter_name)
+                        self.assertEqual(sql_match, python_match)
+                        if filter_name in ("promo:*:other", "promo::other"):
+                            self.assertEqual(sql_match, expected)
+                        if campaigns == {"plus": campaign(50), "go": campaign(25)}:
+                            self.assertEqual(sql_match, filter_name != "promo:plus:other")
+
     def test_plus_trial_and_no_trial_filters_use_sql(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

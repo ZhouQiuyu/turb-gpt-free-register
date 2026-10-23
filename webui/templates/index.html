@@ -2051,6 +2051,9 @@
     .config-section-v2-subhelp {
       margin: 12px 0 0; font-size: 13px; color: #909399; line-height: 1.5;
     }
+    .config-section-v2-subhelp:has(.remail-promo-notice) {
+      white-space: nowrap; overflow-x: auto;
+    }
     .remail-promo-notice {
       display: inline-flex; align-items: center; gap: 6px;
       margin: 0 0 0 10px; padding: 8px 12px;
@@ -2374,7 +2377,7 @@
             <select id="promoTypeFilterV2"><option value="">全部</option><option value="plus">Plus</option><option value="pro">Pro</option><option value="go">Go</option><option value="team">Team</option><option value="business">Business</option></select>
           </label>
           <label class="acc-v2-inline" title="按 eligible_promo_campaigns 优惠百分比筛选">优惠力度
-            <select id="promoDiscountFilterV2"><option value="">全部</option><option value="100">100%优惠</option></select>
+            <select id="promoDiscountFilterV2"><option value="">全部</option><option value="100">100%优惠</option><option value="50">50%优惠</option><option value="other">其他优惠（非100%/50%）</option></select>
           </label>
           <button type="button" class="acc-v2-toggle" id="showFreeAccountsOnlyV2" aria-pressed="false" title="只查询/显示已明确不能试用套餐的 free 账号；资格未知的账号不包含">free不可试用套餐</button>
           <label class="acc-v2-inline" title="按账号状态筛选账号">
@@ -2412,6 +2415,8 @@
       <div class="jobs-toolbar-v2" id="accountsToolbarV2">
         <div class="acc-v2-btn-group">
           <span class="acc-v2-btn-group-title">套餐/提链</span>
+<button type="button" class="jobs-tb-btn" id="btnStartInspection" onclick="startAccountInspection()" title="按当前归档筛选巡检账号：本地解析 AT，失效后自动查活及查套餐">一键巡检</button>
+<button type="button" class="jobs-tb-btn" onclick="openInspectionHistory()">巡检历史</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedLiveV2" onclick="checkSelectedLive()" title="重新登录选中账号；成功且未封号则标记正常，并刷新最新 AT/accessToken">查活</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--primary" id="btnCheckSelectedPlansV2" disabled title="查询选中账号当前套餐；free 账号会检查 Plus 试用资格">查套餐</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnExtractSelectedLinksV2" disabled title="给选中的 free(可Plus试用) 账号按属地匹配代理批量原生提取 Stripe 试用直链">🔗 提链</button>
@@ -2436,6 +2441,7 @@
           <button type="button" class="jobs-tb-btn jobs-tb-btn--good" id="btnCopySelectedLoginCredentialsV2" disabled title="把选中账号按“邮箱---密码---2FA密钥”格式复制到剪贴板">复制登录凭据</button>
           <button type="button" class="jobs-tb-btn" id="btnArchiveSelectedAccountsV2" disabled title="归档选中的账号；默认账号列表将不再查询/显示这些账号">归档选中</button>
           <button type="button" class="jobs-tb-btn jobs-tb-btn--danger" id="btnDeleteSelectedAccountsV2" disabled title="删除选中的本地账号/token记录">删除</button>
+          <button type="button" class="jobs-tb-btn jobs-tb-btn--danger" id="btnDeleteDeactivatedAccounts" onclick="deleteDeactivatedAccounts()" title="删除当前归档范围内全部已废账号，不限当前页；不受其他筛选影响">一键删除已废</button>
         </div>
         <div class="acc-v2-btn-group">
           <span class="acc-v2-btn-group-title">全部</span>
@@ -2862,7 +2868,7 @@
       <label class="outlook-import-field"><span>新邮箱来源</span><select id="emailChangeSourceV2">
         <option value="outlook">Outlook 邮箱池</option><option value="generic_api">通用 API</option><option value="imap">通用 IMAP</option>
         <option value="cloudflare_domain">Cloudflare 域名邮箱</option><option value="cloudflare">Cloudflare 临时邮箱</option>
-        <option value="gptmail">GPTMail</option><option value="mailnest">MailNest</option><option value="cloudmail">CloudMail</option><option value="remail">Remail</option>
+        <option value="gptmail">GPTMail</option><option value="mailnest">MailNest</option><option value="cloudmail">CloudMail</option><option value="remail">Remail</option><option value="mailcode">域名邮箱 MailCode</option><option value="xigua">西瓜</option>
       </select></label>
       <div class="banner warn">换绑成功后当前 access_token 会失效并被清空，系统会立即使用新邮箱自动查活并刷新 AT。原邮箱会保留在账号记录中。</div>
     </div>
@@ -3296,7 +3302,10 @@ function formatTraffic(t) {
   };
   const j = t.js_coverage;
   const jsHint = j && j.enabled ? `，JS脚本 ${n(j.script_count)}（执行 ${n(j.executed_script_count)}，候选 ${n(j.candidate_script_count)}）` : '';
-  return `<span title="上传 ${fmt(t.upload_bytes)}，下载 ${fmt(t.download_bytes)}，${n(t.request_count)} 个请求${jsHint}">${fmt(t.total_bytes)}</span>`;
+  const scopeHint = t.proxy_transport && t.proxy_transport.available
+    ? `全浏览器代理传输（含TLS），页面可见 ${fmt(t.browser_observed_total_bytes)}`
+    : '页面可见流量（不含TLS，可能漏计启动及后台请求）';
+  return `<span title="${scopeHint}；上传 ${fmt(t.upload_bytes)}，下载 ${fmt(t.download_bytes)}，页面 ${n(t.request_count)} 个请求${jsHint}">${fmt(t.total_bytes)}</span>`;
 }
 function jobsV2OpIcons() {
   return {
@@ -3318,7 +3327,11 @@ async function copyText(text) {
 }
 async function api(url, opts) {
   const r = await fetch(url, opts);
-  const j = await r.json().catch(()=>({}));
+  const j = await r.json().catch(error => {
+    // 读取响应体时也可能超时；不能把取消请求伪装成成功的空响应。
+    if (opts?.signal?.aborted || error?.name === 'AbortError') throw error;
+    return {};
+  });
   if (!r.ok) throw new Error(j.error || ('HTTP '+r.status));
   return j;
 }
@@ -3774,6 +3787,7 @@ async function pollLog() {
 
 // ---------- 账号 ----------
 let accountsLoading = false;
+let accountsReloadPending = false;
 let planStatusLoading = false;
 let planStatusRevision = '';
 function getAccountsQuery() {
@@ -3803,8 +3817,10 @@ function getAccountsPlanFilter() {
   return '';
 }
 async function loadAccounts() {
-  if (accountsLoading) return;
+  if (accountsLoading) { accountsReloadPending = true; return; }
   accountsLoading = true;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30000);
   try {
     const archived = SHOW_ARCHIVED_ACCOUNTS ? 'only' : '0';
     const plan = getAccountsPlanFilter();
@@ -3814,14 +3830,24 @@ async function loadAccounts() {
     const dateFrom = document.getElementById('dateFromAccountsV2')?.value || '';
     const dateTo = document.getElementById('dateToAccountsV2')?.value || '';
     const p = PAGERS.accounts;
-    const res = await api(`/api/accounts?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codex)}&totp_status=${encodeURIComponent(totp)}&q=${encodeURIComponent(q)}&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`);
+    const res = await api(`/api/accounts?paged=1&page=${encodeURIComponent(p.page)}&page_size=${encodeURIComponent(p.size)}&archived=${encodeURIComponent(archived)}&plan=${encodeURIComponent(plan)}&codex_status=${encodeURIComponent(codex)}&totp_status=${encodeURIComponent(totp)}&q=${encodeURIComponent(q)}&date_from=${encodeURIComponent(dateFrom)}&date_to=${encodeURIComponent(dateTo)}`, {signal: controller.signal});
+    // 有更新请求时丢弃旧快照，finally 合并读取最新列表。
+    if (accountsReloadPending) return;
     ACCOUNTS = res.items || [];
     ACCOUNTS_TOTAL = Number(res.total || ACCOUNTS.length || 0);
     const totalPages = Math.max(1, Math.ceil(ACCOUNTS_TOTAL / p.size));
-    if (p.page > totalPages) { p.page = totalPages; accountsLoading = false; return loadAccounts(); }
+    if (p.page > totalPages) { p.page = totalPages; accountsReloadPending = true; return; }
     renderAccounts();
-  } catch(e) { showToast('加载账号失败: ' + e.message); }
-  finally { accountsLoading = false; }
+  } catch(e) {
+    if (!accountsReloadPending) showToast(controller.signal.aborted ? '加载账号超时，请重试' : '加载账号失败: ' + e.message);
+  } finally {
+    clearTimeout(timeout);
+    accountsLoading = false;
+    if (accountsReloadPending) {
+      accountsReloadPending = false;
+      return loadAccounts();
+    }
+  }
 }
 async function pollAccountPlanStatuses() {
   if (planStatusLoading || accountsLoading) return;
@@ -6692,7 +6718,9 @@ function emailConfigSectionForKey(key) {
   if (key.startsWith('GPTMAIL_')) return ['GPTMail', 'GPTMail 临时邮箱 API 配置'];
   if (key.startsWith('MAIL_NEST_')) return ['MailNest', 'MailNest / 迈巢邮箱 API 配置（支持临时邮箱与独占邮箱）'];
   if (key.startsWith('CLOUDMAIL_')) return ['CloudMail', 'CloudMail 域名随机邮箱、Token 和收信 API 配置'];
+  if (key.startsWith('MAILCODE_')) return ['域名邮箱 MailCode', '官方服务、商品购买与自动取码'];
   if (key.startsWith('REMAIL_')) return ['Remail', 'Remail 开放 API、项目下单和取件配置'];
+  if (key.startsWith('XIGUA_')) return ['西瓜', '西瓜邮箱接码 API、项目方案和取件配置'];
   if (key.startsWith('OUTLOOK_')) return ['Outlook 邮箱池', 'Outlook 邮箱池和取件模式配置'];
   if (key.startsWith('IMAP_')) return ['通用 IMAP', '通用 IMAP 邮箱池的收件目录配置'];
   if (key.startsWith('CLOUDFLARE_')) return ['Cloudflare 临时邮箱', 'Cloudflare Worker 临时邮箱 API、鉴权与路径配置'];
@@ -6985,6 +7013,22 @@ function renderFeatureSwitchField(f, opts = {}) {
     </div>
   `;
 }
+async function loadMailCodeCatalog(btn) {
+  const output = btn.nextElementSibling;
+  btn.disabled = true;
+  output.hidden = false;
+  output.textContent = '正在查询 MailCode 官网商品与余额...';
+  try {
+    const result = await api('/api/mailcode/catalog');
+    if (!result.ok) throw new Error(result.error || '查询失败');
+    const products = (result.products || []).map(p => `${p.name} | 商品 ID: ${p.id} | 单价: ${p.price} 积分 | 库存: ${p.stock} | 启用: ${p.enabled}`);
+    output.textContent = `余额: ${result.wallet?.balance ?? '-'} 积分\n${products.join('\n') || '暂无商品'}`;
+  } catch (e) {
+    output.textContent = '查询失败：' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
 function renderConfigExternalLink(f) {
   const url = String(f.external_url || '').trim();
   if (!/^https?:\/\//i.test(url)) return '';
@@ -7137,7 +7181,9 @@ function renderConfigPlainFieldV2(f) {
   const decorated = f.external_url
     ? `<div class="config-field-wrap">${field}${renderConfigExternalLink(f)}</div>`
     : field;
-  return decorated + renderConfigRecommendedLinks(f);
+  const mailCodeTools = f.key === 'MAILCODE_PRODUCT_ID'
+    ? '<div><button type="button" class="btn" onclick="loadMailCodeCatalog(this)">查询商品与余额（请先保存密钥）</button><pre style="white-space:pre-wrap" hidden></pre></div>' : '';
+  return decorated + renderConfigRecommendedLinks(f) + mailCodeTools;
 }
 function renderMixedConfigSectionV2(name, fields, intro) {
   const slug = configGroupSlug(name);
@@ -7227,7 +7273,9 @@ function renderSectionedConfigSectionV2(name, fields, sectionForKey, preferred, 
   const switches = current.fields.filter(f => f.type === 'bool');
   const inputs = current.fields.filter(f => f.type !== 'bool');
   const promo = name === '邮箱 / OTP' && active === 'Remail'
-    ? '<span class="remail-promo-notice" role="note">通过作者卡网购买积分9折优惠</span>'
+    ? '<span class="remail-promo-notice" role="note">通过作者卡网购买积分9折优惠 · <a href="https://catfk.com/shop/9D4N5XEY" target="_blank" rel="noopener noreferrer">打开卡网</a></span>'
+    : name === '邮箱 / OTP' && active === '西瓜'
+    ? '<span class="remail-promo-notice" role="note">作者卡网购买CDK9折优惠 · <a href="https://catfk.com/shop/9D4N5XEY" target="_blank" rel="noopener noreferrer">打开卡网</a></span>'
     : '';
   const sectionHelp = current.help
     ? `<p class="config-section-v2-subhelp">${esc(current.help)}${promo}</p>`
@@ -7446,7 +7494,7 @@ function renderConfigSectionV2(name, fields) {
       name,
       fields,
       emailConfigSectionForKey,
-      ['通用邮箱 / OTP', 'GPTMail', 'MailNest', 'CloudMail', 'Remail', 'Outlook 邮箱池', 'Cloudflare 临时邮箱', 'Cloudflare 域名邮箱', '其他邮箱配置'],
+      ['通用邮箱 / OTP', 'GPTMail', 'MailNest', 'CloudMail', 'Remail', '域名邮箱 MailCode', '西瓜', 'Outlook 邮箱池', 'Cloudflare 临时邮箱', 'Cloudflare 域名邮箱', '其他邮箱配置'],
       { get: () => CONFIG_EMAIL_ACTIVE_SECTION_V2, set: v => { CONFIG_EMAIL_ACTIVE_SECTION_V2 = v; } },
       'email-section-v2'
     );
@@ -8535,5 +8583,6 @@ setInterval(loadSummary, 30000);
 setInterval(() => { if (!$('#tab-accounts').classList.contains('hidden')) pollAccountPlanStatuses(); }, 10000);
 </script>
 {% include 'promo_details.html' %}
+{% include 'account_inspections.html' %}
 </body>
 </html>

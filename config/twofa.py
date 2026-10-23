@@ -19,6 +19,8 @@ TWOFA_PROXY_MODE = "saved"
 
 # 发起 reauth（CSRF + signin）时的临时网络错误重试。403 会先清理当前会话的
 # 本地熔断，再按指数退避重试；业务类 4xx 不重试。
+# OTP 提交也复用此次数/退避配置；只重试无业务错误码、无交互挑战的 403/429。
+# OTP 重试复用同一会话/验证码；明确账号拒绝、挑战以及结果未知的网络超时不自动重放。
 TWOFA_REAUTH_MAX_ATTEMPTS = 3
 TWOFA_REAUTH_RETRY_DELAY = 3.0
 

@@ -11,6 +11,7 @@
 import json
 import logging
 import random
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +21,7 @@ import pyotp
 
 from core.session import BrowserSession
 from core.humanize import delay as human_delay
+from core.http_diagnostics import response_summary
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +88,11 @@ def _trigger_reauth_with_retry(session: BrowserSession, email: str) -> str:
         except Exception as exc:
             last_exc = exc
             retryable = _is_retryable_reauth_error(exc)
+            response = getattr(exc, "response", None)
+            status = getattr(response, "status_code", None)
+            # CSRF/signin 的明确拒绝不通过清除本地熔断反复重放。
+            if str(status) == "403" or (status is None and re.search(r"\b403\b", str(exc))):
+                retryable = False
             if attempt >= max_attempts or not retryable:
                 logger.warning(
                     "[2FA] 重认证发起失败且不再重试：attempt=%s/%s retryable=%s error=%s: %s",
@@ -375,6 +382,8 @@ def _trigger_reauth(session: BrowserSession, email: str) -> str:
     # 重新拿一次 csrf（旧的可能已过期）
     csrf_url = "https://chatgpt.com/api/auth/csrf"
     csrf_resp = session.get(csrf_url, headers=session.get_nextauth_headers(referer="https://chatgpt.com/"))
+    if csrf_resp.status_code >= 400:
+        logger.warning("[2FA] CSRF 请求被拒绝：%s", response_summary(csrf_resp))
     csrf_resp.raise_for_status()
     csrf_token = csrf_resp.json()["csrfToken"]
     logger.info(f"[2FA] 重认证 CSRF: {csrf_token[:20]}...")
@@ -401,6 +410,8 @@ def _trigger_reauth(session: BrowserSession, email: str) -> str:
 
     logger.info("[2FA] 发起重认证 signin/openai...")
     resp = session.post(signin_url, headers=headers, data=body)
+    if resp.status_code >= 400:
+        logger.warning("[2FA] signin 请求被拒绝：%s", response_summary(resp))
     resp.raise_for_status()
     auth_url = resp.json().get("url")
     if not auth_url:
@@ -421,6 +432,69 @@ def _follow_reauth(session: BrowserSession, auth_url: str) -> str:
     return str(getattr(resp, "url", "") or "")
 
 
+class TwofaOtpRequestError(RuntimeError):
+    """保留响应供上层识别，但不将响应体、OTP 或凭证写入错误日志。"""
+    def __init__(self, response, *, code: str, challenge: bool, business_error: bool = False):
+        self.response = response
+        self.status_code = int(response.status_code)
+        self.error_code = code
+        self.challenge = challenge
+        self.business_error = business_error
+        headers = {str(k).lower(): str(v) for k, v in (getattr(response, "headers", {}) or {}).items()}
+        request_id = headers.get("cf-ray") or headers.get("x-request-id") or ""
+        request_id = re.sub(r"[^a-zA-Z0-9_-]", "", request_id)[:80]
+        hint = ("服务端要求交互验证，自动重试已停止，可在官方页面完成设置" if challenge else
+                "服务端明确拒绝重认证，请检查账号或登录权限" if code or business_error else
+                "重认证 OTP 请求被拒绝，未返回明确错误码")
+        super().__init__(f"{hint}（HTTP {self.status_code}，阶段=OTP 验证" +
+                         (f"，error_code={code}" if code else "") +
+                         (f"，request_id={request_id}" if request_id else "") + "）")
+
+
+def _otp_request_error(response) -> TwofaOtpRequestError:
+    try:
+        payload = response.json()
+    except Exception:
+        payload = {}
+    error = payload.get("error") if isinstance(payload, dict) else None
+    code = (error.get("code") or error.get("type") or "") if isinstance(error, dict) else ""
+    if not code and isinstance(payload, dict):
+        code = payload.get("code") or payload.get("error_code") or ""
+    # 仅允许短错误标识，避免把服务端回显的敏感内容混入日志。
+    code = str(code)
+    code = code if re.fullmatch(r"[a-zA-Z0-9_.-]{1,80}", code) else ""
+    headers = {str(k).lower(): str(v) for k, v in (getattr(response, "headers", {}) or {}).items()}
+    body = str(getattr(response, "text", "") or "")[:8192].lower()
+    challenge = (headers.get("cf-mitigated", "").lower() == "challenge" or
+                 any(marker in body for marker in ("cf-chl-", "challenge-platform", "captcha")))
+    return TwofaOtpRequestError(response, code=code, challenge=challenge, business_error=bool(error))
+
+
+def _validate_twofa_otp_with_retry(session: BrowserSession, code: str) -> str:
+    """只重试无业务拒绝的 403/429；不重发邮件，不重放结果未知的超时 POST。"""
+    from config import twofa as cfg
+    attempts = max(1, min(8, int(getattr(cfg, "TWOFA_REAUTH_MAX_ATTEMPTS", 3) or 3)))
+    delay = max(0.0, min(60.0, float(getattr(cfg, "TWOFA_REAUTH_RETRY_DELAY", 3.0) or 0.0)))
+    for attempt in range(1, attempts + 1):
+        try:
+            return _validate_reauth_otp(session, code)
+        except TwofaOtpRequestError as exc:
+            if exc.challenge or exc.error_code or exc.business_error or attempt >= attempts:
+                raise
+            headers = {str(k).lower(): str(v) for k, v in (getattr(exc.response, "headers", {}) or {}).items()}
+            retry_after = headers.get("retry-after", "").strip()
+            # 非数字（HTTP-date）或较长冷却交回用户，不能提前重试违反服务端冷却。
+            if retry_after and (not retry_after.isdigit() or len(retry_after) > 3 or int(retry_after) > 120):
+                raise
+            wait = max(min(120.0, delay * 2 ** (attempt - 1)), int(retry_after or 0))
+            logger.warning("[2FA] OTP 请求临时拒绝 HTTP %s，%.1fs 后复用原会话重试（%s/%s），不重新发码",
+                           exc.status_code, wait, attempt, attempts)
+            if wait:
+                time.sleep(wait)
+            _clear_twofa_session_circuit(session, source="OTP 临时拒绝")
+    raise RuntimeError("2FA OTP 重试耗尽")
+
+
 def _validate_reauth_otp(session: BrowserSession, code: str) -> str:
     """
     步骤4: 提交邮箱 OTP 验证。
@@ -430,8 +504,10 @@ def _validate_reauth_otp(session: BrowserSession, code: str) -> str:
     headers = session.get_auth_headers(referer="https://auth.openai.com/email-verification")
     body = json.dumps({"code": code})
 
-    logger.info(f"[2FA] 提交重认证 OTP: {code}")
+    logger.info("[2FA] 提交邮箱重认证 OTP（验证码已隐藏）")
     resp = session.post(url, headers=headers, data=body)
+    if resp.status_code in (403, 429):
+        raise _otp_request_error(resp)
     resp.raise_for_status()
     data = resp.json()
     continue_url = data.get("continue_url")
@@ -447,12 +523,13 @@ def _exchange_new_token(session: BrowserSession, continue_url: str) -> str:
     """
     headers = session.get_auth_navigate_headers(referer="https://auth.openai.com/email-verification")
     logger.info("[2FA] 跟随 continue_url，刷新 session-token cookie...")
-    session.get(continue_url, headers=headers, allow_redirects=True)
+    callback = session.get(continue_url, headers=headers, allow_redirects=True)
+    callback.raise_for_status()
 
     # 拿新的 accessToken
     new_session = fetch_session(session)
     new_token = new_session["accessToken"]
-    logger.info(f"[2FA] 新 accessToken（含新鲜 pwd_auth_time）: {new_token[:40]}...")
+    logger.info("[2FA] 已获取重认证后的新 accessToken")
     return new_token
 
 
@@ -504,7 +581,7 @@ def _activate_totp(
         "session_id": session_id,
     })
 
-    logger.info(f"[2FA] 激活 enrollment, code={totp_code}")
+    logger.info("[2FA] 激活 TOTP enrollment（验证码已隐藏）")
     resp = session.post(url, headers=headers, data=body)
     if resp.status_code != 200:
         logger.error(f"[2FA] activate 失败 {resp.status_code}: {resp.text}")
@@ -550,7 +627,7 @@ def setup_2fa(
             logger.info("[2FA] 使用现有 accessToken 预热登录态...")
             authenticated_bootstrap(session, access_token, strict=False)
             human_delay("navigate")
-            logger.info("[2FA] accessToken 预热完成")
+            logger.info("[2FA] accessToken 可选预热流程结束（不代表网页登录态已建立）")
         except Exception as exc:
             logger.warning("[2FA] accessToken 预热失败，继续按重认证流程执行：%s: %s", type(exc).__name__, str(exc)[:180])
         finally:
@@ -611,7 +688,7 @@ def setup_2fa(
     human_delay("otp_input")
     logger.info("[2FA] 正在提交邮箱重认证 OTP...")
     try:
-        continue_url = _validate_reauth_otp(session, otp_code)
+        continue_url = _validate_twofa_otp_with_retry(session, otp_code)
     except Exception as first_exc:
         # 部分取码接口会短暂返回缓存中的上一封邮件。若服务端拒绝验证码，
         # 重新轮询一次并提交最新候选，避免第一次旧码直接终止整个 2FA 流程。
@@ -627,12 +704,12 @@ def setup_2fa(
             settle_seconds=retry_settle,
         )
         if fresh_otp == otp_code:
-            logger.warning("[2FA] 重试仍获取到相同 OTP=%s，继续提交以保留原始错误信息", fresh_otp)
+            logger.warning("[2FA] 重试仍获取到相同验证码，继续提交以保留原始错误信息")
         else:
-            logger.info("[2FA] 已获取新的 OTP=%s，替换首次候选", fresh_otp)
+            logger.info("[2FA] 已获取新验证码，替换首次候选")
         otp_code = fresh_otp
-        continue_url = _validate_reauth_otp(session, otp_code)
-    logger.info("[2FA] 邮箱重认证 OTP 验证通过，continue_url=%s", continue_url)
+        continue_url = _validate_twofa_otp_with_retry(session, otp_code)
+    logger.info("[2FA] 邮箱重认证 OTP 验证通过")
     human_delay("api")
     logger.info("[2FA] 正在交换新 token...")
     new_token = _exchange_new_token(session, continue_url)
